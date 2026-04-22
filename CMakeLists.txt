@@ -33,7 +33,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 #
 # Uncomment each target as you work through Phase 0:
 #
-# add_executable(poc_eq src/dsp/poc_eq.cpp)
+add_executable(poc_eq src/dsp/poc_eq.cpp)
 # add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp)
 # add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
 # add_executable(poc_wasapi src/core/poc_wasapi.cpp)
