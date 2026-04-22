@@ -1,0 +1,52 @@
+# Build output
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.sys
+*.inf.bak
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+_deps/
+
+# Driver build artifacts
+*.cer
+*.pfx
+*.cat
+driver/x64/
+
+# IDE
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+.vscode/settings.json
+
+# Node / Electron (Phase 5)
+node_modules/
+dist/
+.electron-builder/
+
+# Logs
+*.log
+logs/
+
+# Config with secrets — never commit real keys
+# (committed config.example.json is fine, actual config.json is not)
+config.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

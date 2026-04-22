@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"name": "AnniAudio (main)",
+			"path": "."
+		},
+		{
+			"name": "AnniAudio (backup)",
+			"path": "../AnniAudio.bak"
+		}
+	],
+	"extensions": {
+		"recommendations": [
+		]
+	},
+	"settings": {
+		"files.exclude": {
+			"**/.git": false
+		},
+		"workbench.startupEditor": "readme",
+		"workbench.editor.restoreViewState": true,
+		"powershell.cwd": "AnniAudio (main)"
+	}
+}
