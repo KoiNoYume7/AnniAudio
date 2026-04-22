@@ -46,6 +46,13 @@ logs/
 # (committed config.example.json is fine, actual config.json is not)
 config.json
 
+# RNNoise model data (downloaded on demand via download_model.sh equivalent)
+third_party/rnnoise/rnnoise_data*.tar.gz
+third_party/rnnoise/src/rnnoise_data.c
+third_party/rnnoise/src/rnnoise_data.h
+third_party/rnnoise/src/rnnoise_data_little.c
+third_party/rnnoise/src/rnnoise_data_little.h
+
 # OS
 Thumbs.db
 Desktop.ini
