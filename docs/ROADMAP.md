@@ -19,7 +19,7 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 - [ ] Integrate NVIDIA RTX Effects SDK in a test harness — confirm it runs on the GPU
 - [ ] Integrate RNNoise in a test harness — confirm it reduces noise on a test signal
 - [ ] Load a SOFA HRTF file with libmysofa, apply convolution to a test signal, verify it sounds spatial through headphones
-- [ ] Implement a basic biquad parametric EQ and verify it shapes frequency response correctly
+- [x] Implement a basic biquad parametric EQ and verify it shapes frequency response correctly
 
 **Exit criteria:** Every component listed above works in isolation. No major technical unknowns remain.
 
