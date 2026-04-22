@@ -34,7 +34,28 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # Uncomment each target as you work through Phase 0:
 #
 add_executable(poc_eq src/dsp/poc_eq.cpp)
-# add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp)
+set(RNNOISE_SOURCES
+    third_party/rnnoise/src/denoise.c
+    third_party/rnnoise/src/rnn.c
+    third_party/rnnoise/src/pitch.c
+    third_party/rnnoise/src/kiss_fft.c
+    third_party/rnnoise/src/celt_lpc.c
+    third_party/rnnoise/src/nnet.c
+    third_party/rnnoise/src/nnet_default.c
+    third_party/rnnoise/src/parse_lpcnet_weights.c
+    third_party/rnnoise/src/rnnoise_data.c
+    third_party/rnnoise/src/rnnoise_tables.c
+)
+add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp ${RNNOISE_SOURCES})
+target_include_directories(poc_rnnoise PRIVATE
+    third_party/rnnoise/include
+    third_party/rnnoise/src
+)
+target_compile_definitions(poc_rnnoise PRIVATE RNNOISE_BUILD)
+if(MSVC)
+    set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
+        COMPILE_FLAGS "/wd4244 /wd4267 /wd4305 /wd4996")
+endif()
 # add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
 # add_executable(poc_wasapi src/core/poc_wasapi.cpp)
 # add_executable(poc_nvidia src/noise/poc_nvidia.cpp)
