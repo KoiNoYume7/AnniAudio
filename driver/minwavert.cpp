@@ -1,15 +1,7 @@
 #include "minwavert.h"
 #include "minwavertstream.h"
 
-// ---------------------------------------------------------------------------
-// Shared cyclic buffer (render writes, capture reads)
-// ---------------------------------------------------------------------------
-PVOID          g_SharedBuffer      = nullptr;
-PMDL           g_SharedMdl         = nullptr;
-ULONG          g_SharedBufferSize  = 0;
-volatile LONG64 g_BytesTransferred = 0;
-
-static const ULONG TIMER_PERIOD_MS   = 10;
+static const ULONG TIMER_PERIOD_MS    = 10;
 static const ULONG BUFFER_DURATION_MS = 200;   // 200ms cyclic buffer
 
 // ---------------------------------------------------------------------------
@@ -53,13 +45,13 @@ CMiniportWaveRT::~CMiniportWaveRT()
     }
     if (m_Port) { m_Port->Release(); m_Port = nullptr; }
 
-    if (g_SharedMdl) {
-        IoFreeMdl(g_SharedMdl);
-        g_SharedMdl = nullptr;
+    if (m_SharedMdl) {
+        IoFreeMdl(m_SharedMdl);
+        m_SharedMdl = nullptr;
     }
-    if (g_SharedBuffer) {
-        ExFreePoolWithTag(g_SharedBuffer, ANNI_TAG);
-        g_SharedBuffer = nullptr;
+    if (m_SharedBuffer) {
+        ExFreePoolWithTag(m_SharedBuffer, ANNI_TAG);
+        m_SharedBuffer = nullptr;
     }
 }
 
@@ -224,12 +216,12 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDeviceDescription(PDEVICE_DESCRIPTIO
 }
 
 // ---------------------------------------------------------------------------
-// Timer DPC — advances global position counter
+// Timer DPC — advances per-instance position counter
 // ---------------------------------------------------------------------------
 void NTAPI CMiniportWaveRT::TimerDpc(PKDPC, PVOID Context, PVOID, PVOID)
 {
     auto* self = static_cast<CMiniportWaveRT*>(Context);
     LONG64 advance = (LONG64)(self->m_SampleRate) * TIMER_PERIOD_MS / 1000
                    * self->m_BytesPerFrame;
-    InterlockedAdd64(&g_BytesTransferred, advance);
+    InterlockedAdd64(&self->m_BytesTransferred, advance);
 }

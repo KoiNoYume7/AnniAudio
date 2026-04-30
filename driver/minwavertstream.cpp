@@ -91,7 +91,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION Pos
         return STATUS_SUCCESS;
     }
 
-    ULONG64 pos = (ULONG64)g_BytesTransferred % m_BufferSize;
+    ULONG64 pos = (ULONG64)(m_pMiniport->m_BytesTransferred) % m_BufferSize;
 
     if (m_Capture) {
         // Hardware writes at pos, app reads before pos
@@ -107,7 +107,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION Pos
 
 // ---------------------------------------------------------------------------
 // IMiniportWaveRTStream::AllocateAudioBuffer
-// Both render and capture share one physical buffer via g_SharedMdl.
+// Both render and capture share one physical buffer owned by the miniport.
 // The first call allocates; subsequent calls map the same MDL.
 // ---------------------------------------------------------------------------
 STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::AllocateAudioBuffer(
@@ -118,30 +118,31 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::AllocateAudioBuffer(
     // Round up to page boundary
     ULONG size = (RequestedSize + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
-    if (!g_SharedBuffer) {
-        // First allocation — create the shared buffer
-        g_SharedBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, size, ANNI_TAG);
-        if (!g_SharedBuffer) return STATUS_INSUFFICIENT_RESOURCES;
+    if (!m_pMiniport->m_SharedBuffer) {
+        // First allocation for this cable — create the shared buffer
+        m_pMiniport->m_SharedBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, size, ANNI_TAG);
+        if (!m_pMiniport->m_SharedBuffer) return STATUS_INSUFFICIENT_RESOURCES;
 
-        RtlZeroMemory(g_SharedBuffer, size);
-        g_SharedBufferSize = size;
+        RtlZeroMemory(m_pMiniport->m_SharedBuffer, size);
+        m_pMiniport->m_SharedBufferSize = size;
 
-        g_SharedMdl = IoAllocateMdl(g_SharedBuffer, size, FALSE, FALSE, nullptr);
-        if (!g_SharedMdl) {
-            ExFreePoolWithTag(g_SharedBuffer, ANNI_TAG);
-            g_SharedBuffer = nullptr;
+        m_pMiniport->m_SharedMdl = IoAllocateMdl(
+            m_pMiniport->m_SharedBuffer, size, FALSE, FALSE, nullptr);
+        if (!m_pMiniport->m_SharedMdl) {
+            ExFreePoolWithTag(m_pMiniport->m_SharedBuffer, ANNI_TAG);
+            m_pMiniport->m_SharedBuffer = nullptr;
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        MmBuildMdlForNonPagedPool(g_SharedMdl);
+        MmBuildMdlForNonPagedPool(m_pMiniport->m_SharedMdl);
     }
 
-    *AudioBufferMdl      = g_SharedMdl;
-    *ActualSize          = g_SharedBufferSize;
+    *AudioBufferMdl      = m_pMiniport->m_SharedMdl;
+    *ActualSize          = m_pMiniport->m_SharedBufferSize;
     *OffsetFromFirstPage = 0;
     *CacheType           = MmCached;
-    m_Mdl                = g_SharedMdl;
-    m_BufferSize         = g_SharedBufferSize;
+    m_Mdl                = m_pMiniport->m_SharedMdl;
+    m_BufferSize         = m_pMiniport->m_SharedBufferSize;
 
     return STATUS_SUCCESS;
 }

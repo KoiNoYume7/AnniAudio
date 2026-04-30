@@ -2,15 +2,11 @@
 #include "common.h"
 #include "toptable.h"
 
-// Shared buffer accessed by both render and capture streams
-extern PVOID  g_SharedBuffer;     // virtual address
-extern PMDL   g_SharedMdl;        // backing MDL
-extern ULONG  g_SharedBufferSize;
-extern volatile LONG64 g_BytesTransferred; // advances via DPC timer
-
 // -------------------------------------------------------------------------
 // CMiniportWaveRT
 // Implements IMiniportWaveRT.
+// Each instance owns its own shared cyclic buffer so that multiple
+// driver instances (one per virtual cable) are fully isolated.
 // -------------------------------------------------------------------------
 class CMiniportWaveRT
     : public IMiniportWaveRT
@@ -23,6 +19,10 @@ public:
         , m_Port(nullptr)
         , m_SampleRate(0)
         , m_BytesPerFrame(0)
+        , m_SharedBuffer(nullptr)
+        , m_SharedMdl(nullptr)
+        , m_SharedBufferSize(0)
+        , m_BytesTransferred(0)
         , m_TimerInitialized(FALSE)
     {
         RtlZeroMemory(&m_Timer, sizeof(m_Timer));
@@ -58,10 +58,17 @@ public:
     // Timer DPC — drives the position counter
     static void NTAPI TimerDpc(PKDPC Dpc, PVOID Context, PVOID, PVOID);
 
-    PPORTWAVERT  m_Port;
-    KTIMER       m_Timer;
-    KDPC         m_Dpc;
-    ULONG        m_SampleRate;
-    ULONG        m_BytesPerFrame;
-    BOOLEAN      m_TimerInitialized;
+    PPORTWAVERT   m_Port;
+    KTIMER        m_Timer;
+    KDPC          m_Dpc;
+    ULONG         m_SampleRate;
+    ULONG         m_BytesPerFrame;
+
+    // Per-cable shared buffer (render writes, capture reads)
+    PVOID         m_SharedBuffer;
+    PMDL          m_SharedMdl;
+    ULONG         m_SharedBufferSize;
+    volatile LONG64 m_BytesTransferred;
+
+    BOOLEAN       m_TimerInitialized;
 };
