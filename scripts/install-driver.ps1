@@ -44,15 +44,59 @@ if (!(Test-Path $InfPath)) {
     exit 1
 }
 
-# Detect existing AnniAudio device to avoid duplicates
-$existing = Get-PnpDevice -Class MEDIA -ErrorAction SilentlyContinue | Where-Object {
+# ---------------------------------------------------------------------------
+# 0b. Detect existing installation (device or staged package)
+# ---------------------------------------------------------------------------
+$existingDevs = Get-PnpDevice -Class MEDIA -ErrorAction SilentlyContinue | Where-Object {
     $_.InstanceId -like "*$HwId*" -or $_.FriendlyName -like "*AnniAudio*"
 }
-if ($existing) {
-    Write-Warning "AnniAudio device(s) already present:"
-    $existing | ForEach-Object { Write-Warning "  $($_.FriendlyName) [$($_.InstanceId)]" }
-    $cont = Read-Host "Continue anyway? [y/N]"
-    if ($cont -ne 'y') { exit 0 }
+
+# Check driver store for any staged AnniAudio package
+$existingPkg = $null
+try {
+    $enum = & pnputil /enum-drivers 2>$null
+    for ($i = 0; $i -lt $enum.Count; $i++) {
+        if ($enum[$i] -match 'Published Name\s+:\s+(oem\d+\.inf)' -and
+            ($i + 1 -lt $enum.Count) -and ($enum[$i + 1] -match 'Original Name\s+:\s+AnniAudioCable\.inf')) {
+            $existingPkg = $matches[1]
+            break
+        }
+    }
+} catch { }
+
+if ($existingDevs -or $existingPkg) {
+    Write-Warning "AnniAudio appears to already be installed:"
+    if ($existingDevs) {
+        $existingDevs | ForEach-Object { Write-Warning "  Device : $($_.FriendlyName) [$($_.InstanceId)]" }
+    }
+    if ($existingPkg) {
+        Write-Warning "  Package: $existingPkg (staged in driver store)"
+    }
+    $reinstall = Read-Host "Re-install (uninstall first, then clean install)? [y/N]"
+    if ($reinstall -eq 'y') {
+        Write-Host "`n[install-driver] Cleaning up existing installation ..." -ForegroundColor Cyan
+        # Remove device nodes
+        foreach ($dev in $existingDevs) {
+            try {
+                & pnputil /remove-device $dev.InstanceId 2>$null
+                Write-Host "  -> Removed device $($dev.FriendlyName)"
+            } catch {
+                Write-Warning "  Failed to remove device $($dev.InstanceId)"
+            }
+        }
+        if (Test-Path $DevCon) {
+            & $DevCon remove $HwId 2>$null
+        }
+        # Remove staged package
+        if ($existingPkg) {
+            & pnputil /delete-driver $existingPkg /uninstall /force 2>$null
+            Write-Host "  -> Removed staged package $existingPkg"
+        }
+        & pnputil /delete-driver "AnniAudioCable.inf" /uninstall /force 2>$null
+    } else {
+        Write-Host "Skipping install — existing installation kept." -ForegroundColor Yellow
+        exit 0
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -61,8 +105,18 @@ if ($existing) {
 Write-Host "`n[install-driver] Staging driver package ..." -ForegroundColor Cyan
 & pnputil /add-driver $InfPath /install
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "pnputil failed (exit $LASTEXITCODE)."
-    exit $LASTEXITCODE
+    # 259 = package already exists with same name; try force-update
+    if ($LASTEXITCODE -eq 259 -or $LASTEXITCODE -eq -2147024891) {
+        Write-Warning "Package already staged; attempting forced update ..."
+        & pnputil /add-driver $InfPath /install /force
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "pnputil force-update failed (exit $LASTEXITCODE)."
+            exit $LASTEXITCODE
+        }
+    } else {
+        Write-Error "pnputil failed (exit $LASTEXITCODE)."
+        exit $LASTEXITCODE
+    }
 }
 Write-Host "  -> Driver staged successfully." -ForegroundColor Green
 
