@@ -34,7 +34,7 @@ Needs      = KS.Registration, WDMAUDIO.Registration
 CopyFiles  = AnniAudioCable.CopyFiles
 
 [AnniAudioCable_Device.NT.Services]
-AddService = AnniAudioCable,, AnniAudioCable_ServiceInstall
+AddService = AnniAudioCable, 0x2, AnniAudioCable_ServiceInstall
 
 ;--------------------------------------------------------------------------
 ; Service
