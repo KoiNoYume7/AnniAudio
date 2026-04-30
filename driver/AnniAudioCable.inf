@@ -1,8 +1,8 @@
-;==========================================================================
+﻿;==========================================================================
 ; AnniAudioCable.inf
 ; Installs the AnniAudio Virtual Cable WaveRT driver as a root-enumerated
 ; software audio device.
-; GENERATED FILE — do not edit directly. Edit the template or config instead.
+; GENERATED FILE â€” do not edit directly. Edit config/cables.json instead.
 ;==========================================================================
 
 [Version]
@@ -10,7 +10,7 @@ Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 04.30.2026,1.0.2.0
+DriverVer   = 04/30/2026,1.0.2.0
 CatalogFile = AnniAudioCable.cat
 PnpLockdown = 1
 
@@ -24,10 +24,11 @@ AnniAudioCable.CopyFiles = 12   ; \Windows\System32\drivers
 %ManufacturerName% = Standard, NTamd64
 
 [Standard.NTamd64]
-%DeviceName% = AnniAudioCable_Device, ROOT\AnniAudioCable
+%Cable1Name% = AnniAudioCable_Device, ROOT\AnniAudioCable1
+%Cable2Name% = AnniAudioCable_Device, ROOT\AnniAudioCable2
 
 ;--------------------------------------------------------------------------
-; Device installation
+; Device installation (shared by all cables)
 ;--------------------------------------------------------------------------
 [AnniAudioCable_Device.NT]
 Include    = ks.inf, wdmaudio.inf
@@ -38,28 +39,52 @@ CopyFiles  = AnniAudioCable.CopyFiles
 AddService = AnniAudioCable, 0x2, AnniAudioCable_ServiceInstall
 
 ;--------------------------------------------------------------------------
-; Interfaces — required for AudioEndpointBuilder to discover subdevices
+; Per-cable interfaces â€” required for AudioEndpointBuilder
 ;--------------------------------------------------------------------------
+
+; --- Cable 1 (My Studio Cable) ---
 [AnniAudioCable_Device.NT.Interfaces]
-AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology
-AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave
+AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave1
+AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave1
+AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave1
+AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology1
+AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave1
 
-[AnniAudioCable.I.Wave]
-AddReg=AnniAudioCable.I.Wave.AddReg
+[AnniAudioCable.I.Wave1]
+AddReg=AnniAudioCable.I.Wave1.AddReg
 
-[AnniAudioCable.I.Wave.AddReg]
+[AnniAudioCable.I.Wave1.AddReg]
 HKR,,CLSID,,%Proxy.CLSID%
-HKR,,FriendlyName,,%Wave.FriendlyName%
+HKR,,FriendlyName,,%Wave1.FriendlyName%
 
-[AnniAudioCable.I.Topology]
-AddReg=AnniAudioCable.I.Topology.AddReg
+[AnniAudioCable.I.Topology1]
+AddReg=AnniAudioCable.I.Topology1.AddReg
 
-[AnniAudioCable.I.Topology.AddReg]
+[AnniAudioCable.I.Topology1.AddReg]
 HKR,,CLSID,,%Proxy.CLSID%
-HKR,,FriendlyName,,%Topology.FriendlyName%
+HKR,,FriendlyName,,%Topology1.FriendlyName%
+
+; --- Cable 2 (Voice Chat) ---
+[AnniAudioCable_Device.NT.Interfaces]
+AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave2
+AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave2
+AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave2
+AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology2
+AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave2
+
+[AnniAudioCable.I.Wave2]
+AddReg=AnniAudioCable.I.Wave2.AddReg
+
+[AnniAudioCable.I.Wave2.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%Wave2.FriendlyName%
+
+[AnniAudioCable.I.Topology2]
+AddReg=AnniAudioCable.I.Topology2.AddReg
+
+[AnniAudioCable.I.Topology2.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%Topology2.FriendlyName%
 
 ;--------------------------------------------------------------------------
 ; Service
@@ -90,7 +115,6 @@ AnniAudioCable.sys = 1
 [Strings]
 ProviderName      = "AnniAudio"
 ManufacturerName  = "AnniAudio"
-DeviceName        = "My Studio Cable"
 ServiceName       = "AnniAudio Virtual Cable"
 DiskName          = "AnniAudio Cable Installation Disk"
 
@@ -108,7 +132,10 @@ KSNAME_Topology     = "Topology"
 ; Proxy CLSID (PortCls KS proxy)
 Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
 
-; Friendly names for KS filter interfaces
-Wave.FriendlyName     = "AnniAudio Cable 1"
-Topology.FriendlyName = "AnniAudio Cable 1 Topology"
+Cable1Name         = "My Studio Cable"
+Wave1.FriendlyName  = "AnniAudio Cable 1"
+Topology1.FriendlyName  = "AnniAudio Cable 1 Topology"
+Cable2Name         = "Voice Chat"
+Wave2.FriendlyName  = "Voice Chat"
+Topology2.FriendlyName  = "Voice Chat Topology"
 

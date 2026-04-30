@@ -64,6 +64,11 @@ endif()
 # add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
 add_executable(poc_wasapi src/core/poc_wasapi.cpp)
 target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
+
+# Routing CLI — lists endpoints and routes audio between cables / physical devices
+add_executable(route_cli src/core/route_cli.cpp src/core/AudioEngine.cpp)
+target_include_directories(route_cli PRIVATE src/core include)
+target_link_libraries(route_cli PRIVATE ole32 avrt)
 # add_executable(poc_nvidia src/noise/poc_nvidia.cpp)
 
 message(STATUS "AnniAudio ${PROJECT_VERSION} — Phase 0 (Research)")

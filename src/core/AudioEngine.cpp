@@ -73,6 +73,50 @@ static ComPtr<IMMDevice> findDevice(IMMDeviceEnumerator* enumerator,
 }
 
 // ---------------------------------------------------------------------------
+// Enumerate all active endpoints into EndpointInfo structs
+// ---------------------------------------------------------------------------
+
+static std::vector<EndpointInfo> enumEndpoints(IMMDeviceEnumerator* enumerator)
+{
+    std::vector<EndpointInfo> out;
+    if (!enumerator) return out;
+
+    // Determine defaults
+    ComPtr<IMMDevice> defRender, defCapture;
+    enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defRender);
+    enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &defCapture);
+
+    wchar_t* defRenderId = nullptr; wchar_t* defCaptureId = nullptr;
+    if (defRender) defRender->GetId(&defRenderId);
+    if (defCapture) defCapture->GetId(&defCaptureId);
+    std::string defRenderStr = defRenderId ? wideToUtf8(defRenderId) : "";
+    std::string defCaptureStr = defCaptureId ? wideToUtf8(defCaptureId) : "";
+    if (defRenderId) CoTaskMemFree(defRenderId);
+    if (defCaptureId) CoTaskMemFree(defCaptureId);
+
+    for (int pass = 0; pass < 2; ++pass) {
+        EDataFlow flow = (pass == 0) ? eRender : eCapture;
+        ComPtr<IMMDeviceCollection> col;
+        if (FAILED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &col))) continue;
+        UINT count = 0; col->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            ComPtr<IMMDevice> dev;
+            if (FAILED(col->Item(i, &dev))) continue;
+            wchar_t* id = nullptr; dev->GetId(&id);
+            std::string idStr = id ? wideToUtf8(id) : "";
+            if (id) CoTaskMemFree(id);
+            std::string name = friendlyName(dev.Get());
+            bool isDefault = (flow == eRender)
+                ? (idStr == defRenderStr)
+                : (idStr == defCaptureStr);
+            out.push_back({ idStr, name, flow == eRender,
+                            nameContains(name, "AnniAudio"), isDefault });
+        }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Format conversion: captureFormat → renderFormat
 // Handles channel count mismatch and sample rate mismatch (linear interp SRC).
 // srcPhase: persistent accumulator (initialise to 0, pass by ref between calls).
@@ -286,6 +330,16 @@ AudioEngine::AudioEngine()  : m_impl(std::make_unique<Impl>()) {}
 AudioEngine::~AudioEngine() { stop(); }
 
 void AudioEngine::setProcessCallback(ProcessFn fn) { m_impl->processFn = std::move(fn); }
+
+std::vector<EndpointInfo> AudioEngine::listEndpoints() const
+{
+    std::vector<EndpointInfo> out;
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr)) return out;
+    return enumEndpoints(enumerator.Get());
+}
 
 bool AudioEngine::start(const std::string& captureHint, const std::string& renderHint)
 {

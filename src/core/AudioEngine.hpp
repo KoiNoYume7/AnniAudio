@@ -3,12 +3,21 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 // Called on the real-time audio thread per captured buffer.
 // buf:      interleaved float samples — may be modified in-place (copy is made before calling)
 // frames:   sample frames in this buffer (1 frame = channels samples)
 // channels: channel count (matches the negotiated mix format)
 using ProcessFn = std::function<void(float* buf, uint32_t frames, uint32_t channels)>;
+
+struct EndpointInfo {
+    std::string id;          // WASAPI device ID (e.g. \\{...}.#{...})
+    std::string name;        // Friendly name (e.g. "AnniAudio Cable 1")
+    bool        isRender;    // true = render (playback), false = capture (recording)
+    bool        isAnniAudio; // true if name contains "AnniAudio" or matches a cable config name
+    bool        isDefault;   // true if this is the Windows default for its direction
+};
 
 // Routes audio from one WASAPI endpoint to another with optional DSP processing.
 //
@@ -31,6 +40,9 @@ public:
 
     // Optional DSP callback.  Defaults to passthrough if not set.
     void setProcessCallback(ProcessFn fn);
+
+    // Enumerate all active audio endpoints. Does not require start() to be called.
+    std::vector<EndpointInfo> listEndpoints() const;
 
     // Start routing.  deviceHint is a case-insensitive substring of the friendly name.
     // Empty string = use the Windows default endpoint for that direction.
