@@ -21,7 +21,7 @@ void* __cdecl operator new(size_t sz, POOL_TYPE pool)
 void __cdecl operator delete(void* p, ULONG)  { if (p) ExFreePoolWithTag(p, ANNI_TAG); }
 void __cdecl operator delete(void* p, size_t) { if (p) ExFreePool(p); }
 void __cdecl operator delete(void* p)         { if (p) ExFreePool(p); }
-void __cdecl operator delete[](void* p)       { if (p) ExFreePool(p); }
+void __cdecl operator delete[](void* p)       { if (p) ExFreePoolWithTag(p, ANNI_TAG); }
 
 // ---------------------------------------------------------------------------
 // Forward declarations
@@ -53,40 +53,50 @@ NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDeviceObj
 // ---------------------------------------------------------------------------
 NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST ResourceList)
 {
-    NTSTATUS       status      = STATUS_SUCCESS;
-    PUNKNOWN       miniportUnk = nullptr;
-    PPORT          port        = nullptr;
+    NTSTATUS status     = STATUS_SUCCESS;
+    PUNKNOWN miniportUnk = nullptr;
+    PPORT    wavePort   = nullptr;
+    PPORT    topoPort   = nullptr;
 
     // ---- 1. WaveRT subdevice ----
     status = CreateMiniportWaveRT(&miniportUnk, nullptr, NonPagedPoolNx);
     if (!NT_SUCCESS(status)) return status;
 
-    status = PcNewPort(&port, CLSID_PortWaveRT);
+    status = PcNewPort(&wavePort, CLSID_PortWaveRT);
     if (!NT_SUCCESS(status)) { miniportUnk->Release(); return status; }
 
-    status = port->Init(DeviceObject, Irp, miniportUnk, nullptr, ResourceList);
+    status = wavePort->Init(DeviceObject, Irp, miniportUnk, nullptr, ResourceList);
     miniportUnk->Release(); miniportUnk = nullptr;
 
     if (NT_SUCCESS(status)) {
-        status = PcRegisterSubdevice(DeviceObject, L"AnniWave", port);
+        status = PcRegisterSubdevice(DeviceObject, L"AnniWave", wavePort);
     }
-    port->Release(); port = nullptr;
-    if (!NT_SUCCESS(status)) return status;
+    if (!NT_SUCCESS(status)) { wavePort->Release(); return status; }
 
     // ---- 2. Topology subdevice ----
     status = CreateMiniportTopology(&miniportUnk, nullptr, NonPagedPoolNx);
-    if (!NT_SUCCESS(status)) return status;
+    if (!NT_SUCCESS(status)) { wavePort->Release(); return status; }
 
-    status = PcNewPort(&port, CLSID_PortTopology);
-    if (!NT_SUCCESS(status)) { miniportUnk->Release(); return status; }
+    status = PcNewPort(&topoPort, CLSID_PortTopology);
+    if (!NT_SUCCESS(status)) { miniportUnk->Release(); wavePort->Release(); return status; }
 
-    status = port->Init(DeviceObject, Irp, miniportUnk, nullptr, ResourceList);
+    status = topoPort->Init(DeviceObject, Irp, miniportUnk, nullptr, ResourceList);
     miniportUnk->Release(); miniportUnk = nullptr;
 
     if (NT_SUCCESS(status)) {
-        status = PcRegisterSubdevice(DeviceObject, L"AnniTopo", port);
+        status = PcRegisterSubdevice(DeviceObject, L"AnniTopo", topoPort);
     }
-    port->Release(); port = nullptr;
+    if (!NT_SUCCESS(status)) { topoPort->Release(); wavePort->Release(); return status; }
 
+    // ---- 3. Physical connections (required for AudioEndpointBuilder) ----
+    NTSTATUS connStatus;
+    connStatus = PcRegisterPhysicalConnection(DeviceObject, wavePort, 0, topoPort, 0);
+    if (NT_SUCCESS(status) && !NT_SUCCESS(connStatus)) status = connStatus;
+
+    connStatus = PcRegisterPhysicalConnection(DeviceObject, topoPort, 1, wavePort, 1);
+    if (NT_SUCCESS(status) && !NT_SUCCESS(connStatus)) status = connStatus;
+
+    topoPort->Release();
+    wavePort->Release();
     return status;
 }

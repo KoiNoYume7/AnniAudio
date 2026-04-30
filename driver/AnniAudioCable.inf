@@ -9,7 +9,7 @@ Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 04/30/2026,1.0.0.1
+DriverVer   = 04/30/2026,1.0.0.5
 CatalogFile = AnniAudioCable.cat
 PnpLockdown = 1
 
@@ -35,6 +35,30 @@ CopyFiles  = AnniAudioCable.CopyFiles
 
 [AnniAudioCable_Device.NT.Services]
 AddService = AnniAudioCable, 0x2, AnniAudioCable_ServiceInstall
+
+;--------------------------------------------------------------------------
+; Interfaces — required for AudioEndpointBuilder to discover subdevices
+;--------------------------------------------------------------------------
+[AnniAudioCable_Device.NT.Interfaces]
+AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave
+AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave
+AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave
+AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology
+AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave
+
+[AnniAudioCable.I.Wave]
+AddReg=AnniAudioCable.I.Wave.AddReg
+
+[AnniAudioCable.I.Wave.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%Wave.FriendlyName%
+
+[AnniAudioCable.I.Topology]
+AddReg=AnniAudioCable.I.Topology.AddReg
+
+[AnniAudioCable.I.Topology.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%Topology.FriendlyName%
 
 ;--------------------------------------------------------------------------
 ; Service
@@ -63,8 +87,26 @@ AnniAudioCable.sys = 1
 ; Strings
 ;--------------------------------------------------------------------------
 [Strings]
-ProviderName     = "AnniAudio"
-ManufacturerName = "AnniAudio"
-DeviceName       = "AnniAudio Cable 1"
-ServiceName      = "AnniAudio Virtual Cable"
-DiskName         = "AnniAudio Cable Installation Disk"
+ProviderName      = "AnniAudio"
+ManufacturerName  = "AnniAudio"
+DeviceName        = "AnniAudio Cable 1"
+ServiceName       = "AnniAudio Virtual Cable"
+DiskName          = "AnniAudio Cable Installation Disk"
+
+; KS category GUIDs
+KSCATEGORY_AUDIO    = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER   = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE  = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSCATEGORY_REALTIME = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+
+; Subdevice reference names (used by PortCls)
+KSNAME_Wave         = "Wave"
+KSNAME_Topology     = "Topology"
+
+; Proxy CLSID (PortCls KS proxy)
+Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+
+; Friendly names for KS filter interfaces
+Wave.FriendlyName     = "AnniAudio Cable 1"
+Topology.FriendlyName = "AnniAudio Cable 1 Topology"

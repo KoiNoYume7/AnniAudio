@@ -14,7 +14,17 @@ class CMiniportWaveRTStream
 {
 public:
     DECLARE_STD_UNKNOWN();
-    DEFINE_STD_CONSTRUCTOR(CMiniportWaveRTStream);
+    CMiniportWaveRTStream(PUNKNOWN pUnknownOuter)
+        : CUnknown(pUnknownOuter)
+        , m_pMiniport(nullptr)
+        , m_Pin(0)
+        , m_Capture(FALSE)
+        , m_State(KSSTATE_STOP)
+        , m_SampleRate(48000)
+        , m_BytesPerFrame(8)
+        , m_BufferSize(0)
+        , m_Mdl(nullptr)
+    {}
     ~CMiniportWaveRTStream();
 
     // IMiniportWaveRTStream

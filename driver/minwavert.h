@@ -18,7 +18,16 @@ class CMiniportWaveRT
 {
 public:
     DECLARE_STD_UNKNOWN();
-    DEFINE_STD_CONSTRUCTOR(CMiniportWaveRT);
+    CMiniportWaveRT(PUNKNOWN pUnknownOuter)
+        : CUnknown(pUnknownOuter)
+        , m_Port(nullptr)
+        , m_SampleRate(0)
+        , m_BytesPerFrame(0)
+        , m_TimerInitialized(FALSE)
+    {
+        RtlZeroMemory(&m_Timer, sizeof(m_Timer));
+        RtlZeroMemory(&m_Dpc,  sizeof(m_Dpc));
+    }
     ~CMiniportWaveRT();
 
     // IMiniport
@@ -54,4 +63,5 @@ public:
     KDPC         m_Dpc;
     ULONG        m_SampleRate;
     ULONG        m_BytesPerFrame;
+    BOOLEAN      m_TimerInitialized;
 };

@@ -47,7 +47,10 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NonDelegatingQueryInterface(REFIID iid,
 // ---------------------------------------------------------------------------
 CMiniportWaveRT::~CMiniportWaveRT()
 {
-    KeCancelTimer(&m_Timer);
+    if (m_TimerInitialized) {
+        KeCancelTimer(&m_Timer);
+        m_TimerInitialized = FALSE;
+    }
     if (m_Port) { m_Port->Release(); m_Port = nullptr; }
 
     if (g_SharedMdl) {
@@ -71,15 +74,59 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDescription(PPCFILTER_DESCRIPTOR* pp
 
 // ---------------------------------------------------------------------------
 // IMiniport::DataRangeIntersection
-// We accept exact-match requests for our supported IEEE float formats.
+// Validate that the requested format matches one of our supported ranges.
+// We only accept IEEE-float / stereo / 48k or 96k.
 // ---------------------------------------------------------------------------
 STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::DataRangeIntersection(
     ULONG PinId, PKSDATARANGE DataRange, PKSDATARANGE MatchingDataRange,
     ULONG OutputBufferLength, PVOID ResultantFormat, PULONG ResultantFormatLength)
 {
     UNREFERENCED_PARAMETER(PinId);
-    UNREFERENCED_PARAMETER(DataRange);
-    UNREFERENCED_PARAMETER(MatchingDataRange);
+
+    if (!DataRange || !MatchingDataRange || !ResultantFormatLength) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Only accept audio data ranges
+    if (!IsEqualGUID(DataRange->MajorFormat, KSDATAFORMAT_TYPE_AUDIO) ||
+        !IsEqualGUID(MatchingDataRange->MajorFormat, KSDATAFORMAT_TYPE_AUDIO)) {
+        return STATUS_NO_MATCH;
+    }
+
+    // Both must specify WAVEFORMATEX specifier
+    if (!IsEqualGUID(DataRange->Specifier, KSDATAFORMAT_SPECIFIER_WAVEFORMATEX) ||
+        !IsEqualGUID(MatchingDataRange->Specifier, KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)) {
+        return STATUS_NO_MATCH;
+    }
+
+    // Cast to audio data range to inspect channel/sample-rate constraints
+    auto* reqAudio = reinterpret_cast<const KSDATARANGE_AUDIO*>(DataRange);
+    auto* matchAudio = reinterpret_cast<const KSDATARANGE_AUDIO*>(MatchingDataRange);
+
+    // Must support IEEE_FLOAT subtype (allow wildcard KSDATAFORMAT_SUBTYPE_WILDCARD)
+    bool subOk = IsEqualGUID(DataRange->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) ||
+                 IsEqualGUID(MatchingDataRange->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) ||
+                 IsEqualGUID(DataRange->SubFormat, KSDATAFORMAT_SUBTYPE_WILDCARD) ||
+                 IsEqualGUID(MatchingDataRange->SubFormat, KSDATAFORMAT_SUBTYPE_WILDCARD);
+    if (!subOk) return STATUS_NO_MATCH;
+
+    // Pick a supported rate (prefer 48000, fallback 96000 if the request wants it)
+    ULONG chosenRate = 48000;
+    if (reqAudio->MaximumSampleFrequency >= 96000 &&
+        matchAudio->MaximumSampleFrequency >= 96000) {
+        chosenRate = 96000;
+    }
+
+    // Chosen rate must be inside both ranges
+    if (chosenRate < reqAudio->MinimumSampleFrequency || chosenRate > reqAudio->MaximumSampleFrequency ||
+        chosenRate < matchAudio->MinimumSampleFrequency || chosenRate > matchAudio->MaximumSampleFrequency) {
+        return STATUS_NO_MATCH;
+    }
+
+    // Channels: require exactly 2 (stereo)
+    if (reqAudio->MaximumChannels < 2 || matchAudio->MaximumChannels < 2) {
+        return STATUS_NO_MATCH;
+    }
 
     ULONG required = sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE);
     *ResultantFormatLength = required;
@@ -99,7 +146,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::DataRangeIntersection(
     WAVEFORMATEXTENSIBLE& wfx = out->WaveFormatExt;
     wfx.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
     wfx.Format.nChannels       = 2;
-    wfx.Format.nSamplesPerSec  = m_SampleRate ? m_SampleRate : 48000;
+    wfx.Format.nSamplesPerSec  = chosenRate;
     wfx.Format.wBitsPerSample  = 32;
     wfx.Format.nBlockAlign     = 8;
     wfx.Format.nAvgBytesPerSec = wfx.Format.nSamplesPerSec * 8;
@@ -129,6 +176,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(
     // Initialize timer DPC that simulates hardware position counter
     KeInitializeDpc(&m_Dpc, TimerDpc, this);
     KeInitializeTimer(&m_Timer);
+    m_TimerInitialized = TRUE;
 
     // Fire every TIMER_PERIOD_MS
     LARGE_INTEGER due;
