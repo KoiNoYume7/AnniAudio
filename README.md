@@ -12,7 +12,12 @@ Part of the [Anni Ecosystem](https://github.com/KoiNoYume7).
 
 ## Status
 
-**Planning / Research phase**
+**Phase 1 — Active development**
+
+- Virtual WDM driver builds, signs, and installs successfully
+- WASAPI routing engine proof-of-concept working
+- Unified CLI control panel for driver install, config, and mode switching
+- Config-driven multi-cable support (v0.3.0) — define N cables in `config/cables.json`
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for phase breakdown and [docs/RESEARCH.md](docs/RESEARCH.md) for gathered intel.
 
@@ -120,11 +125,13 @@ AnniAudio/
 │   ├── routing/     # Routing matrix logic
 │   └── api/         # REST + WebSocket server
 ├── include/         # Public headers
+├── cli/             # Control panel CLI (anniaudio.ps1)
+├── config/          # Cable definitions and user settings
 ├── docs/            # Architecture, roadmap, research
 ├── tests/           # Unit and integration tests
 ├── third_party/     # Vendored dependencies
 ├── assets/          # Icons, bundled HRTF datasets
-├── scripts/         # Build helpers, signing scripts
+├── scripts/         # Build helpers, driver scripts
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -147,14 +154,33 @@ Full detail in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
-## Driver Signing
-
-For personal use, enable Windows test signing mode and use a self-signed certificate:
+## Quick Start
 
 ```powershell
-bcdedit /set testsigning on
-# Reboot required
+# 1. Enable developer mode (test signing + activate AnniAudio)
+.\cli\anniaudio.ps1 dev-mode    # reboot when prompted
+
+# 2. Configure your cables
+.\cli\anniaudio.ps1 config init
+.\cli\anniaudio.ps1 config set cables[0].name "Studio"
+.\cli\anniaudio.ps1 config add-cable "Voice Chat"
+
+# 3. Build and install the driver
+.\cli\anniaudio.ps1 build
+.\cli\anniaudio.ps1 install    # re-install prompt if already present
+
+# 4. Check everything is working
+.\cli\anniaudio.ps1 status
+
+# 5. Before gaming (anti-cheat compatibility)
+.\cli\anniaudio.ps1 gaming-mode  # reboot when prompted
 ```
+
+## Driver Signing
+
+For personal use the driver is test-signed. The CLI handles enabling / disabling test signing:
+- `dev-mode`  — turns on test signing, enables AnniAudio device
+- `gaming-mode` — turns off test signing, disables AnniAudio device
 
 For distribution, an EV code signing certificate is required (~$300-500/year). Attestation signing via the Microsoft Hardware Dev Center is the free alternative.
 
