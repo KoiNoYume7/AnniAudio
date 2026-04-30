@@ -8,8 +8,6 @@
 .NOTES
     Must be run as Administrator.
 #>
-#Requires -RunAsAdministrator
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $DevCon = "C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe"

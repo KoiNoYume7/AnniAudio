@@ -11,8 +11,6 @@
     Must be run as Administrator.
     Requires devcon.exe from the WDK Tools folder.
 #>
-#Requires -RunAsAdministrator
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot  = "$PSScriptRoot\.."
@@ -122,18 +120,20 @@ if ($existingDevs -or $existingPkg) {
 # ---------------------------------------------------------------------------
 Write-Host "`n[install-driver] Staging driver package ..." -ForegroundColor Cyan
 & pnputil /add-driver $InfPath /install
-if ($LASTEXITCODE -ne 0) {
+$addExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($addExit -ne 0) {
     # 259 = package already exists with same name; try force-update
-    if ($LASTEXITCODE -eq 259 -or $LASTEXITCODE -eq -2147024891) {
+    if ($addExit -eq 259 -or $addExit -eq -2147024891) {
         Write-Warning "Package already staged; attempting forced update ..."
         & pnputil /add-driver $InfPath /install /force
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "pnputil force-update failed (exit $LASTEXITCODE)."
-            exit $LASTEXITCODE
+        $forceExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        if ($forceExit -ne 0) {
+            Write-Error "pnputil force-update failed (exit $forceExit)."
+            exit $forceExit
         }
     } else {
-        Write-Error "pnputil failed (exit $LASTEXITCODE)."
-        exit $LASTEXITCODE
+        Write-Error "pnputil failed (exit $addExit)."
+        exit $addExit
     }
 }
 Write-Host "  -> Driver staged successfully." -ForegroundColor Green
@@ -146,8 +146,9 @@ if (Test-Path $DevCon) {
         Write-Host "`n[install-driver] Creating device node $($cable.hw_id) ($($cable.name)) ..." -ForegroundColor Cyan
         & $DevCon install $InfPath $cable.hw_id
         # devcon may return 0 (success) or 1 (device already exists); both are fine
-        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1) {
-            Write-Warning "devcon returned $LASTEXITCODE for $($cable.hw_id) — device node may not have been created."
+        $dcExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        if ($dcExit -ne 0 -and $dcExit -ne 1) {
+            Write-Warning "devcon returned $dcExit for $($cable.hw_id) — device node may not have been created."
         } else {
             Write-Host "  -> Device node created." -ForegroundColor Green
         }

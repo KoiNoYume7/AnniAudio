@@ -13,8 +13,6 @@
     Requires admin. Device change is immediate (Audiosrv restart), but test
     signing only takes effect after reboot.
 #>
-#Requires -RunAsAdministrator
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 Write-Host "`n[gaming-mode] Disabling AnniAudio device(s) ..." -ForegroundColor Cyan
@@ -40,7 +38,8 @@ if ($devs) {
 
 Write-Host "[gaming-mode] Disabling test signing ..." -ForegroundColor Cyan
 & bcdedit /set testsigning off
-if ($LASTEXITCODE -ne 0) {
+$exit1 = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($exit1 -ne 0) {
     Write-Warning "bcdedit failed — test signing may still be ON."
 } else {
     Write-Host "  -> Test signing disabled." -ForegroundColor Green

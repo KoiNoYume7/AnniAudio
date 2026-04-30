@@ -1,8 +1,8 @@
-﻿;==========================================================================
+;==========================================================================
 ; AnniAudioCable.inf
 ; Installs the AnniAudio Virtual Cable WaveRT driver as a root-enumerated
 ; software audio device.
-; GENERATED FILE â€” do not edit directly. Edit config/cables.json instead.
+; GENERATED FILE — do not edit directly. Edit config/cables.json instead.
 ;==========================================================================
 
 [Version]
@@ -10,7 +10,7 @@ Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 04/30/2026,1.0.2.0
+DriverVer   = 04.30.2026,1.0.2.0
 CatalogFile = AnniAudioCable.cat
 PnpLockdown = 1
 
@@ -39,7 +39,7 @@ CopyFiles  = AnniAudioCable.CopyFiles
 AddService = AnniAudioCable, 0x2, AnniAudioCable_ServiceInstall
 
 ;--------------------------------------------------------------------------
-; Per-cable interfaces â€” required for AudioEndpointBuilder
+; Per-cable interfaces — required for AudioEndpointBuilder
 ;--------------------------------------------------------------------------
 
 ; --- Cable 1 (My Studio Cable) ---

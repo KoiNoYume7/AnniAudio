@@ -11,15 +11,14 @@
     Requires admin. Takes effect immediately (Audiosrv restart), but test
     signing only takes effect after reboot.
 #>
-#Requires -RunAsAdministrator
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 Write-Host "`n[dev-mode] Enabling test signing ..." -ForegroundColor Cyan
 & bcdedit /set testsigning on
-if ($LASTEXITCODE -ne 0) {
+$exit1 = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($exit1 -ne 0) {
     Write-Error "bcdedit failed — cannot enable test signing."
-    exit $LASTEXITCODE
+    exit $exit1
 }
 
 Write-Host "[dev-mode] Enabling AnniAudio device(s) ..." -ForegroundColor Cyan

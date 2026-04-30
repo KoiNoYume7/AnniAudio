@@ -8,8 +8,6 @@
 .NOTES
     Must be run as Administrator for full driver store details.
 #>
-#Requires -RunAsAdministrator
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 Write-Host "`n============================================================" -ForegroundColor Cyan
