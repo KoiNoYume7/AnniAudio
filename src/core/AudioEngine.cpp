@@ -334,11 +334,17 @@ void AudioEngine::setProcessCallback(ProcessFn fn) { m_impl->processFn = std::mo
 std::vector<EndpointInfo> AudioEngine::listEndpoints() const
 {
     std::vector<EndpointInfo> out;
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return out;
+
     ComPtr<IMMDeviceEnumerator> enumerator;
-    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
-                                  CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
-    if (FAILED(hr)) return out;
-    return enumEndpoints(enumerator.Get());
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                            CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (SUCCEEDED(hr)) {
+        out = enumEndpoints(enumerator.Get());
+    }
+    CoUninitialize();
+    return out;
 }
 
 bool AudioEngine::start(const std::string& captureHint, const std::string& renderHint)

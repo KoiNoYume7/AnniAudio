@@ -7,7 +7,6 @@
 .NOTES
     Called by build-driver.ps1 before Inf2Cat.
 #>
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = "$PSScriptRoot\.."

@@ -18,7 +18,6 @@ param(
     [string]$Thumbprint  = "7D2F96B5B17E0E2959C6E20EEF1ED95822572B2F"
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot   = "$PSScriptRoot\.."
@@ -31,9 +30,10 @@ $OutDir     = "$RepoRoot\build\driver\$($Config.ToLower())"
 # ---- Generate INF from template + config -----------------------------------
 Write-Host "`n[build-driver] Generating INF from template ..." -ForegroundColor Cyan
 & "$PSScriptRoot\generate-inf.ps1"
-if ($LASTEXITCODE -ne 0) {
+$genExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($genExit -ne 0) {
     Write-Error "[build-driver] INF generation failed."
-    exit $LASTEXITCODE
+    exit $genExit
 }
 
 # ---- Build ----------------------------------------------------------------
@@ -42,18 +42,20 @@ $MSBuild = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBui
 & $MSBuild $ProjFile /p:Configuration=$Config /p:Platform=x64 /m /nologo `
            /p:SolutionDir="$RepoRoot\\"
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "[build-driver] MSBuild failed (exit $LASTEXITCODE)."
-    exit $LASTEXITCODE
+$msbExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($msbExit -ne 0) {
+    Write-Error "[build-driver] MSBuild failed (exit $msbExit)."
+    exit $msbExit
 }
 
 # ---- Catalog -------------------------------------------------------------
 # inf2cat generates the .cat that PnP requires; output name is lower-case.
 Write-Host "`n[build-driver] Generating catalog (inf2cat) ..." -ForegroundColor Cyan
 & $Inf2Cat /driver:$OutDir /os:10_X64
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "[build-driver] inf2cat failed (exit $LASTEXITCODE)."
-    exit $LASTEXITCODE
+$catExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($catExit -ne 0) {
+    Write-Error "[build-driver] inf2cat failed (exit $catExit)."
+    exit $catExit
 }
 
 # ---- Sign -----------------------------------------------------------------
@@ -73,9 +75,10 @@ foreach ($f in $Artifacts) {
     & $SignTool sign /sha1 $Thumbprint /fd sha256 `
                      /tr http://timestamp.digicert.com /td sha256 `
                      $f
-    if ($LASTEXITCODE -ne 0) {
+    $signExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+    if ($signExit -ne 0) {
         Write-Error "[build-driver] signtool failed on $f"
-        exit $LASTEXITCODE
+        exit $signExit
     }
 }
 

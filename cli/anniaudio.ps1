@@ -23,7 +23,6 @@
       .\cli\anniaudio.ps1 status
       .\cli\anniaudio.ps1 gaming-mode
 #>
-#Requires -RunAsAdministrator
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
@@ -34,7 +33,6 @@ param(
     [string[]]$Args
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 # ---------------------------------------------------------------------------
@@ -59,10 +57,12 @@ function Invoke-Script {
     $path = "$SCRIPTS\$Name"
     if (!(Test-Path $path)) {
         Write-Error "Script not found: $path"
-        exit 1
+        return 1
     }
     & $path @ScriptArgs
-    return $LASTEXITCODE
+    $exitCode = 0
+    if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
+    return $exitCode
 }
 
 # ---------------------------------------------------------------------------
@@ -315,11 +315,21 @@ function Invoke-AnniVersion {
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
+
+function Assert-Admin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Error "This command requires Administrator privileges. Please run as Administrator."
+        exit 1
+    }
+}
+
 switch ($Command) {
-    "install"      { Invoke-AnniInstall }
-    "uninstall"    { Invoke-AnniUninstall }
-    "dev-mode"     { Invoke-AnniDevMode }
-    "gaming-mode"  { Invoke-AnniGamingMode }
+    "install"      { Assert-Admin; Invoke-AnniInstall }
+    "uninstall"    { Assert-Admin; Invoke-AnniUninstall }
+    "dev-mode"     { Assert-Admin; Invoke-AnniDevMode }
+    "gaming-mode"  { Assert-Admin; Invoke-AnniGamingMode }
     "status"       { Invoke-AnniStatus }
     "build"        { Invoke-AnniBuild }
     "config"       { Invoke-AnniConfig -CfgArgs $Args }

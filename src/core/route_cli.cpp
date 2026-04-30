@@ -7,19 +7,16 @@
 
 static void printUsage(const char* prog)
 {
-    std::printf(R"(AnniAudio Routing CLI
-Usage:
-  %s list                  List all audio endpoints, marking AnniAudio cables
-  %s monitor <cable> [out] Route cable CAPTURE to physical RENDER (default: default output)
-  %s inject  <in>   <cable> Route physical CAPTURE to cable RENDER
-  %s passthrough <in> <out> Route any capture endpoint to any render endpoint
-
-Examples:
-  %s list
-  %s monitor "Studio Main"      -- listen to cable 1 on your headphones
-  %s inject  "Microphone" "Voice Chat" -- send mic to cable 2
-)
-", prog, prog, prog, prog, prog, prog, prog);
+    std::printf("AnniAudio Routing CLI\n");
+    std::printf("Usage:\n");
+    std::printf("  %s list                  List all audio endpoints, marking AnniAudio cables\n", prog);
+    std::printf("  %s monitor <cable> [out] Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
+    std::printf("  %s inject  <in>   <cable> Route physical CAPTURE to cable RENDER\n", prog);
+    std::printf("  %s passthrough <in> <out> Route any capture endpoint to any render endpoint\n", prog);
+    std::printf("\nExamples:\n");
+    std::printf("  %s list\n", prog);
+    std::printf("  %s monitor \"Studio Main\"      -- listen to cable 1 on your headphones\n", prog);
+    std::printf("  %s inject  \"Microphone\" \"Voice Chat\" -- send mic to cable 2\n", prog);
 }
 
 static int cmdList()
