@@ -24,7 +24,8 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # --- Subdirectories ---
-# add_subdirectory(src)   # Enabled from Phase 1 onwards
+add_subdirectory(src/core)              # Phase 1: routing engine
+# add_subdirectory(src)   # Full source tree — Phase 1+ (gradual)
 # add_subdirectory(tests) # Enabled from Phase 2 onwards
 
 # --- Phase 0 POC targets (standalone, not part of the main build) ---
