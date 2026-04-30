@@ -15,7 +15,7 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 - [x] Decide NVIDIA model distribution — **download on first run**
 - [ ] Read through Microsoft `sysvad` sample driver and understand the structure
 - [ ] Write a minimal WDM virtual audio device that appears in Windows (even if it outputs silence)
-- [ ] Get WASAPI loopback capture working — capture what's playing on a device
+- [x] Get WASAPI loopback capture working — capture what's playing on a device
 - [ ] Integrate NVIDIA RTX Effects SDK in a test harness — confirm it runs on the GPU
 - [x] Integrate RNNoise in a test harness — confirm it reduces noise on a test signal
 - [ ] Load a SOFA HRTF file with libmysofa, apply convolution to a test signal, verify it sounds spatial through headphones
