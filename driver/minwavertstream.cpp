@@ -100,7 +100,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION Pos
     } else {
         // Hardware reads at pos, app writes ahead
         Position->PlayOffset  = pos;
-        Position->WriteOffset = (pos + m_BytesPerFrame * 2) % m_BufferSize;
+        Position->WriteOffset = (pos + m_BytesPerFrame * 128) % m_BufferSize;
     }
     return STATUS_SUCCESS;
 }

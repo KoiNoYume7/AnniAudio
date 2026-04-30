@@ -12,13 +12,15 @@ using ProcessFn = std::function<void(float* buf, uint32_t frames, uint32_t chann
 
 // Routes audio from one WASAPI endpoint to another with optional DSP processing.
 //
-// Source (captureDeviceHint): a CAPTURE endpoint, e.g. the output side of a VB-Cable pair
-//   — apps route audio TO the matching RENDER endpoint, this engine reads it back.
-// Sink   (renderDeviceHint):  a RENDER endpoint, e.g. headphones or speakers.
+// Source (captureDeviceHint): a CAPTURE endpoint.
+//   Typically the AnniAudio Cable capture endpoint — apps render to the matching
+//   AnniAudio render endpoint; the kernel driver's shared cyclic buffer acts as
+//   the loopback, surfacing the data on the capture side which this engine reads.
+// Sink (renderDeviceHint): a RENDER endpoint, e.g. headphones or speakers.
 //
-// Both endpoints are opened in WASAPI shared mode using the render device's mix format.
-// If the capture device does not support that format, start() returns false with a
-// helpful diagnostic printed to stderr.
+// Both endpoints are opened in WASAPI shared mode.  Each device is initialised
+// with its own native mix format; if they differ, linear-interpolation SRC and
+// channel mapping are applied automatically.
 //
 // Caller is responsible for CoInitializeEx / CoUninitialize on the calling thread.
 //

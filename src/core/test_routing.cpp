@@ -4,18 +4,19 @@
 // Usage: test_routing [capture_hint] [render_hint]
 //
 //   capture_hint : case-insensitive substring of the capture device name
-//                  default: "Game"  (matches "Game (Virtual Audio Cable)")
+//                  default: "AnniAudio"  (matches the AnniAudio Cable capture endpoint)
 //   render_hint  : case-insensitive substring of the render device name
-//                  default: ""      (uses Windows default render device)
+//                  default: ""           (uses Windows default render device)
 //
 // Examples:
-//   test_routing                          -- Game VB-Cable -> default output
-//   test_routing "Game" "Logitech"        -- Game VB-Cable -> Logitech G560
-//   test_routing "Music" "Headphones"     -- Music VB-Cable -> headphones
+//   test_routing                              -- AnniAudio capture -> default output
+//   test_routing "AnniAudio" "Logitech"       -- AnniAudio -> Logitech G560
+//   test_routing "AnniAudio" "Headphones"     -- AnniAudio -> headphones
 //
-// To route audio: set an app's output to the matching render endpoint
-// (e.g. "Game (Virtual Audio Cable)") in Windows sound settings or the app itself.
-// You should hear the audio on your render device.
+// To route audio: set an app's output to the "AnniAudio Cable 1" render endpoint
+// in Windows sound settings or the app itself.  The audio flows through the kernel
+// driver's shared cyclic buffer and surfaces on the AnniAudio capture endpoint,
+// which this engine reads and re-renders to the real output device.
 //
 // Press Ctrl+C or wait 5 minutes to stop.
 
@@ -39,7 +40,7 @@ static BOOL WINAPI consoleCtrl(DWORD sig)
 
 int main(int argc, char* argv[])
 {
-    std::string captureHint = (argc > 1) ? argv[1] : "Game";
+    std::string captureHint = (argc > 1) ? argv[1] : "AnniAudio";
     std::string renderHint  = (argc > 2) ? argv[2] : "";
 
     std::printf("AnniAudio — Routing Engine\n");
