@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AnniAudioCable.vcxproj
+  Kernel-mode WDM driver built with the standard v143 (VS2022) toolset.
+  No WDK VS extension required — all paths and flags are explicit.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0"
+         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>AnniAudioCable</RootNamespace>
+    <!-- Standard Win SDK version (for intellisense); WDK paths set explicitly below -->
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <!-- WDK root — change if your kit is installed elsewhere -->
+    <WdkRoot>C:\Program Files (x86)\Windows Kits\10</WdkRoot>
+    <WdkVer>10.0.26100.0</WdkVer>
+    <WdkKmInc>$(WdkRoot)\Include\$(WdkVer)\km</WdkKmInc>
+    <WdkSharedInc>$(WdkRoot)\Include\$(WdkVer)\shared</WdkSharedInc>
+    <WdkKmLib>$(WdkRoot)\Lib\$(WdkVer)\km\x64</WdkKmLib>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>  <!-- .sys is a PE DLL -->
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
+            Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
+            Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <!-- Output directories -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)build\driver\release\</OutDir>
+    <IntDir>$(SolutionDir)build\driver\release\obj\</IntDir>
+    <TargetName>AnniAudioCable</TargetName>
+    <TargetExt>.sys</TargetExt>
+    <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+    <EmbedManifest>false</EmbedManifest>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)build\driver\debug\</OutDir>
+    <IntDir>$(SolutionDir)build\driver\debug\obj\</IntDir>
+    <TargetName>AnniAudioCable</TargetName>
+    <TargetExt>.sys</TargetExt>
+    <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+    <EmbedManifest>false</EmbedManifest>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+
+  <!-- ======================================================================
+       Shared kernel-mode compile settings
+  ====================================================================== -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- WDK kernel-mode include directories (prepended, override SDK paths) -->
+      <AdditionalIncludeDirectories>$(WdkKmInc);$(WdkSharedInc);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Kernel-mode: no CRT, no exceptions, no RTTI -->
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <ExceptionHandling>false</ExceptionHandling>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <AdditionalOptions>/kernel /wd4595 /Zc:alignedNew- %(AdditionalOptions)</AdditionalOptions>
+      <!-- C++ standard -->
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <!-- WDK kernel-mode library directory -->
+      <AdditionalLibraryDirectories>$(WdkKmLib);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- Core KM imports + audio stack libs -->
+      <AdditionalDependencies>ntoskrnl.lib;hal.lib;wmilib.lib;portcls.lib;ks.lib;BufferOverflowFastFailK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- WDM driver flags: SUBSYSTEM:NATIVE + /DRIVER:WDM -->
+      <SubSystem>Native</SubSystem>
+      <AdditionalOptions>/DRIVER:WDM %(Link.AdditionalOptions)</AdditionalOptions>
+      <!-- GsDriverEntry is the GS-protected wrapper provided by ntoskrnl.lib -->
+      <EntryPointSymbol>GsDriverEntry</EntryPointSymbol>
+      <!-- No CRT default libs -->
+      <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- ======================================================================
+       Release-specific settings
+  ====================================================================== -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>NTDDI_VERSION=0x0A000008;_WIN32_WINNT=0x0A00;WINVER=0x0A00;_AMD64_;POOL_NX_OPTIN_AUTO=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <WarningLevel>Level4</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- ======================================================================
+       Debug-specific settings
+  ====================================================================== -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>NTDDI_VERSION=0x0A000008;_WIN32_WINNT=0x0A00;WINVER=0x0A00;_AMD64_;POOL_NX_OPTIN_AUTO=1;DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <WarningLevel>Level4</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- Source files -->
+  <ItemGroup>
+    <ClCompile Include="adapter.cpp" />
+    <ClCompile Include="stdunk.cpp" />
+    <ClCompile Include="minwavert.cpp" />
+    <ClCompile Include="minwavertstream.cpp" />
+    <ClCompile Include="mintopo.cpp" />
+  </ItemGroup>
+
+  <!-- Header files -->
+  <ItemGroup>
+    <ClInclude Include="common.h" />
+    <ClInclude Include="toptable.h" />
+    <ClInclude Include="minwavert.h" />
+    <ClInclude Include="minwavertstream.h" />
+    <ClInclude Include="mintopo.h" />
+  </ItemGroup>
+
+  <!-- INF (copy to output; inf2cat runs separately via build-driver.ps1) -->
+  <ItemGroup>
+    <None Include="AnniAudioCable.inf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+
+</Project>

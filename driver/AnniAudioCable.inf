@@ -1,0 +1,70 @@
+;==========================================================================
+; AnniAudioCable.inf
+; Installs the AnniAudio Virtual Cable WaveRT driver as a root-enumerated
+; software audio device.
+;==========================================================================
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 04/30/2026,1.0.0.1
+CatalogFile = AnniAudioCable.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+AnniAudioCable.CopyFiles = 12   ; \Windows\System32\drivers
+
+;--------------------------------------------------------------------------
+; Manufacturer / device entries
+;--------------------------------------------------------------------------
+[Manufacturer]
+%ManufacturerName% = Standard, NTamd64
+
+[Standard.NTamd64]
+%DeviceName% = AnniAudioCable_Device, ROOT\AnniAudioCable
+
+;--------------------------------------------------------------------------
+; Device installation
+;--------------------------------------------------------------------------
+[AnniAudioCable_Device.NT]
+Include    = ks.inf, wdmaudio.inf
+Needs      = KS.Registration, WDMAUDIO.Registration
+CopyFiles  = AnniAudioCable.CopyFiles
+
+[AnniAudioCable_Device.NT.Services]
+AddService = AnniAudioCable,, AnniAudioCable_ServiceInstall
+
+;--------------------------------------------------------------------------
+; Service
+;--------------------------------------------------------------------------
+[AnniAudioCable_ServiceInstall]
+DisplayName    = %ServiceName%
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 1                  ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\AnniAudioCable.sys
+LoadOrderGroup = Audio
+
+;--------------------------------------------------------------------------
+; Files
+;--------------------------------------------------------------------------
+[AnniAudioCable.CopyFiles]
+AnniAudioCable.sys
+
+[SourceDisksNames]
+1 = %DiskName%,,, ""
+
+[SourceDisksFiles]
+AnniAudioCable.sys = 1
+
+;--------------------------------------------------------------------------
+; Strings
+;--------------------------------------------------------------------------
+[Strings]
+ProviderName     = "AnniAudio"
+ManufacturerName = "AnniAudio"
+DeviceName       = "AnniAudio Cable 1"
+ServiceName      = "AnniAudio Virtual Cable"
+DiskName         = "AnniAudio Cable Installation Disk"
