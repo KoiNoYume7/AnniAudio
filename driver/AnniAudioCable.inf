@@ -2,6 +2,7 @@
 ; AnniAudioCable.inf
 ; Installs the AnniAudio Virtual Cable WaveRT driver as a root-enumerated
 ; software audio device.
+; GENERATED FILE — do not edit directly. Edit the template or config instead.
 ;==========================================================================
 
 [Version]
@@ -9,7 +10,7 @@ Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 04/30/2026,1.0.0.5
+DriverVer   = 04.30.2026,1.0.2.0
 CatalogFile = AnniAudioCable.cat
 PnpLockdown = 1
 
@@ -89,7 +90,7 @@ AnniAudioCable.sys = 1
 [Strings]
 ProviderName      = "AnniAudio"
 ManufacturerName  = "AnniAudio"
-DeviceName        = "AnniAudio Cable 1"
+DeviceName        = "My Studio Cable"
 ServiceName       = "AnniAudio Virtual Cable"
 DiskName          = "AnniAudio Cable Installation Disk"
 
@@ -110,3 +111,4 @@ Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
 ; Friendly names for KS filter interfaces
 Wave.FriendlyName     = "AnniAudio Cable 1"
 Topology.FriendlyName = "AnniAudio Cable 1 Topology"
+

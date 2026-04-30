@@ -2,7 +2,7 @@
 ; AnniAudioCable.inf
 ; Installs the AnniAudio Virtual Cable WaveRT driver as a root-enumerated
 ; software audio device.
-; GENERATED FILE — do not edit directly. Edit the template or config instead.
+; GENERATED FILE — do not edit directly. Edit config/cables.json instead.
 ;==========================================================================
 
 [Version]
@@ -24,10 +24,10 @@ AnniAudioCable.CopyFiles = 12   ; \Windows\System32\drivers
 %ManufacturerName% = Standard, NTamd64
 
 [Standard.NTamd64]
-%DeviceName% = AnniAudioCable_Device, {{HW_ID}}
+{{MANUFACTURER_ENTRIES}}
 
 ;--------------------------------------------------------------------------
-; Device installation
+; Device installation (shared by all cables)
 ;--------------------------------------------------------------------------
 [AnniAudioCable_Device.NT]
 Include    = ks.inf, wdmaudio.inf
@@ -38,28 +38,9 @@ CopyFiles  = AnniAudioCable.CopyFiles
 AddService = AnniAudioCable, 0x2, AnniAudioCable_ServiceInstall
 
 ;--------------------------------------------------------------------------
-; Interfaces — required for AudioEndpointBuilder to discover subdevices
+; Per-cable interfaces — required for AudioEndpointBuilder
 ;--------------------------------------------------------------------------
-[AnniAudioCable_Device.NT.Interfaces]
-AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology
-AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave
-
-[AnniAudioCable.I.Wave]
-AddReg=AnniAudioCable.I.Wave.AddReg
-
-[AnniAudioCable.I.Wave.AddReg]
-HKR,,CLSID,,%Proxy.CLSID%
-HKR,,FriendlyName,,%Wave.FriendlyName%
-
-[AnniAudioCable.I.Topology]
-AddReg=AnniAudioCable.I.Topology.AddReg
-
-[AnniAudioCable.I.Topology.AddReg]
-HKR,,CLSID,,%Proxy.CLSID%
-HKR,,FriendlyName,,%Topology.FriendlyName%
+{{CABLE_INTERFACE_SECTIONS}}
 
 ;--------------------------------------------------------------------------
 ; Service
@@ -90,7 +71,6 @@ AnniAudioCable.sys = 1
 [Strings]
 ProviderName      = "AnniAudio"
 ManufacturerName  = "AnniAudio"
-DeviceName        = "{{DEVICE_NAME}}"
 ServiceName       = "AnniAudio Virtual Cable"
 DiskName          = "AnniAudio Cable Installation Disk"
 
@@ -108,6 +88,4 @@ KSNAME_Topology     = "Topology"
 ; Proxy CLSID (PortCls KS proxy)
 Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
 
-; Friendly names for KS filter interfaces
-Wave.FriendlyName     = "{{WAVE_FRIENDLY_NAME}}"
-Topology.FriendlyName = "{{TOPOLOGY_FRIENDLY_NAME}}"
+{{CABLE_STRINGS}}

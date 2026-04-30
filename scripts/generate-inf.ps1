@@ -38,22 +38,82 @@ $driverVer = "1.$major.$minor.$patch"
 
 $now = Get-Date -Format "MM/dd/yyyy"
 
-# For now we support exactly one cable in the config (multi-cable is future work)
-$cable = $cfg.cables | Where-Object { $_.enabled } | Select-Object -First 1
-if (-not $cable) {
-    Write-Warning "No enabled cable found in config; using defaults."
-    $cable = @{ name = "AnniAudio Cable 1"; hw_id = "ROOT\AnniAudioCable" }
+# Filter enabled cables; if none, default to one cable so we never emit an empty INF
+$enabledCables = $cfg.cables | Where-Object { $_.enabled }
+if (-not $enabledCables) {
+    Write-Warning "No enabled cables found in config; using default single cable."
+    $enabledCables = @(@{ id = 1; name = "AnniAudio Cable 1"; hw_id = "ROOT\AnniAudioCable"; endpoint_name = "AnniAudio Cable 1" })
 }
 
+# ---------------------------------------------------------------------------
+# Build per-cable INF sections
+# ---------------------------------------------------------------------------
+
+# [Standard.NTamd64] lines — one per cable
+$manufacturerEntries = @()
+# Per-cable interface sections
+$interfaceSections = @()
+# Per-cable friendly-name strings
+$cableStrings = @()
+
+foreach ($cable in $enabledCables) {
+    $idx   = $cable.id
+    $name  = $cable.name
+    $hwId  = $cable.hw_id
+    $epName = if ($cable.endpoint_name) { $cable.endpoint_name } else { $name }
+
+    $safeIdx = $idx -replace '[^0-9]', ''
+    $varName = "Cable${safeIdx}Name"
+
+    # Manufacturer entry
+    $manufacturerEntries += "%$varName% = AnniAudioCable_Device, $hwId"
+
+    # Interface section for this cable (unique AddInterface set)
+    $waveFriendlyVar    = "Wave${safeIdx}.FriendlyName"
+    $topoFriendlyVar   = "Topology${safeIdx}.FriendlyName"
+
+    $interfaceSections += @"
+
+; --- Cable $idx ($name) ---
+[AnniAudioCable_Device.NT.Interfaces]
+AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
+AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
+AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
+AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology${safeIdx}
+AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
+
+[AnniAudioCable.I.Wave${safeIdx}]
+AddReg=AnniAudioCable.I.Wave${safeIdx}.AddReg
+
+[AnniAudioCable.I.Wave${safeIdx}.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%$waveFriendlyVar%
+
+[AnniAudioCable.I.Topology${safeIdx}]
+AddReg=AnniAudioCable.I.Topology${safeIdx}.AddReg
+
+[AnniAudioCable.I.Topology${safeIdx}.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%$topoFriendlyVar%
+"@
+
+    # String definitions for this cable
+    $cableStrings += "$varName         = `"$name`""
+    $cableStrings += "$waveFriendlyVar  = `"$epName`""
+    $cableStrings += "$topoFriendlyVar  = `"${epName} Topology`""
+}
+
+# ---------------------------------------------------------------------------
+# Assemble replacements
+# ---------------------------------------------------------------------------
 $tpl = Get-Content $Template -Raw
 
 $replacements = @{
-    "{{DRIVER_VER_DATE}}"      = $now
-    "{{DRIVER_VER_NUMBER}}"    = $driverVer
-    "{{HW_ID}}"                = $cable.hw_id
-    "{{DEVICE_NAME}}"          = $cable.name
-    "{{WAVE_FRIENDLY_NAME}}"   = $cable.endpoint_name
-    "{{TOPOLOGY_FRIENDLY_NAME}}" = "$($cable.endpoint_name) Topology"
+    "{{DRIVER_VER_DATE}}"           = $now
+    "{{DRIVER_VER_NUMBER}}"         = $driverVer
+    "{{MANUFACTURER_ENTRIES}}"      = ($manufacturerEntries -join "`n")
+    "{{CABLE_INTERFACE_SECTIONS}}"  = ($interfaceSections -join "`n")
+    "{{CABLE_STRINGS}}"             = ($cableStrings -join "`n")
 }
 
 foreach ($kv in $replacements.GetEnumerator()) {
@@ -61,4 +121,5 @@ foreach ($kv in $replacements.GetEnumerator()) {
 }
 
 $tpl | Set-Content $OutInf -Encoding UTF8
-Write-Host "[generate-inf] Created $OutInf (version $driverVer, cable: $($cable.name))" -ForegroundColor Green
+$cableCount = $enabledCables.Count
+Write-Host "[generate-inf] Created $OutInf (version $driverVer, $cableCount cable(s))" -ForegroundColor Green

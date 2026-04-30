@@ -225,20 +225,78 @@ function Invoke-AnniConfig {
             Write-Host "Set $path = $typedValue" -ForegroundColor Green
         }
 
+        "add-cable" {
+            $name = if ($CfgArgs.Count -gt 1) { $CfgArgs[1] } else { "AnniAudio Cable" }
+            $cfg = Read-AnniConfig
+
+            $maxId = 0
+            foreach ($c in $cfg.cables) {
+                if ($c.id -gt $maxId) { $maxId = $c.id }
+            }
+            $newId = $maxId + 1
+            $hwId = "ROOT\AnniAudioCable$newId"
+            $epName = if ($CfgArgs.Count -gt 2) { $CfgArgs[2] } else { "$name $newId" }
+
+            $newCable = [ordered]@{
+                id            = $newId
+                name          = "$name $newId"
+                enabled       = $true
+                hw_id         = $hwId
+                endpoint_name = $epName
+            }
+            $cfg.cables += $newCable
+            Write-AnniConfig $cfg
+            Write-Host "Added cable #$newId : $($newCable.name) (hw_id=$hwId)" -ForegroundColor Green
+            Write-Host "Run 'build' then 'install' to create the new device node." -ForegroundColor Yellow
+        }
+
+        "remove-cable" {
+            if ($CfgArgs.Count -lt 2) {
+                Write-Error "Usage: config remove-cable <index>`n  Example: config remove-cable 1"
+                exit 1
+            }
+            $idx = [int]$CfgArgs[1]
+            $cfg = Read-AnniConfig
+            $found = $cfg.cables | Where-Object { $_.id -eq $idx }
+            if (-not $found) {
+                Write-Error "Cable with id=$idx not found."
+                exit 1
+            }
+            $cfg.cables = $cfg.cables | Where-Object { $_.id -ne $idx }
+            Write-AnniConfig $cfg
+            Write-Host "Removed cable #$idx." -ForegroundColor Green
+            Write-Host "Run 'uninstall' then 'install' to apply the change." -ForegroundColor Yellow
+        }
+
+        "list-cables" {
+            $cfg = Read-AnniConfig
+            Write-Host "`nConfigured cables:" -ForegroundColor Cyan
+            foreach ($c in $cfg.cables) {
+                $status = if ($c.enabled) { "ON " } else { "OFF" }
+                Write-Host "  [$status] #$($c.id) : $($c.name)  (hw_id=$($c.hw_id), ep=$($c.endpoint_name))" -ForegroundColor $(if ($c.enabled) { "Green" } else { "Gray" })
+            }
+            Write-Host ""
+        }
+
         default {
             Write-Host @"
 Usage: config <action> [args]
 
 Actions:
-  init              Create default config/cables.json
-  get [path]        Read config (optionally a dotted path)
-  set <path> <val>  Set a value by dotted path
+  init                    Create default config/cables.json
+  get [path]              Read config (optionally a dotted path)
+  set <path> <val>        Set a value by dotted path
+  add-cable [name]        Add a new cable (default name: AnniAudio Cable)
+  remove-cable <id>       Remove cable by id
+  list-cables             Show all configured cables
 
 Examples:
   config get
   config get cables[0].name
   config set cables[0].name "Studio Cable"
   config set cables[0].enabled false
+  config add-cable "My Cable"
+  config remove-cable 2
 "@ -ForegroundColor Yellow
         }
     }

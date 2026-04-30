@@ -18,7 +18,20 @@ $ErrorActionPreference = "Stop"
 $RepoRoot  = "$PSScriptRoot\.."
 $InfPath   = "$RepoRoot\build\driver\release\AnniAudioCable.inf"
 $DevCon    = "C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe"
-$HwId      = "ROOT\AnniAudioCable"
+$Config    = "$RepoRoot\config\cables.json"
+
+# Read cable configuration
+if (Test-Path $Config) {
+    $cfg = Get-Content $Config -Raw | ConvertFrom-Json
+    $enabledCables = $cfg.cables | Where-Object { $_.enabled }
+} else {
+    $enabledCables = @(@{ hw_id = "ROOT\AnniAudioCable"; name = "AnniAudio Cable 1" })
+}
+
+if (-not $enabledCables) {
+    Write-Error "No enabled cables found in config. Run 'anniaudio.ps1 config init' first."
+    exit 1
+}
 
 # ---------------------------------------------------------------------------
 # 0. Pre-flight checks
@@ -47,8 +60,11 @@ if (!(Test-Path $InfPath)) {
 # ---------------------------------------------------------------------------
 # 0b. Detect existing installation (device or staged package)
 # ---------------------------------------------------------------------------
+$hwIdPatterns = $enabledCables | ForEach-Object { "*$($_.hw_id)*" }
 $existingDevs = Get-PnpDevice -Class MEDIA -ErrorAction SilentlyContinue | Where-Object {
-    $_.InstanceId -like "*$HwId*" -or $_.FriendlyName -like "*AnniAudio*"
+    $dev = $_
+    ($hwIdPatterns | Where-Object { $dev.InstanceId -like $_ }) -or
+    ($dev.FriendlyName -like "*AnniAudio*")
 }
 
 # Check driver store for any staged AnniAudio package
@@ -85,7 +101,9 @@ if ($existingDevs -or $existingPkg) {
             }
         }
         if (Test-Path $DevCon) {
-            & $DevCon remove $HwId 2>$null
+            foreach ($cable in $enabledCables) {
+                & $DevCon remove $cable.hw_id 2>$null
+            }
         }
         # Remove staged package
         if ($existingPkg) {
@@ -121,19 +139,21 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "  -> Driver staged successfully." -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 2. Create device node
+# 2. Create device nodes for all enabled cables
 # ---------------------------------------------------------------------------
 if (Test-Path $DevCon) {
-    Write-Host "`n[install-driver] Creating device node $HwId ..." -ForegroundColor Cyan
-    & $DevCon install $InfPath $HwId
-    # devcon may return 0 (success) or 1 (device already exists); both are fine
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1) {
-        Write-Warning "devcon returned $LASTEXITCODE — device node may not have been created."
-    } else {
-        Write-Host "  -> Device node created." -ForegroundColor Green
+    foreach ($cable in $enabledCables) {
+        Write-Host "`n[install-driver] Creating device node $($cable.hw_id) ($($cable.name)) ..." -ForegroundColor Cyan
+        & $DevCon install $InfPath $cable.hw_id
+        # devcon may return 0 (success) or 1 (device already exists); both are fine
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1) {
+            Write-Warning "devcon returned $LASTEXITCODE for $($cable.hw_id) — device node may not have been created."
+        } else {
+            Write-Host "  -> Device node created." -ForegroundColor Green
+        }
     }
 } else {
-    Write-Warning "devcon.exe not found at:`n  $DevCon`nCreate the device manually via Device Manager > Add legacy hardware."
+    Write-Warning "devcon.exe not found at:`n  $DevCon`nCreate devices manually via Device Manager > Add legacy hardware."
 }
 
 # ---------------------------------------------------------------------------
