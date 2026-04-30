@@ -1,0 +1,18 @@
+{
+    "schema_version": 1,
+    "cables": [
+        {
+            "id": 1,
+            "name": "AnniAudio Cable 1",
+            "enabled": true,
+            "hw_id": "ROOT\\AnniAudioCable",
+            "endpoint_name": "AnniAudio Cable 1"
+        }
+    ],
+    "settings": {
+        "default_sample_rate": 48000,
+        "default_bit_depth": 32,
+        "default_channels": 2,
+        "allow_96k": true
+    }
+}

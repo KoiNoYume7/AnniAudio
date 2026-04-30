@@ -42,9 +42,14 @@ dist/
 *.log
 logs/
 
+# Code signing certificates — never commit private keys
+certs/
+
 # Config with secrets — never commit real keys
 # (committed config.example.json is fine, actual config.json is not)
 config.json
+config/cables.json
+
 
 # RNNoise model data (downloaded on demand via download_model.sh equivalent)
 third_party/rnnoise/rnnoise_data*.tar.gz

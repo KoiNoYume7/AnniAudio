@@ -28,6 +28,14 @@ $SignTool   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signt
 $Inf2Cat   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\Inf2Cat.exe"
 $OutDir     = "$RepoRoot\build\driver\$($Config.ToLower())"
 
+# ---- Generate INF from template + config -----------------------------------
+Write-Host "`n[build-driver] Generating INF from template ..." -ForegroundColor Cyan
+& "$PSScriptRoot\generate-inf.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "[build-driver] INF generation failed."
+    exit $LASTEXITCODE
+}
+
 # ---- Build ----------------------------------------------------------------
 Write-Host "`n[build-driver] Building $Config|x64 ..." -ForegroundColor Cyan
 $MSBuild = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe"
