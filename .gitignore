@@ -1,4 +1,4 @@
-# Build output
+# ── Build artifacts ──
 build/
 out/
 *.obj
@@ -6,24 +6,57 @@ out/
 *.ilk
 *.exp
 *.lib
-*.dll
-*.exe
-*.sys
-*.inf.bak
+*.map
 
-# CMake
+# ── CMake ──
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 _deps/
+*.cmake
+!CMakeLists.txt
 
-# Driver build artifacts
-*.cer
-*.pfx
-*.cat
+# ── WDK / Driver build outputs ──
 driver/x64/
+driver/x86/
+*.cat
+*.sys
+*.inf.bak
 
-# IDE
+# ── Binaries ──
+*.exe
+*.dll
+
+# ── Code-signing certificates — never commit private keys ──
+certs/*.pfx
+certs/*.cer
+certs/*.p12
+
+# ── Config with user/local data — commit only .example files ──
+config/cables.json
+config/cables.local.json
+
+# ── RNNoise generated / downloaded data ──
+third_party/rnnoise/src/rnnoise_data.c
+third_party/rnnoise/src/rnnoise_data.h
+third_party/rnnoise/src/rnnoise_data_little.c
+third_party/rnnoise/src/rnnoise_data_little.h
+third_party/rnnoise/rnnoise_data*.tar.gz
+
+# ── Dev scratch / throwaway scripts ──
+scripts/_*
+
+# ── Logs ──
+logs/
+*.log
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# ── Editors / IDEs ──
 .vs/
 *.user
 *.suo
@@ -33,32 +66,7 @@ driver/x64/
 *.VC.opendb
 .vscode/settings.json
 
-# Node / Electron (Phase 5)
+# ── Node / Electron (Phase 5) ──
 node_modules/
 dist/
 .electron-builder/
-
-# Logs
-*.log
-logs/
-
-# Code signing certificates — never commit private keys
-certs/
-
-# Config with secrets — never commit real keys
-# (committed config.example.json is fine, actual config.json is not)
-config.json
-config/cables.json
-
-
-# RNNoise model data (downloaded on demand via download_model.sh equivalent)
-third_party/rnnoise/rnnoise_data*.tar.gz
-third_party/rnnoise/src/rnnoise_data.c
-third_party/rnnoise/src/rnnoise_data.h
-third_party/rnnoise/src/rnnoise_data_little.c
-third_party/rnnoise/src/rnnoise_data_little.h
-
-# OS
-Thumbs.db
-Desktop.ini
-.DS_Store

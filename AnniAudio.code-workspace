@@ -11,6 +11,7 @@
 	],
 	"extensions": {
 		"recommendations": [
+			"starlitxiling.bak-syntax-highlighter"
 		]
 	},
 	"settings": {
