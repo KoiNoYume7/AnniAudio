@@ -36,9 +36,38 @@ if ($genExit -ne 0) {
     exit $genExit
 }
 
+# ---- Find MSBuild ---------------------------------------------------------
+$MSBuild = $null
+$VSWHERE = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+if (Test-Path $VSWHERE) {
+    # Try to find MSBuild via vswhere (most reliable)
+    $MSBuild = & $VSWHERE -latest -requires Microsoft.Component.MSBuild -find MSBuild\Current\Bin\amd64\MSBuild.exe 2>$null | Select-Object -First 1
+}
+
+if (!$MSBuild -or !(Test-Path $MSBuild)) {
+    # Fallback: common locations
+    $Fallbacks = @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"
+    )
+    foreach ($path in $Fallbacks) {
+        if (Test-Path $path) { $MSBuild = $path; break }
+    }
+}
+
+if (!$MSBuild -or !(Test-Path $MSBuild)) {
+    Write-Error "[build-driver] MSBuild not found. Please install Visual Studio 2022 (Community, Professional, Enterprise, or BuildTools) with 'Desktop development with C++' workload and Windows SDK."
+    exit 1
+}
+
+Write-Host "[build-driver] Found MSBuild: $MSBuild" -ForegroundColor Gray
+
 # ---- Build ----------------------------------------------------------------
 Write-Host "`n[build-driver] Building $Config|x64 ..." -ForegroundColor Cyan
-$MSBuild = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe"
 & $MSBuild $ProjFile /p:Configuration=$Config /p:Platform=x64 /m /nologo `
            /p:SolutionDir="$RepoRoot\\"
 
