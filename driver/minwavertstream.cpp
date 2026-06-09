@@ -82,6 +82,12 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::SetState(KSSTATE State)
 // ---------------------------------------------------------------------------
 // IMiniportWaveRTStream::GetPosition
 // Reports the current DMA position using the timer-driven counter.
+// 
+// Position semantics:
+//   Render:  PlayOffset = hardware read position (where driver reads from buffer)
+//            WriteOffset = where app can write to (ahead of PlayOffset)
+//   Capture: WriteOffset = hardware write position (where driver writes to buffer)
+//            PlayOffset = where app can read from (behind WriteOffset)
 // ---------------------------------------------------------------------------
 STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION Position)
 {
@@ -91,14 +97,22 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION Pos
         return STATUS_SUCCESS;
     }
 
+    // Read position counter with lock held (sync with TimerDpc)
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_pMiniport->m_PositionLock, &oldIrql);
     ULONG64 pos = (ULONG64)(m_pMiniport->m_BytesTransferred) % m_BufferSize;
+    KeReleaseSpinLock(&m_pMiniport->m_PositionLock, oldIrql);
 
     if (m_Capture) {
-        // Hardware writes at pos, app reads before pos
-        Position->WriteOffset = pos;
-        Position->PlayOffset  = (pos + m_BufferSize - m_BytesPerFrame) % m_BufferSize;
+        // Capture: driver writes at pos, app reads from behind pos
+        // WriteOffset leads (where audio was just written / will be written next)
+        // PlayOffset trails (where app should read from, ~one frame behind for safety)
+        Position->WriteOffset = (pos + m_BufferSize - m_BytesPerFrame) % m_BufferSize;
+        Position->PlayOffset  = (pos + m_BufferSize - m_BytesPerFrame * 2) % m_BufferSize;
     } else {
-        // Hardware reads at pos, app writes ahead
+        // Render: driver reads at pos, app writes ahead of pos
+        // PlayOffset = current position (where "hardware" is playing from)
+        // WriteOffset = where app can write to (128 frames ahead)
         Position->PlayOffset  = pos;
         Position->WriteOffset = (pos + m_BytesPerFrame * 128) % m_BufferSize;
     }

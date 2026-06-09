@@ -7,6 +7,9 @@
 // Implements IMiniportWaveRT.
 // Each instance owns its own shared cyclic buffer so that multiple
 // driver instances (one per virtual cable) are fully isolated.
+// 
+// Thread safety: m_BytesTransferred and related state are protected by
+// m_PositionLock (KSPIN_LOCK). Timer DPC and GetPosition both acquire this.
 // -------------------------------------------------------------------------
 class CMiniportWaveRT
     : public IMiniportWaveRT
@@ -27,6 +30,7 @@ public:
     {
         RtlZeroMemory(&m_Timer, sizeof(m_Timer));
         RtlZeroMemory(&m_Dpc,  sizeof(m_Dpc));
+        KeInitializeSpinLock(&m_PositionLock);
     }
     ~CMiniportWaveRT();
 
@@ -68,7 +72,10 @@ public:
     PVOID         m_SharedBuffer;
     PMDL          m_SharedMdl;
     ULONG         m_SharedBufferSize;
-    volatile LONG64 m_BytesTransferred;
+    LONG64        m_BytesTransferred;
+
+    // Protects m_BytesTransferred and buffer state (accessed from timer DPC and GetPosition)
+    KSPIN_LOCK    m_PositionLock;
 
     BOOLEAN       m_TimerInitialized;
 };

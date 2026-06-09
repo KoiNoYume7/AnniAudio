@@ -5,8 +5,8 @@
 // -------------------------------------------------------------------------
 // CMiniportWaveRTStream
 // Implements IMiniportWaveRTStream.
-// Both render and capture streams share the same cyclic buffer that lives
-// in the miniport (g_sharedBuffer / g_sharedMdl).
+// Both render and capture streams share the same per-instance cyclic buffer
+// that lives in the miniport (m_SharedBuffer / m_SharedMdl).
 // -------------------------------------------------------------------------
 class CMiniportWaveRTStream
     : public IMiniportWaveRTStream

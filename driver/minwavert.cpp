@@ -223,5 +223,9 @@ void NTAPI CMiniportWaveRT::TimerDpc(PKDPC, PVOID Context, PVOID, PVOID)
     auto* self = static_cast<CMiniportWaveRT*>(Context);
     LONG64 advance = (LONG64)(self->m_SampleRate) * TIMER_PERIOD_MS / 1000
                    * self->m_BytesPerFrame;
-    InterlockedAdd64(&self->m_BytesTransferred, advance);
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&self->m_PositionLock, &oldIrql);
+    self->m_BytesTransferred += advance;
+    KeReleaseSpinLock(&self->m_PositionLock, oldIrql);
 }
