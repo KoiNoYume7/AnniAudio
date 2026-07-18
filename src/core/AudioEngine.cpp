@@ -564,8 +564,8 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
     if (FAILED(hr)) { m_impl->cleanup(); return false; }
 
     m_impl->srcPhase = 0.0;
-    // Ring in render format: 8192 render frames (~85ms at 96kHz)
-    m_impl->ring.init((size_t)8192 * m_impl->renderCh);
+    // Ring in render format: several buffer durations of headroom
+    m_impl->ring.init((size_t)m_impl->renderBufFrames * 4 * m_impl->renderCh);
     m_impl->framesProcessed = 0;
 
     m_impl->thread = CreateThread(nullptr, 0, Impl::threadEntry, m_impl.get(), 0, nullptr);
