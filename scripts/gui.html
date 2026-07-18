@@ -159,6 +159,7 @@
   .hint { padding: 0.5rem 1rem; font-size: 0.8rem; color: var(--muted); border-bottom: 1px solid var(--border); }
   input[type=range] { -webkit-appearance: none; appearance: none; height: 6px; background: var(--border); border-radius: 3px; outline: none; }
   input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .port.active { background: var(--accent2); border-color: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
 </style>
 </head>
 <body>
@@ -169,7 +170,26 @@
   </header>
   <div class="hint">Click an output port (right side), then click an input port (left side) to connect. Click a cable to disconnect.</div>
   <div id="patchbay">
-    <svg id="cables"></svg>
+    <svg id="cables">
+      <defs>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+          <feMerge>
+            <feMergeNode in="coloredBlur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+        <linearGradient id="grad-in" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#3b82f6"/>
+          <stop offset="100%" stop-color="#8b5cf6"/>
+        </linearGradient>
+        <linearGradient id="grad-out" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#10b981"/>
+          <stop offset="100%" stop-color="#06b6d4"/>
+        </linearGradient>
+      </defs>
+      <g id="cable-layer"></g>
+    </svg>
     <div class="column" id="col-inputs">
       <div class="col-header">Inputs <span class="col-count" id="input-count">0</span></div>
       <div class="node-list" id="inputs"></div>
@@ -193,6 +213,7 @@
 let endpoints = [];
 let groups = [];
 let activeRoutes = [];
+let apps = [];
 let connections = [];
 let pending = null;
 let dragging = false;
@@ -212,12 +233,14 @@ function setStatus(msg, ok=true) {
 }
 
 async function loadData() {
-  const [eps, grps, rts] = await Promise.all([api('/api/endpoints'), api('/api/groups'), api('/api/routes')]);
+  const [eps, grps, rts, aps] = await Promise.all([api('/api/endpoints'), api('/api/groups'), api('/api/routes'), api('/api/apps')]);
   endpoints = eps.endpoints || [];
   groups = grps.groups || [];
   activeRoutes = rts.routes || [];
+  apps = aps.apps || [];
   renderAll();
   attachPortListeners();
+  attachVolumeListeners();
   rebuildConnections();
   drawCables();
   setStatus('Ready');
@@ -230,19 +253,51 @@ function renderAll() {
   renderRoutesTable();
 }
 
+function getEndpointNameById(id) {
+  if (!id || id === 'Default') return 'Default';
+  const ep = endpoints.find(e => e.id === id);
+  if (ep) return ep.name;
+  const g = groups.find(g => g.render && g.render.id === id);
+  if (g) return g.name;
+  return id;
+}
+
 function renderInputs() {
   const list = document.getElementById('inputs');
   const inputs = endpoints.filter(e => e.flow === 'CAPTURE');
-  document.getElementById('input-count').textContent = inputs.length;
+  document.getElementById('input-count').textContent = apps.length + inputs.length;
   list.innerHTML = '';
+  for (const app of apps) {
+    const node = document.createElement('div');
+    node.className = 'node';
+    node.dataset.type = 'app';
+    node.dataset.id = String(app.ProcessId);
+    node.dataset.deviceId = app.DeviceId || '';
+    node.innerHTML = `
+      <div class="node-title">
+        <div class="name">${app.ProcessName || 'Unknown'}</div>
+        <div class="sub">Out: ${getEndpointNameById(app.DeviceId) || 'Default'}</div>
+      </div>
+      <div class="port-wrap"><div class="port" data-port="out" title="app output"></div></div>
+    `;
+    list.appendChild(node);
+  }
   for (const e of inputs) {
     const node = document.createElement('div');
     node.className = 'node';
     node.dataset.type = 'input';
     node.dataset.id = e.name;
+    node.dataset.deviceId = e.id || '';
+    const vol = e.volume !== undefined ? e.volume : null;
     node.innerHTML = `
-      <div class="node-title"><div class="name">${e.name}${e.isDefault ? '<span class="default-mark">*</span>' : ''}</div><div class="sub">Capture</div></div>
       <div class="port-wrap"><div class="port" data-port="out" title="output"></div></div>
+      <div class="group-body">
+        <div class="name">${e.name}${e.isDefault ? '<span class="default-mark">*</span>' : ''}</div>
+        <div class="group-vol">
+          <input type="range" min="0" max="100" value="${vol}" data-kind="endpoint" data-device-id="${e.id || ''}" ${vol === null ? 'disabled' : ''}>
+          <span>${vol === null ? '-' : vol + '%'}</span>
+        </div>
+      </div>
     `;
     list.appendChild(node);
   }
@@ -259,6 +314,10 @@ function renderGroups() {
     node.className = 'node';
     node.dataset.type = 'group';
     node.dataset.id = g.id;
+    node.dataset.renderId = g.render ? g.render.id : '';
+    node.dataset.captureId = g.capture ? g.capture.id : '';
+    node.dataset.renderName = g.render ? g.render.name : '';
+    node.dataset.captureName = g.capture ? g.capture.name : '';
     const vol = getGroupOutVolume(g.id);
     node.innerHTML = `
       <div class="port-wrap"><div class="port" data-port="in" title="group input"></div></div>
@@ -289,9 +348,17 @@ function renderOutputs() {
     node.className = 'node';
     node.dataset.type = 'output';
     node.dataset.id = e.name;
+    node.dataset.deviceId = e.id || '';
+    const vol = e.volume !== undefined ? e.volume : null;
     node.innerHTML = `
       <div class="port-wrap"><div class="port" data-port="in" title="input"></div></div>
-      <div class="node-title"><div class="name">${e.name}${e.isDefault ? '<span class="default-mark">*</span>' : ''}</div><div class="sub">Render</div></div>
+      <div class="group-body">
+        <div class="name">${e.name}${e.isDefault ? '<span class="default-mark">*</span>' : ''}</div>
+        <div class="group-vol">
+          <input type="range" min="0" max="100" value="${vol}" data-kind="endpoint" data-device-id="${e.id || ''}" ${vol === null ? 'disabled' : ''}>
+          <span>${vol === null ? '-' : vol + '%'}</span>
+        </div>
+      </div>
     `;
     list.appendChild(node);
   }
@@ -362,41 +429,74 @@ function rebuildConnections() {
       connections.push({ routeId: r.id, from: { type: 'group', id: sourceGroup.id, port: 'out' }, to: { type: 'output', id: r.render, port: 'in' } });
     }
   }
+  for (const app of apps) {
+    if (!app.DeviceId || app.DeviceId === 'Default') continue;
+    const targetGroup = groups.find(g => g.render && g.render.id === app.DeviceId);
+    if (targetGroup) {
+      connections.push({ routeId: 'app-' + app.ProcessId, from: { type: 'app', id: String(app.ProcessId), port: 'out' }, to: { type: 'group', id: targetGroup.id, port: 'in' } });
+      continue;
+    }
+    const targetOut = endpoints.find(e => e.flow === 'RENDER' && e.id === app.DeviceId);
+    if (targetOut) {
+      connections.push({ routeId: 'app-' + app.ProcessId, from: { type: 'app', id: String(app.ProcessId), port: 'out' }, to: { type: 'output', id: targetOut.name, port: 'in' } });
+    }
+  }
 }
 
 function getPortEl(type, id, port) {
-  const colMap = { input: 'inputs', group: 'groups', output: 'outputs' };
+  const colMap = { input: 'inputs', app: 'inputs', group: 'groups', output: 'outputs' };
   const list = document.getElementById(colMap[type]);
-  const node = list.querySelector(`.node[data-type="${type}"][data-id="${CSS.escape(id)}"]`) || list.querySelector(`.node[data-type="${type}"][data-id="${id}"]`);
+  if (!list) return null;
+  const selectorValue = (typeof id === 'number') ? String(id) : id.replace(/"/g, '\\"');
+  const node = list.querySelector(`.node[data-type="${type}"][data-id="${selectorValue}"]`);
   if (!node) return null;
   return node.querySelector(`.port[data-port="${port}"]`);
 }
 
 function drawCables() {
-  const svg = document.getElementById('cables');
+  const layer = document.getElementById('cable-layer');
+  if (!layer) return;
   const patch = document.getElementById('patchbay');
   const prect = patch.getBoundingClientRect();
-  svg.innerHTML = '';
+  layer.innerHTML = '';
+  document.querySelectorAll('.port.active').forEach(p => p.classList.remove('active'));
+
   for (const c of connections) {
     const fromEl = getPortEl(c.from.type, c.from.id, c.from.port);
     const toEl = getPortEl(c.to.type, c.to.id, c.to.port);
     if (!fromEl || !toEl) continue;
+    fromEl.classList.add('active');
+    toEl.classList.add('active');
     const f = fromEl.getBoundingClientRect();
     const t = toEl.getBoundingClientRect();
     const x1 = f.left - prect.left + f.width / 2;
     const y1 = f.top - prect.top + f.height / 2;
     const x2 = t.left - prect.left + t.width / 2;
     const y2 = t.top - prect.top + t.height / 2;
-    const cp1x = x1 + 80;
+    const dx = x2 - x1;
+    const offset = Math.min(Math.max(Math.abs(dx) * 0.5, 40), 120);
+    const cp1x = x1 + offset;
     const cp1y = y1;
-    const cp2x = x2 - 80;
+    const cp2x = x2 - offset;
     const cp2y = y2;
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', `M ${x1} ${y1} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x2} ${y2}`);
+    const isGroupOut = c.from.type === 'group';
+    path.setAttribute('stroke', isGroupOut ? 'url(#grad-out)' : 'url(#grad-in)');
+    path.setAttribute('stroke-width', '4');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('filter', 'url(#glow)');
+    path.setAttribute('pointer-events', 'stroke');
     path.dataset.routeId = c.routeId;
-    path.addEventListener('click', () => stopRoute(c.routeId));
-    svg.appendChild(path);
+    if (c.routeId.startsWith('app-')) {
+      path.addEventListener('click', () => resetAppRoute(c.routeId.slice(4)));
+    } else {
+      path.addEventListener('click', () => stopRoute(c.routeId));
+    }
+    layer.appendChild(path);
   }
+
   if (pending && pending.el) {
     const f = pending.el.getBoundingClientRect();
     const x1 = f.left - prect.left + f.width / 2;
@@ -406,8 +506,11 @@ function drawCables() {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
     path.setAttribute('stroke', 'var(--danger)');
-    path.setAttribute('stroke-dasharray', '5,5');
-    svg.appendChild(path);
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('stroke-dasharray', '6,4');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('opacity', '0.85');
+    layer.appendChild(path);
   }
 }
 
@@ -416,7 +519,8 @@ function portClick(e) {
   const port = e.currentTarget;
   const node = port.closest('.node');
   const type = node.dataset.type;
-  const id = node.dataset.id;
+  const rawId = node.dataset.id;
+  const id = (type === 'group') ? parseInt(rawId, 10) : rawId;
   const portName = port.dataset.port;
 
   if (!pending) {
@@ -444,25 +548,36 @@ function clearPending() {
 }
 
 async function createConnection(source, target) {
-  let capture, render;
-  if (source.type === 'input' && target.type === 'group') {
-    const g = groups.find(x => x.id === target.id);
-    if (!g || !g.render) { setStatus('Group has no render endpoint', false); return; }
-    capture = source.id;
-    render = g.render.name;
-  } else if (source.type === 'group' && target.type === 'output') {
-    const g = groups.find(x => x.id === source.id);
-    if (!g || !g.capture) { setStatus('Group has no capture endpoint', false); return; }
-    capture = g.capture.name;
-    render = target.id;
-  } else {
-    setStatus('Connect input→group or group→output only', false); return;
-  }
+  const srcPort = getPortEl(source.type, source.id, source.port);
+  const tgtPort = getPortEl(target.type, target.id, target.port);
+  if (!srcPort || !tgtPort) { setStatus('Port not found', false); return; }
+  const srcNode = srcPort.closest('.node');
+  const tgtNode = tgtPort.closest('.node');
 
   try {
-    setStatus('Starting route...');
-    await api('/api/route/start', 'POST', { capture, render, volume: 100 });
-    setStatus('Route started');
+    setStatus('Connecting...');
+    if (source.type === 'input' && target.type === 'group') {
+      const renderName = tgtNode.dataset.renderName;
+      if (!renderName) { setStatus('Group has no render endpoint', false); return; }
+      await api('/api/route/start', 'POST', { capture: source.id, render: renderName, volume: 100 });
+    } else if (source.type === 'group' && target.type === 'output') {
+      const captureName = srcNode.dataset.captureName;
+      if (!captureName) { setStatus('Group has no capture endpoint', false); return; }
+      await api('/api/route/start', 'POST', { capture: captureName, render: target.id, volume: 100 });
+    } else if (source.type === 'app' && target.type === 'group') {
+      const deviceId = tgtNode.dataset.renderId;
+      if (!deviceId) { setStatus('Group has no render endpoint', false); return; }
+      await api('/api/route/app', 'POST', { processId: parseInt(source.id, 10), deviceId });
+    } else if (source.type === 'app' && target.type === 'output') {
+      const deviceId = tgtNode.dataset.deviceId;
+      if (!deviceId) { setStatus('Output has no device id', false); return; }
+      await api('/api/route/app', 'POST', { processId: parseInt(source.id, 10), deviceId });
+    } else if (source.type === 'input' && target.type === 'output') {
+      await api('/api/route/start', 'POST', { capture: source.id, render: target.id, volume: 100 });
+    } else {
+      setStatus('Connect app→group, input→group, or group→output only', false); return;
+    }
+    setStatus('Connected');
     await loadData();
   } catch (err) { setStatus(err.message, false); }
 }
@@ -485,10 +600,40 @@ function attachPortListeners() {
   document.querySelectorAll('.port').forEach(p => p.addEventListener('click', portClick));
 }
 
+function attachVolumeListeners() {
+  document.querySelectorAll('input[data-kind=endpoint]').forEach(slider => {
+    slider.removeEventListener('input', onEndpointVolInput);
+    slider.addEventListener('input', onEndpointVolInput);
+  });
+}
+
+async function onEndpointVolInput(e) {
+  const slider = e.target;
+  const deviceId = slider.dataset.deviceId;
+  if (!deviceId) return;
+  const vol = parseInt(slider.value, 10);
+  slider.nextElementSibling.textContent = vol + '%';
+  try {
+    await api('/api/volume/endpoint', 'POST', { id: deviceId, volume: vol });
+    setStatus('Volume updated');
+  } catch (err) { setStatus(err.message, false); }
+}
+
+async function resetAppRoute(processId) {
+  try {
+    const def = endpoints.find(e => e.flow === 'RENDER' && e.isDefault);
+    const deviceId = def ? def.id : 'Default';
+    await api('/api/route/app', 'POST', { processId: parseInt(processId, 10), deviceId });
+    setStatus('App route reset');
+    await loadData();
+  } catch (err) { setStatus(err.message, false); }
+}
+
 async function init() {
   try {
     await loadData();
     attachPortListeners();
+    attachVolumeListeners();
     window.addEventListener('resize', () => { drawCables(); });
     document.querySelectorAll('.node-list').forEach(el => el.addEventListener('scroll', drawCables));
     document.getElementById('patchbay').addEventListener('mousemove', onMouseMove);

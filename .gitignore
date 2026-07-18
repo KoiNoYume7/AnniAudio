@@ -26,6 +26,7 @@ driver/x86/
 # ── Binaries ──
 *.exe
 *.dll
+!scripts/AnniAudio.Audio.dll
 
 # ── Code-signing certificates — never commit private keys ──
 certs/*.pfx

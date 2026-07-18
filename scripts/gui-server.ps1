@@ -22,6 +22,20 @@ $RouteCli = "$RepoRoot\build\bin\Release\route_cli.exe"
 $HtmlFile = "$PSScriptRoot\gui.html"
 $ConfigFile = "$RepoRoot\config\cables.json"
 
+$AudioDll = "$PSScriptRoot\AnniAudio.Audio.dll"
+if (Test-Path $AudioDll) {
+    Add-Type -Path $AudioDll
+} else {
+    Write-Warning "AnniAudio.Audio.dll not found; per-app routing unavailable."
+}
+
+$AudioConfigModule = "$PSScriptRoot\modules\AudioConfig\1.0.0\AudioConfig.psd1"
+if (Test-Path $AudioConfigModule) {
+    Import-Module $AudioConfigModule -Force
+} else {
+    Write-Warning "AudioConfig module not found; endpoint and app listing unavailable."
+}
+
 if (!(Test-Path $RouteCli)) {
     Write-Error "route_cli.exe not found at $RouteCli. Run '.\cli\anniaudio.ps1 build' first."
     exit 1
@@ -46,12 +60,18 @@ function Get-RouteCliList {
 function Parse-Endpoints {
     param([string[]]$Lines)
     $endpoints = @()
-    foreach ($line in $Lines) {
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
         if ($line -match '^\s*(\d+)\s+(RENDER|CAPTURE)\s+\[([^\]]+)\]\s+(.+?)\s*$') {
             $idx   = [int]$matches[1]
             $flow  = $matches[2]
             $type  = $matches[3]
             $nameRaw = $matches[4].Trim()
+            $id = $null
+            if ($i + 1 -lt $Lines.Count -and $Lines[$i+1] -match '^\s*(\S+)\s*$') {
+                $id = $matches[1].Trim()
+                $i++
+            }
             $isDefault = $false
             $name = $nameRaw
             if ($name -match '^(.*?)\s+\(default\)$') {
@@ -63,6 +83,7 @@ function Parse-Endpoints {
                 flow      = $flow
                 type      = $type
                 name      = $name
+                id        = $id
                 isDefault = $isDefault
             }
         }
@@ -71,8 +92,25 @@ function Parse-Endpoints {
 }
 
 function Get-Endpoints {
-    $lines = Get-RouteCliList
-    return Parse-Endpoints -Lines $lines
+    $defaults = @{}
+    try {
+        $defaults[(Get-AudioDevice -DeviceType Playback -Role Console -ErrorAction SilentlyContinue).ID] = $true
+        $defaults[(Get-AudioDevice -DeviceType Recording -Role Console -ErrorAction SilentlyContinue).ID] = $true
+    } catch {}
+
+    return Get-AudioDevice | ForEach-Object {
+        $flow = if ($_.DeviceType -eq 'Playback') { 'RENDER' } else { 'CAPTURE' }
+        [PSCustomObject]@{
+            index     = 0
+            flow      = $flow
+            type      = $_.FormFactor
+            name      = "$($_.Name) ($($_.DeviceName))"
+            id        = $_.ID
+            volume    = [math]::Round($_.VolumeLevel, 1)
+            muted     = $_.Muted
+            isDefault = $defaults.ContainsKey($_.ID)
+        }
+    }
 }
 
 function Get-Groups {
@@ -92,6 +130,45 @@ function Get-Groups {
         }
     }
     return $groups
+}
+
+function Get-Apps {
+    if (-not (Test-Path $AudioConfigModule)) { return @() }
+    try {
+        $seen = @{}
+        $sessions = Get-AudioDevice | Get-AudioSession | Where-Object { $_.ProcessId -ne 0 }
+        $result = foreach ($s in $sessions) {
+            $appId = [int]$s.ProcessId
+            if ($seen.ContainsKey($appId)) { continue }
+            $seen[$appId] = $true
+            $proc = $null
+            try { $proc = Get-Process -Id $appId -ErrorAction SilentlyContinue } catch {}
+            $name = if ($s.DisplayName) { $s.DisplayName } elseif ($proc) { $proc.ProcessName } else { "PID $appId" }
+            [PSCustomObject]@{
+                ProcessId      = $appId
+                ProcessName    = $name
+                DisplayName    = $s.DisplayName
+                DeviceId       = $s.OutputDeviceId
+                Volume         = [math]::Round($s.VolumeLevel, 1)
+                Muted          = $s.Muted
+            }
+        }
+        return $result
+    } catch {
+        Write-Warning "Get-Apps failed: $_"
+        return @()
+    }
+}
+
+function Set-AppOutput([int]$processId, [string]$deviceId) {
+    if (-not (Test-Path $AudioDll)) { throw "Audio helper DLL not loaded" }
+    $result = [AnniAudio.AudioPolicyHelper]::SetAppEndpoint($processId, $deviceId)
+    if ($result -ne 'OK') { throw $result }
+}
+
+function Set-EndpointVolume([string]$deviceId, [int]$volume) {
+    if (-not (Test-Path $AudioConfigModule)) { throw "AudioConfig module not loaded" }
+    Set-AudioDevice -Device $deviceId -VolumeLevel $volume -ErrorAction Stop
 }
 
 function Start-RouteProcess {
@@ -199,13 +276,18 @@ try {
                     continue
                 }
                 '/api/endpoints' {
-                    $eps = Get-Endpoints
+                    $eps = @(Get-Endpoints)
                     Write-JsonResponse -Context $ctx -Object @{ endpoints = $eps }
                     continue
                 }
                 '/api/groups' {
-                    $groups = Get-Groups
+                    $groups = @(Get-Groups)
                     Write-JsonResponse -Context $ctx -Object @{ groups = $groups }
+                    continue
+                }
+                '/api/apps' {
+                    $apps = @(Get-Apps)
+                    Write-JsonResponse -Context $ctx -Object @{ apps = $apps }
                     continue
                 }
                 '/api/routes' {
@@ -292,6 +374,37 @@ try {
                         $r.Process.StandardInput.WriteLine("v $vol")
                         $r.Volume = $vol
                     }
+                    Write-JsonResponse -Context $ctx -Object @{ id = $body.id; volume = $vol }
+                    continue
+                }
+                '/api/route/app' {
+                    if ($method -ne 'POST') {
+                        Write-TextResponse -Context $ctx -Text "POST required" -StatusCode 405
+                        continue
+                    }
+                    $body = Get-RequestBody -Request $req
+                    if (!$body -or !$body.processId -or !$body.deviceId) {
+                        Write-TextResponse -Context $ctx -Text "Missing processId or deviceId" -StatusCode 400
+                        continue
+                    }
+                    Set-AppOutput -processId ([int]$body.processId) -deviceId $body.deviceId
+                    Write-JsonResponse -Context $ctx -Object @{ ok = $true }
+                    continue
+                }
+                '/api/volume/endpoint' {
+                    if ($method -ne 'POST') {
+                        Write-TextResponse -Context $ctx -Text "POST required" -StatusCode 405
+                        continue
+                    }
+                    $body = Get-RequestBody -Request $req
+                    if (!$body -or !$body.id -or $null -eq $body.volume) {
+                        Write-TextResponse -Context $ctx -Text "Missing id or volume" -StatusCode 400
+                        continue
+                    }
+                    $vol = [int]$body.volume
+                    if ($vol -lt 0) { $vol = 0 }
+                    if ($vol -gt 100) { $vol = 100 }
+                    Set-EndpointVolume -deviceId $body.id -volume $vol
                     Write-JsonResponse -Context $ctx -Object @{ id = $body.id; volume = $vol }
                     continue
                 }
