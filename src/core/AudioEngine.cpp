@@ -148,6 +148,40 @@ static ComPtr<IMMDevice> findDevice(IMMDeviceEnumerator* enumerator,
     return result;
 }
 
+// Find a device by name across both render and capture endpoints.
+// If the hint matches both, prefer capture (safer default); callers that want
+// loopback from a render device should pass an unambiguous render-only name.
+static ComPtr<IMMDevice> findAnyDevice(IMMDeviceEnumerator* enumerator,
+                                        const std::string& hint,
+                                        EDataFlow* foundFlow)
+{
+    ComPtr<IMMDevice> renderDev;
+    ComPtr<IMMDevice> captureDev;
+    EDataFlow flows[2] = { eRender, eCapture };
+    for (EDataFlow flow : flows) {
+        ComPtr<IMMDeviceCollection> col;
+        if (FAILED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &col))) continue;
+        UINT count = 0; col->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            ComPtr<IMMDevice> dev;
+            if (SUCCEEDED(col->Item(i, &dev)) && nameContains(friendlyName(dev.Get()), hint)) {
+                if (flow == eRender) renderDev = dev;
+                else captureDev = dev;
+                break; // first match in this direction
+            }
+        }
+    }
+    if (captureDev && renderDev) {
+        std::fprintf(stderr, "[Engine] Warning: name '%s' matches both render and capture endpoints. Using capture.\n", hint.c_str());
+        *foundFlow = eCapture;
+        return captureDev;
+    }
+    if (captureDev) { *foundFlow = eCapture; return captureDev; }
+    if (renderDev) { *foundFlow = eRender; return renderDev; }
+    *foundFlow = eAll;
+    return nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Enumerate all active endpoints into EndpointInfo structs
 // ---------------------------------------------------------------------------
@@ -304,6 +338,7 @@ struct AudioEngine::Impl {
     // Sample format flags
     bool renderIsFloat{true};
     bool captureIsFloat{true};
+    bool captureIsLoopback{false};
     // SRC phase accumulator (persists between audio thread calls)
     double srcPhase{0.0};
     // Temp buffer for format conversion output (render format)
@@ -525,9 +560,14 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
       m_impl->renderSvc->ReleaseBuffer(m_impl->renderBufFrames, AUDCLNT_BUFFERFLAGS_SILENT); }
 
     // --- Capture device (opened with its OWN native mix format) ---
-    auto captureDev = findDevice(m_impl->enumerator.Get(), eCapture, captureHint);
+    // If the hint resolves to a render endpoint, use WASAPI loopback capture.
+    EDataFlow captureFlow = eAll;
+    auto captureDev = findAnyDevice(m_impl->enumerator.Get(), captureHint, &captureFlow);
     if (!captureDev) { std::fprintf(stderr, "[Engine] Capture device not found: \"%s\"\n", captureHint.c_str()); m_impl->cleanup(); return false; }
-    std::fprintf(stderr, "[Engine] Capture : %s\n", friendlyName(captureDev.Get()).c_str());
+    m_impl->captureIsLoopback = (captureFlow == eRender);
+    std::fprintf(stderr, "[Engine] Capture : %s%s\n",
+                 friendlyName(captureDev.Get()).c_str(),
+                 m_impl->captureIsLoopback ? " [loopback]" : "");
 
     hr = captureDev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &m_impl->captureAC);
     if (FAILED(hr)) { m_impl->cleanup(); return false; }
@@ -544,9 +584,10 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
     m_impl->captureCh   = m_impl->captureFmt->nChannels;
     m_impl->captureRate = m_impl->captureFmt->nSamplesPerSec;
     m_impl->captureIsFloat = isFloatWfx(m_impl->captureFmt.get());
-    std::fprintf(stderr, "[Engine] Capture format : %u Hz, %u ch, %u-bit (%s)\n",
+    std::fprintf(stderr, "[Engine] Capture format : %u Hz, %u ch, %u-bit (%s)%s\n",
                  m_impl->captureRate, m_impl->captureCh, m_impl->captureFmt->wBitsPerSample,
-                 m_impl->captureIsFloat ? "float" : "pcm");
+                 m_impl->captureIsFloat ? "float" : "pcm",
+                 m_impl->captureIsLoopback ? " [loopback]" : "");
 
     m_impl->needsConvert = (m_impl->captureCh   != m_impl->renderCh ||
                             m_impl->captureRate  != m_impl->renderRate);
@@ -555,8 +596,11 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
                      (double)m_impl->captureRate, (double)m_impl->renderRate,
                      m_impl->captureCh, m_impl->renderCh);
 
+    DWORD captureFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+    if (m_impl->captureIsLoopback) captureFlags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+
     hr = m_impl->captureAC->Initialize(AUDCLNT_SHAREMODE_SHARED,
-                                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                        captureFlags,
                                         kBuf, 0, m_impl->captureFmt.get(), nullptr);
     if (FAILED(hr)) { std::fprintf(stderr, "[Engine] captureAC->Initialize failed 0x%08X\n", (unsigned)hr); m_impl->cleanup(); return false; }
     m_impl->captureAC->SetEventHandle(m_impl->captureEvent);

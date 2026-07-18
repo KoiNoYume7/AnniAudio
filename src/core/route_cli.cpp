@@ -48,6 +48,7 @@ static void printUsage(const char* prog)
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
+    std::printf("  %s process <source> <out> [volume]    Route a RENDER endpoint via loopback capture to a render output\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
     std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
     std::printf("  %s passthrough <in> <out> [volume]    Same as 'route' (legacy alias)\n", prog);
@@ -55,6 +56,7 @@ static void printUsage(const char* prog)
     std::printf("\nRouting volume commands while running: + or = louder, - quieter, v <0-100> set, q stop.\n");
     std::printf("\nExamples:\n");
     std::printf("  %s list\n", prog);
+    std::printf("  %s process \"Speakers\" \"Headphones\" 80  -- system-wide loopback + effect pass\n", prog);
     std::printf("  %s monitor \"Studio Main\"      -- listen to cable 1 on your headphones\n", prog);
     std::printf("  %s monitor \"My Studio Cable\" \"Headphones\" 50\n", prog);
     std::printf("  %s default \"Headphones (Crusher ANC 2)\" -- restore default output\n", prog);
@@ -229,6 +231,11 @@ int main(int argc, char* argv[])
         std::string cable = argv[3];
         float vol         = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
         return cmdRoute(in, cable, vol);
+    }
+    else if (cmd == "process") {
+        if (argc < 4) { std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%]\n"); return 1; }
+        float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
+        return cmdRoute(argv[2], argv[3], vol);
     }
     else if (cmd == "route" || cmd == "passthrough") {
         if (argc < 4) { std::fprintf(stderr, "Usage: route <capture_name> <render_name> [volume%%]\n"); return 1; }
