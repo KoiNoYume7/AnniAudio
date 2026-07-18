@@ -217,6 +217,7 @@ async function loadData() {
   groups = grps.groups || [];
   activeRoutes = rts.routes || [];
   renderAll();
+  attachPortListeners();
   rebuildConnections();
   drawCables();
   setStatus('Ready');
