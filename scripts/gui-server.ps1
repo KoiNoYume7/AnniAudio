@@ -12,7 +12,7 @@
     .\scripts\gui-server.ps1 -Port 9090
 #>
 param(
-    [int]$Port = 8080
+    [int]$Port = 18080
 )
 
 $ErrorActionPreference = "Stop"

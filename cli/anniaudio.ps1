@@ -386,7 +386,13 @@ switch ($Command) {
     "route"          { Invoke-AnniRoute -RouteArgs $CliArgs }
     "tui"            { $exit = Invoke-Script "tui.ps1"; if ($exit -ne 0) { exit $exit } }
     "gui"            {
-        $port = if ($CliArgs.Count -gt 0 -and $CliArgs[0] -match '^\d+$') { $CliArgs[0] } else { "8080" }
+        if ($CliArgs.Count -gt 0 -and $CliArgs[0] -match '^\d+$') {
+            $port = [int]$CliArgs[0]
+        } else {
+            $used = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Select-Object -ExpandProperty Port
+            $port = 18080..18120 | Where-Object { $used -notcontains $_ } | Select-Object -First 1
+            if (!$port) { $port = 18080 }
+        }
         Write-Host "[gui] Starting web GUI server on port $port..." -ForegroundColor Cyan
         Start-Process powershell.exe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$REPO_ROOT\scripts\gui-server.ps1", "-Port", $port
         Start-Sleep -Seconds 1
