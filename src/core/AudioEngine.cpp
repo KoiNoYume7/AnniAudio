@@ -319,6 +319,7 @@ struct AudioEngine::Impl {
 
     std::atomic<uint64_t> framesProcessed{0};
     std::atomic<bool>     running{false};
+    std::atomic<float>    volume{1.0f};
 
     static DWORD WINAPI threadEntry(LPVOID p) { reinterpret_cast<Impl*>(p)->runThread(); return 0; }
     void runThread();
@@ -404,11 +405,19 @@ void AudioEngine::Impl::runThread()
                 BYTE* buf = nullptr;
                 if (SUCCEEDED(renderSvc->GetBuffer(toWrite, &buf))) {
                     size_t sampleCount = (size_t)toWrite * rCh;
+                    float vol = volume.load(std::memory_order_relaxed);
                     if (rFloat) {
-                        ring.readOrSilence(reinterpret_cast<float*>(buf), sampleCount);
+                        auto* fbuf = reinterpret_cast<float*>(buf);
+                        ring.readOrSilence(fbuf, sampleCount);
+                        if (vol != 1.0f) {
+                            for (size_t i = 0; i < sampleCount; ++i) fbuf[i] *= vol;
+                        }
                     } else {
                         renderTmp.resize(sampleCount);
                         ring.readOrSilence(renderTmp.data(), sampleCount);
+                        if (vol != 1.0f) {
+                            for (auto& s : renderTmp) s *= vol;
+                        }
                         floatToPcm16(renderTmp.data(), sampleCount, buf);
                     }
                     renderSvc->ReleaseBuffer(toWrite, 0);
@@ -464,7 +473,9 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
 {
     if (m_impl->running) stop();
 
-    HRESULT hr = S_OK;
+    // Initialize COM for this thread (idempotent; runThread re-initializes on its own thread)
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) { return false; }
 
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
                           CLSCTX_ALL, IID_PPV_ARGS(&m_impl->enumerator));
@@ -577,3 +588,15 @@ bool     AudioEngine::isRunning()       const { return m_impl->running.load(); }
 uint32_t AudioEngine::sampleRate()      const { return m_impl->renderRate; }
 uint32_t AudioEngine::channelCount()    const { return m_impl->renderCh; }
 uint64_t AudioEngine::framesProcessed() const { return m_impl->framesProcessed.load(); }
+
+void AudioEngine::setVolume(float v)
+{
+    if (v < 0.0f) v = 0.0f;
+    if (v > 2.0f) v = 2.0f;  // allow modest gain; clamp to avoid accidental overload
+    m_impl->volume.store(v, std::memory_order_relaxed);
+}
+
+float AudioEngine::getVolume() const
+{
+    return m_impl->volume.load(std::memory_order_relaxed);
+}

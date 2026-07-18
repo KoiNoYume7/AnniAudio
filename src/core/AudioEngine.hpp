@@ -55,6 +55,10 @@ public:
     uint32_t channelCount()     const;
     uint64_t framesProcessed()  const;
 
+    // Volume applied to the rendered output. 0.0 = silence, 1.0 = unity.
+    void setVolume(float v);
+    float getVolume() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;
