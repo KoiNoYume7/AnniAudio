@@ -74,7 +74,11 @@ public:
     ULONG         m_SharedBufferSize;
     LONG64        m_BytesTransferred;
 
-    // Protects m_BytesTransferred and buffer state (accessed from timer DPC and GetPosition)
+    // Position counter timing (QPC-based so we advance by real elapsed time)
+    LARGE_INTEGER m_QPCFrequency;
+    LARGE_INTEGER m_LastDpcTime;
+
+    // Protects m_BytesTransferred, m_SampleRate/m_BytesPerFrame (accessed from timer DPC and GetPosition)
     KSPIN_LOCK    m_PositionLock;
 
     BOOLEAN       m_TimerInitialized;

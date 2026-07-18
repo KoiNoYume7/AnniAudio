@@ -119,12 +119,16 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(
 
     Port->AddRef();
 
+    // Initialize high-resolution timing for the position counter
+    KeQueryPerformanceFrequency(&m_QPCFrequency);
+    KeQueryPerformanceCounter(&m_LastDpcTime);
+
     // Initialize timer DPC that simulates hardware position counter
     KeInitializeDpc(&m_Dpc, TimerDpc, this);
     KeInitializeTimer(&m_Timer);
     m_TimerInitialized = TRUE;
 
-    // Fire every TIMER_PERIOD_MS
+    // Fire every TIMER_PERIOD_MS (QPC will be used to compute the real advance)
     LARGE_INTEGER due;
     due.QuadPart = -((LONGLONG)TIMER_PERIOD_MS * 10000); // 100-ns units, negative = relative
     KeSetTimerEx(&m_Timer, due, TIMER_PERIOD_MS, &m_Dpc);
@@ -175,11 +179,25 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDeviceDescription(PDEVICE_DESCRIPTIO
 void NTAPI CMiniportWaveRT::TimerDpc(PKDPC, PVOID Context, PVOID, PVOID)
 {
     auto* self = static_cast<CMiniportWaveRT*>(Context);
-    LONG64 advance = (LONG64)(self->m_SampleRate) * TIMER_PERIOD_MS / 1000
-                   * self->m_BytesPerFrame;
+
+    LARGE_INTEGER now;
+    KeQueryPerformanceCounter(&now);
 
     KIRQL oldIrql;
     KeAcquireSpinLock(&self->m_PositionLock, &oldIrql);
+
+    LONGLONG delta = now.QuadPart - self->m_LastDpcTime.QuadPart;
+    if (delta < 0) delta = 0;
+
+    // advance = elapsed_seconds * sampleRate * bytesPerFrame
+    LONGLONG advance = 0;
+    if (self->m_QPCFrequency.QuadPart > 0) {
+        advance = delta * self->m_SampleRate * self->m_BytesPerFrame
+                  / self->m_QPCFrequency.QuadPart;
+    }
+
     self->m_BytesTransferred += advance;
+    self->m_LastDpcTime = now;
+
     KeReleaseSpinLock(&self->m_PositionLock, oldIrql);
 }

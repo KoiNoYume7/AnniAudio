@@ -48,9 +48,12 @@ NTSTATUS CMiniportWaveRTStream::Init(
         auto* wfxFmt = reinterpret_cast<KSDATAFORMAT_WAVEFORMATEX*>(DataFormat);
         m_SampleRate    = wfxFmt->WaveFormatEx.nSamplesPerSec;
         m_BytesPerFrame = wfxFmt->WaveFormatEx.nBlockAlign;
-        // Update miniport state to match negotiated format
+        // Update miniport state to match negotiated format (TimerDpc reads these)
+        KIRQL oldIrql;
+        KeAcquireSpinLock(&Miniport->m_PositionLock, &oldIrql);
         Miniport->m_SampleRate    = m_SampleRate;
         Miniport->m_BytesPerFrame = m_BytesPerFrame;
+        KeReleaseSpinLock(&Miniport->m_PositionLock, oldIrql);
     }
 
     return STATUS_SUCCESS;
@@ -66,6 +69,12 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::SetFormat(PKSDATAFORMAT DataForma
         auto* wfxFmt = reinterpret_cast<KSDATAFORMAT_WAVEFORMATEX*>(DataFormat);
         m_SampleRate    = wfxFmt->WaveFormatEx.nSamplesPerSec;
         m_BytesPerFrame = wfxFmt->WaveFormatEx.nBlockAlign;
+
+        KIRQL oldIrql;
+        KeAcquireSpinLock(&m_pMiniport->m_PositionLock, &oldIrql);
+        m_pMiniport->m_SampleRate    = m_SampleRate;
+        m_pMiniport->m_BytesPerFrame = m_BytesPerFrame;
+        KeReleaseSpinLock(&m_pMiniport->m_PositionLock, oldIrql);
     }
     return STATUS_SUCCESS;
 }
