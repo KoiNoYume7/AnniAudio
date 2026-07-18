@@ -26,7 +26,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route")]
+    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route", "tui")]
     [string]$Command,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -384,5 +384,6 @@ switch ($Command) {
     "version"        { Invoke-AnniVersion }
     "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $Args }
     "route"          { Invoke-AnniRoute -RouteArgs $Args }
+    "tui"            { $exit = Invoke-Script "tui.ps1"; if ($exit -ne 0) { exit $exit } }
     default          { Write-Host "Unknown command: $Command" -ForegroundColor Red }
 }
