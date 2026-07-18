@@ -11,7 +11,7 @@ Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
 DriverVer   = {{DRIVER_VER_DATE}},{{DRIVER_VER_NUMBER}}
-CatalogFile = AnniAudioCable.cat
+CatalogFile = anniaudiocable.cat
 PnpLockdown = 1
 
 [DestinationDirs]

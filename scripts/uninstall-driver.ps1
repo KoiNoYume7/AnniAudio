@@ -10,16 +10,32 @@
 #>
 $ErrorActionPreference = "Stop"
 
-$DevCon = "C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe"
-$HwId   = "ROOT\AnniAudioCable"
+$RepoRoot = "$PSScriptRoot\.."
+$DevCon   = "C:\Program Files (x86)\Windows Kits\10\Tools\x64\devcon.exe"
+$Config   = "$RepoRoot\config\cables.json"
+
+# Read configured cable HW IDs and endpoint names
+if (Test-Path $Config) {
+    $cfg = Get-Content $Config -Raw | ConvertFrom-Json
+    $enabledCables = $cfg.cables | Where-Object { $_.enabled }
+} else {
+    $enabledCables = @(@{ hw_id = "ROOT\AnniAudioCable"; name = "AnniAudio Cable 1"; endpoint_name = "AnniAudio Cable 1" })
+}
+$hwIds      = $enabledCables | ForEach-Object { $_.hw_id }
+$hwIdLike   = $hwIds | ForEach-Object { "*$_*" }
+$namesLike  = $enabledCables | ForEach-Object { "*$($_.name)*"; "*$($_.endpoint_name)*" } | Select-Object -Unique
 
 # ---------------------------------------------------------------------------
 # 1. Remove device node(s)
 # ---------------------------------------------------------------------------
 Write-Host "`n[uninstall-driver] Removing device node(s) ..." -ForegroundColor Cyan
 
+# Locate by hardware ID property or by friendly name from config
 $devs = Get-PnpDevice -Class MEDIA -ErrorAction SilentlyContinue | Where-Object {
-    $_.InstanceId -like "*$HwId*" -or $_.FriendlyName -like "*AnniAudio*"
+    $dev = $_
+    ($dev.FriendlyName -and (($namesLike | Where-Object { $dev.FriendlyName -like $_ }) -ne $null)) -or
+    ($hwIdLike | Where-Object { $dev.InstanceId -like $_ }) -or
+    ((Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data | Where-Object { $id = $_; $hwIds | Where-Object { $id -eq $_ } }) -ne $null
 }
 
 if ($devs) {
@@ -38,9 +54,11 @@ if ($devs) {
     Write-Host "  (no AnniAudio device nodes found)"
 }
 
-# Also try the raw hardware ID via devcon if available
+# Also try the raw hardware IDs via devcon if available
 if (Test-Path $DevCon) {
-    & $DevCon remove $HwId 2>$null
+    foreach ($hwId in $hwIds) {
+        & $DevCon remove $hwId 2>$null
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -48,14 +66,16 @@ if (Test-Path $DevCon) {
 # ---------------------------------------------------------------------------
 Write-Host "`n[uninstall-driver] Removing driver package from store ..." -ForegroundColor Cyan
 
-# pnputil -e lists all packages with their original INF name
 $oemInf = $null
 try {
     $enum = & pnputil /enum-drivers 2>$null
+    $candidate = $null
     for ($i = 0; $i -lt $enum.Count; $i++) {
-        if ($enum[$i] -match 'Published Name\s+:\s+(oem\d+\.inf)' -and
-            ($i + 1 -lt $enum.Count) -and ($enum[$i + 1] -match 'Original Name\s+:\s+AnniAudioCable\.inf')) {
-            $oemInf = $matches[1]
+        if ($enum[$i] -match 'Published Name\s*:\s*(oem\d+\.inf)') {
+            $candidate = $matches[1]
+        }
+        if ($candidate -and ($i -lt $enum.Count) -and ($enum[$i] -match 'Original Name\s*:\s*AnniAudioCable\.inf')) {
+            $oemInf = $candidate
             break
         }
     }
@@ -63,18 +83,16 @@ try {
 
 if ($oemInf) {
     Write-Host "  -> Found staged package: $oemInf"
-    & pnputil /delete-driver $oemInf /uninstall /force 2>$null
-    if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3010) {
+    & pnputil /delete-driver $oemInf /force 2>$null
+    $delExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+    if ($delExit -eq 0 -or $delExit -eq 3010) {
         Write-Host "  -> Package removed successfully."
     } else {
-        Write-Warning "  pnputil exit code $LASTEXITCODE — package may still be in use."
+        Write-Warning "  pnputil exit code $delExit — package may still be in use."
     }
 } else {
     Write-Host "  (no staged AnniAudioCable.inf package found)"
 }
-
-# Fallback: try the raw name just in case
-& pnputil /delete-driver AnniAudioCable.inf /uninstall /force 2>$null
 
 # ---------------------------------------------------------------------------
 # 3. Restart audio stack so other virtual cables recover

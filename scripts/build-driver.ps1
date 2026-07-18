@@ -20,19 +20,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+Import-Module "$PSScriptRoot\lib\AnniLog.psd1" -Force
+
 $RepoRoot   = "$PSScriptRoot\.."
 $DriverDir  = "$RepoRoot\driver"
 $ProjFile   = "$DriverDir\AnniAudioCable.vcxproj"
 $SignTool   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-$Inf2Cat   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\Inf2Cat.exe"
+$Inf2Cat   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x86\Inf2Cat.exe"
 $OutDir     = "$RepoRoot\build\driver\$($Config.ToLower())"
+$LogDir     = "$RepoRoot\build\logs"
+
+Initialize-AnniLog -LogFilePath "$LogDir\build-driver.log" -LogLevel "INFO" -EnableStopwatch
 
 # ---- Generate INF from template + config -----------------------------------
-Write-Host "`n[build-driver] Generating INF from template ..." -ForegroundColor Cyan
+Write-AnniLog -Level INFO -Message "Generating INF from template ..."
+$LASTEXITCODE = 0
 & "$PSScriptRoot\generate-inf.ps1"
-$genExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+$genExit = $LASTEXITCODE
 if ($genExit -ne 0) {
-    Write-Error "[build-driver] INF generation failed."
+    Write-AnniLog -Level ERROR -Message "INF generation failed (exit $genExit)."
+    Close-AnniLog
     exit $genExit
 }
 
@@ -64,51 +71,62 @@ if (!$MSBuild -or !(Test-Path $MSBuild)) {
     exit 1
 }
 
-Write-Host "[build-driver] Found MSBuild: $MSBuild" -ForegroundColor Gray
+Write-AnniLog -Level INFO -Message "Found MSBuild: $MSBuild"
 
 # ---- Build ----------------------------------------------------------------
-Write-Host "`n[build-driver] Building $Config|x64 ..." -ForegroundColor Cyan
+Write-AnniLog -Level INFO -Message "Building $Config|x64 ..."
 & $MSBuild $ProjFile /p:Configuration=$Config /p:Platform=x64 /m /nologo `
            /p:SolutionDir="$RepoRoot\\"
 
-$msbExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+$msbExit = $LASTEXITCODE
 if ($msbExit -ne 0) {
-    Write-Error "[build-driver] MSBuild failed (exit $msbExit)."
+    Write-AnniLog -Level ERROR -Message "MSBuild failed (exit $msbExit)."
+    Close-AnniLog
     exit $msbExit
+}
+
+# ---- Sign driver ----------------------------------------------------------
+# Sign the .sys *before* inf2cat so the catalog contains the signed file hash.
+$SysFile = "$OutDir\AnniAudioCable.sys"
+Write-AnniLog -Level INFO -Message "Signing driver: $SysFile"
+& $SignTool sign /sha1 $Thumbprint /fd sha256 `
+                 /tr http://timestamp.digicert.com /td sha256 `
+                 $SysFile
+$sysSignExit = $LASTEXITCODE
+if ($sysSignExit -ne 0) {
+    Write-AnniLog -Level ERROR -Message "signtool failed on $SysFile (exit $sysSignExit)."
+    Close-AnniLog
+    exit $sysSignExit
 }
 
 # ---- Catalog -------------------------------------------------------------
 # inf2cat generates the .cat that PnP requires; output name is lower-case.
-Write-Host "`n[build-driver] Generating catalog (inf2cat) ..." -ForegroundColor Cyan
+Write-AnniLog -Level INFO -Message "Generating catalog (inf2cat) ..."
 & $Inf2Cat /driver:$OutDir /os:10_X64
-$catExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+$catExit = $LASTEXITCODE
 if ($catExit -ne 0) {
-    Write-Error "[build-driver] inf2cat failed (exit $catExit)."
+    Write-AnniLog -Level ERROR -Message "inf2cat failed (exit $catExit)."
+    Close-AnniLog
     exit $catExit
 }
 
-# ---- Sign -----------------------------------------------------------------
-Write-Host "`n[build-driver] Signing artifacts ..." -ForegroundColor Cyan
-
-$Artifacts = @("$OutDir\AnniAudioCable.sys")
-# inf2cat writes a lower-case filename
-$CatFile   = Get-ChildItem $OutDir -Filter "*.cat" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-if ($CatFile) { $Artifacts += $CatFile }
-
-foreach ($f in $Artifacts) {
-    if (!(Test-Path $f)) {
-        Write-Warning "[build-driver] Expected artifact not found: $f"
-        continue
-    }
-    Write-Host "  Signing: $f"
+# ---- Sign catalog --------------------------------------------------------
+$CatFile = Get-ChildItem $OutDir -Filter "*.cat" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+if ($CatFile) {
+    Write-AnniLog -Level INFO -Message "Signing catalog: $CatFile"
     & $SignTool sign /sha1 $Thumbprint /fd sha256 `
                      /tr http://timestamp.digicert.com /td sha256 `
-                     $f
-    $signExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-    if ($signExit -ne 0) {
-        Write-Error "[build-driver] signtool failed on $f"
-        exit $signExit
+                     $CatFile
+    $catSignExit = $LASTEXITCODE
+    if ($catSignExit -ne 0) {
+        Write-AnniLog -Level ERROR -Message "signtool failed on $CatFile (exit $catSignExit)."
+        Close-AnniLog
+        exit $catSignExit
     }
+} else {
+    Write-Warning "[build-driver] Expected .cat file not found in $OutDir"
 }
 
-Write-Host "`n[build-driver] Done. Artifacts in: $OutDir`n" -ForegroundColor Green
+Write-AnniLog -Level SUCCESS -Message "Done. Artifacts in: $OutDir"
+Close-AnniLog
+exit 0

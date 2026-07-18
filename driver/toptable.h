@@ -29,48 +29,111 @@ static KSDATARANGE_AUDIO g_Range96kHz = {
     2, 32, 32, 96000, 96000
 };
 
-// ---- Render pin ----
-static const PKSDATARANGE g_RenderRanges[] = {
-    (PKSDATARANGE)&g_Range48kHz,
-    (PKSDATARANGE)&g_Range96kHz,
+// 48 kHz / stereo / 16-bit PCM
+static KSDATARANGE_AUDIO g_RangePcm16_48kHz = {
+    {
+        sizeof(KSDATARANGE_AUDIO), 0, 0, 0,
+        { STATIC_KSDATAFORMAT_TYPE_AUDIO },
+        { STATIC_KSDATAFORMAT_SUBTYPE_PCM },
+        { STATIC_KSDATAFORMAT_SPECIFIER_WAVEFORMATEX }
+    },
+    2, 16, 16, 48000, 48000
 };
 
-// ---- Capture pin ----
-static const PKSDATARANGE g_CaptureRanges[] = {
+// 96 kHz / stereo / 16-bit PCM
+static KSDATARANGE_AUDIO g_RangePcm16_96kHz = {
+    {
+        sizeof(KSDATARANGE_AUDIO), 0, 0, 0,
+        { STATIC_KSDATAFORMAT_TYPE_AUDIO },
+        { STATIC_KSDATAFORMAT_SUBTYPE_PCM },
+        { STATIC_KSDATAFORMAT_SPECIFIER_WAVEFORMATEX }
+    },
+    2, 16, 16, 96000, 96000
+};
+
+// ---- Wave host pins (sink/source opened by apps) ----
+static const PKSDATARANGE g_WaveHostRanges[] = {
     (PKSDATARANGE)&g_Range48kHz,
     (PKSDATARANGE)&g_Range96kHz,
+    (PKSDATARANGE)&g_RangePcm16_48kHz,
+    (PKSDATARANGE)&g_RangePcm16_96kHz,
+};
+
+// ---- Wave bridge pins (physically connected to the topology filter) ----
+static const PKSDATARANGE g_WaveBridgeRanges[] = {
+    (PKSDATARANGE)&g_Range48kHz,
+    (PKSDATARANGE)&g_Range96kHz,
+    (PKSDATARANGE)&g_RangePcm16_48kHz,
+    (PKSDATARANGE)&g_RangePcm16_96kHz,
 };
 
 // -------------------------------------------------------------------------
-// Pin descriptors  (Pin 0 = render sink, Pin 1 = capture source)
+// WaveRT pin descriptors
+//
+// Pin 0: render host sink (IN)      -- app writes here
+// Pin 1: render bridge source (OUT) -- physically connected to topology input
+// Pin 2: capture bridge sink (IN)   -- physically connected from topology output
+// Pin 3: capture host source (OUT)  -- app reads here
 // -------------------------------------------------------------------------
 static PCPIN_DESCRIPTOR g_WaveRTPins[] = {
-    {   // Pin 0: render — app writes, device "plays"
-        ULONG(-1), ULONG(-1), 0, nullptr,   // MaxGlobal, MaxFilter, MinFilter, Automation
-        {
-            0, nullptr,                      // Interfaces
-            0, nullptr,                      // Mediums
-            ARRAYSIZE(g_RenderRanges), g_RenderRanges,
-            KSPIN_DATAFLOW_IN,
-            KSPIN_COMMUNICATION_SINK,
-            &KSNODETYPE_SPEAKER,
-            nullptr,
-            0
-        }
-    },
-    {   // Pin 1: capture — device writes, app reads
+    {   // Pin 0: render host sink
         ULONG(-1), ULONG(-1), 0, nullptr,
         {
             0, nullptr,
             0, nullptr,
-            ARRAYSIZE(g_CaptureRanges), g_CaptureRanges,
+            ARRAYSIZE(g_WaveHostRanges), g_WaveHostRanges,
+            KSPIN_DATAFLOW_IN,
+            KSPIN_COMMUNICATION_SINK,
+            &KSCATEGORY_AUDIO,
+            nullptr,
+            0
+        }
+    },
+    {   // Pin 1: render bridge source (to topology)
+        ULONG(-1), ULONG(-1), 0, nullptr,
+        {
+            0, nullptr,
+            0, nullptr,
+            ARRAYSIZE(g_WaveBridgeRanges), g_WaveBridgeRanges,
             KSPIN_DATAFLOW_OUT,
-            KSPIN_COMMUNICATION_SOURCE,
-            &KSNODETYPE_MICROPHONE,
+            KSPIN_COMMUNICATION_NONE,
+            &KSCATEGORY_AUDIO,
+            nullptr,
+            0
+        }
+    },
+    {   // Pin 2: capture bridge sink (from topology)
+        ULONG(-1), ULONG(-1), 0, nullptr,
+        {
+            0, nullptr,
+            0, nullptr,
+            ARRAYSIZE(g_WaveBridgeRanges), g_WaveBridgeRanges,
+            KSPIN_DATAFLOW_IN,
+            KSPIN_COMMUNICATION_NONE,
+            &KSCATEGORY_AUDIO,
+            nullptr,
+            0
+        }
+    },
+    {   // Pin 3: capture host streaming pin
+        ULONG(-1), ULONG(-1), 0, nullptr,
+        {
+            0, nullptr,
+            0, nullptr,
+            ARRAYSIZE(g_WaveHostRanges), g_WaveHostRanges,
+            KSPIN_DATAFLOW_OUT,
+            KSPIN_COMMUNICATION_SINK,
+            &KSCATEGORY_AUDIO,
             nullptr,
             0
         }
     }
+};
+
+// Internal connections: host sink -> bridge source for each direction
+static PCCONNECTION_DESCRIPTOR g_WaveRTConnections[] = {
+    { PCFILTER_NODE, 0, PCFILTER_NODE, 1 }, // render sink  -> render source
+    { PCFILTER_NODE, 2, PCFILTER_NODE, 3 }, // capture sink -> capture source
 };
 
 // -------------------------------------------------------------------------
@@ -93,7 +156,8 @@ static PCFILTER_DESCRIPTOR g_WaveRTFilterDescriptor = {
     ARRAYSIZE(g_WaveRTPins),        // PinCount
     g_WaveRTPins,                   // Pins
     0, 0, nullptr,                  // Nodes (none)
-    0, nullptr,                     // Connections (none)
+    ARRAYSIZE(g_WaveRTConnections), // ConnectionCount
+    g_WaveRTConnections,            // Connections
     ARRAYSIZE(g_WaveRTCategories),  // CategoryCount
     g_WaveRTCategories              // Categories
 };
@@ -101,14 +165,11 @@ static PCFILTER_DESCRIPTOR g_WaveRTFilterDescriptor = {
 // -------------------------------------------------------------------------
 // Topology miniport bridge pins
 // AudioEndpointBuilder creates one WASAPI endpoint per bridge pin:
-//   KSPIN_DATAFLOW_OUT bridge  →  RENDER endpoint  (speaker)
-//   KSPIN_DATAFLOW_IN  bridge  →  CAPTURE endpoint (microphone)
-// PcRegisterPhysicalConnection (in adapter.cpp) wires these to the WaveRT pins.
-//
-// Bridge pins require:
-//   1. A bridge data range (KSDATAFORMAT_SUBTYPE_ANALOG, no specifier)
-//   2. At least one PCCONNECTION_DESCRIPTOR linking the two pins so PortCls
-//      can walk the topology graph without returning STATUS_BAD_FUNCTION_TABLE.
+//   KSPIN_DATAFLOW_OUT bridge  -> RENDER endpoint  (speaker)
+//   KSPIN_DATAFLOW_IN  bridge  -> CAPTURE endpoint (microphone)
+// The internal connections route from the physically connected side to the
+// bridge side; PcRegisterPhysicalConnection (adapter.cpp) wires each side
+// to the matching WaveRT bridge pin.
 // -------------------------------------------------------------------------
 
 // Bridge data range: analog audio, no streaming specifier
@@ -122,41 +183,69 @@ static const PKSDATARANGE g_TopoBridgeRanges[] = {
     const_cast<PKSDATARANGE>(&g_BridgeDataRange)
 };
 
+// Topology pins:
+//  0: render input (IN)     -- physically connected from WaveRT render source
+//  1: speaker output (OUT)  -- RENDER endpoint
+//  2: microphone input (IN) -- CAPTURE endpoint
+//  3: capture output (OUT)  -- physically connected to WaveRT capture sink
 static PCPIN_DESCRIPTOR g_TopoPins[] = {
-    {   // Pin 0: render bridge — AudioEndpointBuilder sees DATAFLOW_OUT → render
-        1, 1, 0, nullptr,
-        {
-            0, nullptr, 0, nullptr,
-            ARRAYSIZE(g_TopoBridgeRanges), g_TopoBridgeRanges,
-            KSPIN_DATAFLOW_OUT,
-            KSPIN_COMMUNICATION_BRIDGE,
-            &KSNODETYPE_SPEAKER,
-            nullptr,
-            0
-        }
-    },
-    {   // Pin 1: capture bridge — AudioEndpointBuilder sees DATAFLOW_IN → capture
+    {   // Pin 0: render input from WaveRT
         1, 1, 0, nullptr,
         {
             0, nullptr, 0, nullptr,
             ARRAYSIZE(g_TopoBridgeRanges), g_TopoBridgeRanges,
             KSPIN_DATAFLOW_IN,
-            KSPIN_COMMUNICATION_BRIDGE,
+            KSPIN_COMMUNICATION_NONE,
+            &KSNODETYPE_ANALOG_CONNECTOR,
+            nullptr,
+            0
+        }
+    },
+    {   // Pin 1: speaker -- render endpoint
+        1, 1, 0, nullptr,
+        {
+            0, nullptr, 0, nullptr,
+            ARRAYSIZE(g_TopoBridgeRanges), g_TopoBridgeRanges,
+            KSPIN_DATAFLOW_OUT,
+            KSPIN_COMMUNICATION_NONE,
+            &KSNODETYPE_SPEAKER,
+            nullptr,
+            0
+        }
+    },
+    {   // Pin 2: microphone -- capture endpoint
+        1, 1, 0, nullptr,
+        {
+            0, nullptr, 0, nullptr,
+            ARRAYSIZE(g_TopoBridgeRanges), g_TopoBridgeRanges,
+            KSPIN_DATAFLOW_IN,
+            KSPIN_COMMUNICATION_NONE,
             &KSNODETYPE_MICROPHONE,
+            nullptr,
+            0
+        }
+    },
+    {   // Pin 3: capture output to WaveRT
+        1, 1, 0, nullptr,
+        {
+            0, nullptr, 0, nullptr,
+            ARRAYSIZE(g_TopoBridgeRanges), g_TopoBridgeRanges,
+            KSPIN_DATAFLOW_OUT,
+            KSPIN_COMMUNICATION_NONE,
+            &KSNODETYPE_ANALOG_CONNECTOR,
             nullptr,
             0
         }
     }
 };
 
-// Internal connection: render bridge (pin 0) → capture bridge (pin 1)
-// PCFILTER_NODE means the endpoint is a filter pin (not an internal node).
-static const PCCONNECTION_DESCRIPTOR g_TopoConnections[] = {
-    { PCFILTER_NODE, 0, PCFILTER_NODE, 1 }
+// Internal topology: input -> endpoint, endpoint -> output
+static PCCONNECTION_DESCRIPTOR g_TopoConnections[] = {
+    { PCFILTER_NODE, 0, PCFILTER_NODE, 1 }, // render input -> speaker
+    { PCFILTER_NODE, 2, PCFILTER_NODE, 3 }, // microphone  -> capture output
 };
 
 static const GUID g_TopoCategories[] = {
-    { STATICGUIDOF(KSCATEGORY_AUDIO) },
     { STATICGUIDOF(KSCATEGORY_TOPOLOGY) },   // required: AudioEndpointBuilder searches this category
 };
 

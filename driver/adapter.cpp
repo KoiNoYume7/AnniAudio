@@ -69,7 +69,7 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     miniportUnk->Release(); miniportUnk = nullptr;
 
     if (NT_SUCCESS(status)) {
-        status = PcRegisterSubdevice(DeviceObject, L"AnniWave", wavePort);
+        status = PcRegisterSubdevice(DeviceObject, L"Wave", wavePort);
     }
     if (!NT_SUCCESS(status)) { wavePort->Release(); return status; }
 
@@ -84,16 +84,18 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     miniportUnk->Release(); miniportUnk = nullptr;
 
     if (NT_SUCCESS(status)) {
-        status = PcRegisterSubdevice(DeviceObject, L"AnniTopo", topoPort);
+        status = PcRegisterSubdevice(DeviceObject, L"Topology", topoPort);
     }
     if (!NT_SUCCESS(status)) { topoPort->Release(); wavePort->Release(); return status; }
 
     // ---- 3. Physical connections (required for AudioEndpointBuilder) ----
+    // Render path: WaveRT bridge source (pin 1, OUT) -> topology render input (pin 0, IN)
+    // Capture path: topology capture output (pin 3, OUT) -> WaveRT bridge sink (pin 2, IN)
     NTSTATUS connStatus;
-    connStatus = PcRegisterPhysicalConnection(DeviceObject, wavePort, 0, topoPort, 0);
+    connStatus = PcRegisterPhysicalConnection(DeviceObject, wavePort, 1, topoPort, 0);
     if (NT_SUCCESS(status) && !NT_SUCCESS(connStatus)) status = connStatus;
 
-    connStatus = PcRegisterPhysicalConnection(DeviceObject, topoPort, 1, wavePort, 1);
+    connStatus = PcRegisterPhysicalConnection(DeviceObject, topoPort, 3, wavePort, 2);
     if (NT_SUCCESS(status) && !NT_SUCCESS(connStatus)) status = connStatus;
 
     topoPort->Release();

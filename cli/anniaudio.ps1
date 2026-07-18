@@ -59,7 +59,7 @@ function Invoke-Script {
         Write-Error "Script not found: $path"
         return 1
     }
-    & $path @ScriptArgs
+    & $path @ScriptArgs | Out-Host
     $exitCode = 0
     if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
     return $exitCode

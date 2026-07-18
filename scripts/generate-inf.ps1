@@ -28,14 +28,18 @@ $cfg = Get-Content $Config -Raw | ConvertFrom-Json
 $ver = (Get-Content $Version -Raw).Trim()
 
 # Build driver version number as 1.x.y.z for INF
-# Map semver 0.2.0 -> 1.0.2.0 so Windows treats it as a valid driver version
+# Map semver 0.2.0 -> 1.0.2.0 so Windows treats it as a valid driver version.
+# Append minutes-since-midnight to the last field so every build is unique
+# and Windows always imports a fresh driver package.
 $semver = $ver -split '\.'
 $major  = if ($semver[0]) { [int]$semver[0] } else { 0 }
 $minor  = if ($semver[1]) { [int]$semver[1] } else { 0 }
 $patch  = if ($semver[2]) { [int]$semver[2] } else { 0 }
-$driverVer = "1.$major.$minor.$patch"
+$now = Get-Date
+$build = $now.Hour * 60 + $now.Minute
+$driverVer = "1.$major.$minor.$build"
 
-$now = Get-Date -Format "MM/dd/yyyy"
+$now = (Get-Date).ToString("MM/dd/yyyy", [System.Globalization.CultureInfo]::InvariantCulture)
 
 # Filter enabled cables; if none, default to one cable so we never emit an empty INF
 $enabledCables = $cfg.cables | Where-Object { $_.enabled }
@@ -50,8 +54,10 @@ if (-not $enabledCables) {
 
 # [Standard.NTamd64] lines — one per cable
 $manufacturerEntries = @()
-# Per-cable interface sections
-$interfaceSections = @()
+# Single [AnniAudioCable_Device.NT.Interfaces] section with all AddInterface lines
+$addInterfaceLines = @()
+# Per-cable interface sub-sections (unique names)
+$interfaceDetailSections = @()
 # Per-cable friendly-name strings
 $cableStrings = @()
 
@@ -67,19 +73,20 @@ foreach ($cable in $enabledCables) {
     # Manufacturer entry
     $manufacturerEntries += "%$varName% = AnniAudioCable_Device, $hwId"
 
-    # Interface section for this cable (unique AddInterface set)
-    $waveFriendlyVar    = "Wave${safeIdx}.FriendlyName"
-    $topoFriendlyVar   = "Topology${safeIdx}.FriendlyName"
+    # Friendly-name variables
+    $waveFriendlyVar  = "Wave${safeIdx}.FriendlyName"
+    $topoFriendlyVar = "Topology${safeIdx}.FriendlyName"
 
-    $interfaceSections += @"
+    # AddInterface lines for this cable (all go into the shared section)
+    $addInterfaceLines += "; --- Cable $idx ($name) ---"
+    $addInterfaceLines += "AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}"
+    $addInterfaceLines += "AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}"
+    $addInterfaceLines += "AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}"
+    $addInterfaceLines += "AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology${safeIdx}"
+    $addInterfaceLines += "AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}"
 
-; --- Cable $idx ($name) ---
-[AnniAudioCable_Device.NT.Interfaces]
-AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
-AddInterface=%KSCATEGORY_RENDER%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
-AddInterface=%KSCATEGORY_CAPTURE%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
-AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_Topology%,AnniAudioCable.I.Topology${safeIdx}
-AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_Wave%,AnniAudioCable.I.Wave${safeIdx}
+    # Per-cable interface sub-sections
+    $interfaceDetailSections += @"
 
 [AnniAudioCable.I.Wave${safeIdx}]
 AddReg=AnniAudioCable.I.Wave${safeIdx}.AddReg
@@ -107,11 +114,18 @@ HKR,,FriendlyName,,%$topoFriendlyVar%
 # ---------------------------------------------------------------------------
 $tpl = Get-Content $Template -Raw
 
+$interfaceSectionsBlock = @"
+
+[AnniAudioCable_Device.NT.Interfaces]
+$(($addInterfaceLines -join "`n"))
+$(($interfaceDetailSections -join "`n"))
+"@
+
 $replacements = @{
     "{{DRIVER_VER_DATE}}"           = $now
     "{{DRIVER_VER_NUMBER}}"         = $driverVer
     "{{MANUFACTURER_ENTRIES}}"      = ($manufacturerEntries -join "`n")
-    "{{CABLE_INTERFACE_SECTIONS}}"  = ($interfaceSections -join "`n")
+    "{{CABLE_INTERFACE_SECTIONS}}"  = $interfaceSectionsBlock
     "{{CABLE_STRINGS}}"             = ($cableStrings -join "`n")
 }
 
@@ -122,3 +136,5 @@ foreach ($kv in $replacements.GetEnumerator()) {
 $tpl | Set-Content $OutInf -Encoding UTF8
 $cableCount = $enabledCables.Count
 Write-Host "[generate-inf] Created $OutInf (version $driverVer, $cableCount cable(s))" -ForegroundColor Green
+
+exit 0

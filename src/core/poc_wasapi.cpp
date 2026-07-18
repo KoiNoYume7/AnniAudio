@@ -61,6 +61,33 @@ static std::string deviceName(IMMDevice* dev)
     return name;
 }
 
+static bool nameContains(const std::string& hay, const std::string& needle)
+{
+    if (needle.empty()) return true;
+    return std::search(hay.begin(), hay.end(), needle.begin(), needle.end(),
+        [](char a, char b){ return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); })
+        != hay.end();
+}
+
+static ComPtr<IMMDevice> findRenderDevice(IMMDeviceEnumerator* enumerator, const std::string& hint)
+{
+    ComPtr<IMMDevice> result;
+    if (hint.empty()) {
+        enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &result);
+        return result;
+    }
+    ComPtr<IMMDeviceCollection> col;
+    if (FAILED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &col))) return result;
+    UINT count = 0; col->GetCount(&count);
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<IMMDevice> dev;
+        if (SUCCEEDED(col->Item(i, &dev)) && nameContains(deviceName(dev.Get()), hint)) {
+            result = dev; break;
+        }
+    }
+    return result;
+}
+
 static bool isMixFormatFloat(const WAVEFORMATEX* fmt)
 {
     if (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
@@ -88,7 +115,7 @@ using WaveFormatPtr = std::unique_ptr<WAVEFORMATEX, WaveFormatDeleter>;
 // ---------------------------------------------------------------------------
 // Main logic (called from main after CoInitializeEx)
 // ---------------------------------------------------------------------------
-static int run()
+static int run(const std::string& hint)
 {
     int failures = 0;
     HRESULT hr = S_OK;
@@ -122,11 +149,10 @@ static int run()
     }
     std::printf("\n");
 
-    // --- 2. Default render device ---
-    ComPtr<IMMDevice> device;
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
-    if (FAIL_IF(FAILED(hr), "GetDefaultAudioEndpoint", hr)) return failures;
-    std::printf("Default output: %s\n\n", deviceName(device.Get()).c_str());
+    // --- 2. Render device (default or matched by hint) ---
+    ComPtr<IMMDevice> device = findRenderDevice(enumerator.Get(), hint);
+    if (FAIL_IF(!device, hint.empty() ? "GetDefaultAudioEndpoint" : "Render device not found")) return failures;
+    std::printf("Output device: %s\n\n", deviceName(device.Get()).c_str());
 
     // --- 3. Render client ---
     ComPtr<IAudioClient> renderAC;
@@ -259,12 +285,13 @@ static int run()
 }
 
 // ---------------------------------------------------------------------------
-int main()
+int main(int argc, char* argv[])
 {
     std::printf("AnniAudio — Phase 0 POC: WASAPI loopback capture + render\n\n");
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr)) { std::fprintf(stderr, "CoInitializeEx failed\n"); return 1; }
-    int result = run();
+    std::string hint = (argc > 1) ? argv[1] : "";
+    int result = run(hint);
     CoUninitialize();
     return result == 0 ? 0 : 1;
 }

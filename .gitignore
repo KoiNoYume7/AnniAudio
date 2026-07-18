@@ -70,3 +70,4 @@ ehthumbs.db
 node_modules/
 dist/
 .electron-builder/
+driver/AnniAudioCable.inf

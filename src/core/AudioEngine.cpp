@@ -1,11 +1,19 @@
 #include "AudioEngine.hpp"
 
 #include <windows.h>
+#include <mmreg.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <avrt.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <wrl/client.h>
+
+// Local definitions for KS audio format subtypes; avoids linking against
+// ksuser/ksguid for the standard KSDATAFORMAT_SUBTYPE_* GUIDs.
+static const GUID KSCONST_SUBTYPE_IEEE_FLOAT =
+    { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+static const GUID KSCONST_SUBTYPE_PCM =
+    { 0x00000001, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
 
 #include <algorithm>
 #include <atomic>
@@ -53,6 +61,74 @@ static bool nameContains(const std::string& hay, const std::string& needle)
     return std::search(hay.begin(), hay.end(), needle.begin(), needle.end(),
         [](char a, char b){ return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); })
         != hay.end();
+}
+
+// ---------------------------------------------------------------------------
+// Format helpers
+// ---------------------------------------------------------------------------
+
+static bool isFloatWfx(const WAVEFORMATEX* wfx)
+{
+    if (!wfx) return false;
+    if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
+    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE && wfx->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+        auto wfex = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wfx);
+        return IsEqualGUID(wfex->SubFormat, KSCONST_SUBTYPE_IEEE_FLOAT);
+    }
+    return false;
+}
+
+static bool isPcm16Wfx(const WAVEFORMATEX* wfx)
+{
+    if (!wfx) return false;
+    if (wfx->wFormatTag == WAVE_FORMAT_PCM) return wfx->wBitsPerSample == 16;
+    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE && wfx->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+        auto wfex = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wfx);
+        return IsEqualGUID(wfex->SubFormat, KSCONST_SUBTYPE_PCM) && wfex->Format.wBitsPerSample == 16;
+    }
+    return false;
+}
+
+static WfxPtr makeFloatFormat(const WAVEFORMATEX* mix)
+{
+    if (!mix) return nullptr;
+    auto* wfex = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE)));
+    if (!wfex) return nullptr;
+
+    WORD ch = mix->nChannels;
+    DWORD rate = mix->nSamplesPerSec;
+    WORD bytes = ch * sizeof(float);
+
+    wfex->Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+    wfex->Format.nChannels       = ch;
+    wfex->Format.nSamplesPerSec  = rate;
+    wfex->Format.nAvgBytesPerSec = rate * bytes;
+    wfex->Format.nBlockAlign     = bytes;
+    wfex->Format.wBitsPerSample  = 32;
+    wfex->Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    wfex->Samples.wValidBitsPerSample = 32;
+    wfex->dwChannelMask          = (ch == 1) ? SPEAKER_FRONT_CENTER : (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT);
+    wfex->SubFormat              = KSCONST_SUBTYPE_IEEE_FLOAT;
+
+    return WfxPtr(reinterpret_cast<WAVEFORMATEX*>(wfex));
+}
+
+static WfxPtr tryForceFloat(IAudioClient* client, const WAVEFORMATEX* mix)
+{
+    WfxPtr floatFmt = makeFloatFormat(mix);
+    if (!floatFmt || !client) return nullptr;
+
+    WAVEFORMATEX* closest = nullptr;
+    HRESULT hr = client->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, floatFmt.get(), &closest);
+
+    if (hr == S_OK) {
+        return floatFmt;
+    }
+    if (hr == S_FALSE && closest && isFloatWfx(closest)) {
+        return WfxPtr(closest);
+    }
+    if (closest) CoTaskMemFree(closest);
+    return nullptr;
 }
 
 static ComPtr<IMMDevice> findDevice(IMMDeviceEnumerator* enumerator,
@@ -157,6 +233,24 @@ static uint32_t convertBuffer(
     return dstFrame;
 }
 
+static void pcm16ToFloat(const BYTE* src, size_t sampleCount, float* dst)
+{
+    auto* p = reinterpret_cast<const int16_t*>(src);
+    const float scale = 1.0f / 32768.0f;
+    for (size_t i = 0; i < sampleCount; ++i) dst[i] = p[i] * scale;
+}
+
+static void floatToPcm16(const float* src, size_t sampleCount, BYTE* dst)
+{
+    auto* p = reinterpret_cast<int16_t*>(dst);
+    for (size_t i = 0; i < sampleCount; ++i) {
+        float s = src[i];
+        if (s > 1.0f) s = 1.0f;
+        else if (s < -1.0f) s = -1.0f;
+        p[i] = static_cast<int16_t>(s * 32767.0f);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Simple single-producer/single-consumer ring buffer (float samples)
 // ---------------------------------------------------------------------------
@@ -205,8 +299,11 @@ struct AudioEngine::Impl {
     uint32_t renderCh{0}, renderRate{0};
     // Capture format details
     uint32_t captureCh{0}, captureRate{0};
-    // True when capture format != render format
+    // True when capture format != render format (rate or channels)
     bool needsConvert{false};
+    // Sample format flags
+    bool renderIsFloat{true};
+    bool captureIsFloat{true};
     // SRC phase accumulator (persists between audio thread calls)
     double srcPhase{0.0};
     // Temp buffer for format conversion output (render format)
@@ -238,11 +335,15 @@ void AudioEngine::Impl::runThread()
 
     const uint32_t rCh   = renderCh;
     const uint32_t cCh   = captureCh;
+    const bool     rFloat = renderIsFloat;
+    const bool     cFloat = captureIsFloat;
     const double   ratio  = (double)renderRate / (double)captureRate; // dstRate/srcRate
     // worst-case output frames for one capture packet (allow 3x for upsampling)
     const size_t   cvtMax = (size_t)(renderBufFrames * 3);
-    std::vector<float> captureTmp;  // holds raw capture packet (capture format)
+    std::vector<float> captureTmp;  // holds raw capture packet in float
     captureTmp.reserve(renderBufFrames * cCh * 2);
+    std::vector<float> renderTmp;   // temp float buffer when render is PCM16
+    renderTmp.reserve(renderBufFrames * rCh);
 
     captureAC->Start();
     renderAC->Start();
@@ -260,16 +361,21 @@ void AudioEngine::Impl::runThread()
             while (SUCCEEDED(captureSvc->GetNextPacketSize(&pktSize)) && pktSize > 0) {
                 BYTE* data = nullptr; UINT32 frames = 0; DWORD flags = 0;
                 if (SUCCEEDED(captureSvc->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) {
+                    size_t sampleCount = (size_t)frames * cCh;
                     if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
                         // Push equivalent silence in render format
                         auto dstFrames = static_cast<uint32_t>(std::ceil(frames * ratio));
                         convertBuf.assign((size_t)dstFrames * rCh, 0.0f);
                         ring.write(convertBuf.data(), (size_t)dstFrames * rCh);
                     } else {
-                        captureTmp.resize((size_t)frames * cCh);
-                        std::copy(reinterpret_cast<const float*>(data),
-                                  reinterpret_cast<const float*>(data) + (size_t)frames * cCh,
-                                  captureTmp.data());
+                        captureTmp.resize(sampleCount);
+                        if (cFloat) {
+                            std::copy(reinterpret_cast<const float*>(data),
+                                      reinterpret_cast<const float*>(data) + sampleCount,
+                                      captureTmp.data());
+                        } else {
+                            pcm16ToFloat(data, sampleCount, captureTmp.data());
+                        }
                         if (processFn) processFn(captureTmp.data(), frames, cCh);
 
                         if (needsConvert) {
@@ -297,7 +403,14 @@ void AudioEngine::Impl::runThread()
             if (toWrite > 0) {
                 BYTE* buf = nullptr;
                 if (SUCCEEDED(renderSvc->GetBuffer(toWrite, &buf))) {
-                    ring.readOrSilence(reinterpret_cast<float*>(buf), (size_t)toWrite * rCh);
+                    size_t sampleCount = (size_t)toWrite * rCh;
+                    if (rFloat) {
+                        ring.readOrSilence(reinterpret_cast<float*>(buf), sampleCount);
+                    } else {
+                        renderTmp.resize(sampleCount);
+                        ring.readOrSilence(renderTmp.data(), sampleCount);
+                        floatToPcm16(renderTmp.data(), sampleCount, buf);
+                    }
                     renderSvc->ReleaseBuffer(toWrite, 0);
                 }
             }
@@ -365,11 +478,23 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
     hr = renderDev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &m_impl->renderAC);
     if (FAILED(hr)) return false;
 
-    { WAVEFORMATEX* raw = nullptr; m_impl->renderAC->GetMixFormat(&raw); m_impl->renderFmt.reset(raw); }
+    {
+        WAVEFORMATEX* raw = nullptr;
+        hr = m_impl->renderAC->GetMixFormat(&raw);
+        if (FAILED(hr) || !raw) { std::fprintf(stderr, "[Engine] renderAC->GetMixFormat failed 0x%08X\n", (unsigned)hr); m_impl->cleanup(); return false; }
+        m_impl->renderFmt.reset(raw);
+        // Try to use a 32-bit float shared format if the endpoint supports it (the audio engine
+        // generally prefers this and it avoids per-sample conversion on our side).
+        WfxPtr forced = tryForceFloat(m_impl->renderAC.Get(), m_impl->renderFmt.get());
+        if (forced) m_impl->renderFmt = std::move(forced);
+    }
+    if (!m_impl->renderFmt) { m_impl->cleanup(); return false; }
     m_impl->renderCh   = m_impl->renderFmt->nChannels;
     m_impl->renderRate = m_impl->renderFmt->nSamplesPerSec;
-    std::fprintf(stderr, "[Engine] Render  format : %u Hz, %u ch, %u-bit\n",
-                 m_impl->renderRate, m_impl->renderCh, m_impl->renderFmt->wBitsPerSample);
+    m_impl->renderIsFloat = isFloatWfx(m_impl->renderFmt.get());
+    std::fprintf(stderr, "[Engine] Render  format : %u Hz, %u ch, %u-bit (%s)\n",
+                 m_impl->renderRate, m_impl->renderCh, m_impl->renderFmt->wBitsPerSample,
+                 m_impl->renderIsFloat ? "float" : "pcm");
 
     constexpr REFERENCE_TIME kBuf = 2000000; // 200ms
     m_impl->stopEvent    = CreateEvent(nullptr, TRUE,  FALSE, nullptr);
@@ -396,11 +521,21 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
     hr = captureDev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &m_impl->captureAC);
     if (FAILED(hr)) { m_impl->cleanup(); return false; }
 
-    { WAVEFORMATEX* raw = nullptr; m_impl->captureAC->GetMixFormat(&raw); m_impl->captureFmt.reset(raw); }
+    {
+        WAVEFORMATEX* raw = nullptr;
+        hr = m_impl->captureAC->GetMixFormat(&raw);
+        if (FAILED(hr) || !raw) { std::fprintf(stderr, "[Engine] captureAC->GetMixFormat failed 0x%08X\n", (unsigned)hr); m_impl->cleanup(); return false; }
+        m_impl->captureFmt.reset(raw);
+        WfxPtr forced = tryForceFloat(m_impl->captureAC.Get(), m_impl->captureFmt.get());
+        if (forced) m_impl->captureFmt = std::move(forced);
+    }
+    if (!m_impl->captureFmt) { m_impl->cleanup(); return false; }
     m_impl->captureCh   = m_impl->captureFmt->nChannels;
     m_impl->captureRate = m_impl->captureFmt->nSamplesPerSec;
-    std::fprintf(stderr, "[Engine] Capture format : %u Hz, %u ch, %u-bit\n",
-                 m_impl->captureRate, m_impl->captureCh, m_impl->captureFmt->wBitsPerSample);
+    m_impl->captureIsFloat = isFloatWfx(m_impl->captureFmt.get());
+    std::fprintf(stderr, "[Engine] Capture format : %u Hz, %u ch, %u-bit (%s)\n",
+                 m_impl->captureRate, m_impl->captureCh, m_impl->captureFmt->wBitsPerSample,
+                 m_impl->captureIsFloat ? "float" : "pcm");
 
     m_impl->needsConvert = (m_impl->captureCh   != m_impl->renderCh ||
                             m_impl->captureRate  != m_impl->renderRate);
