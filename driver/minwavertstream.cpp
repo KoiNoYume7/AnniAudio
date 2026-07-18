@@ -104,17 +104,19 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION Pos
     KeReleaseSpinLock(&m_pMiniport->m_PositionLock, oldIrql);
 
     if (m_Capture) {
-        // Capture: driver writes at pos, app reads from behind pos
-        // WriteOffset leads (where audio was just written / will be written next)
-        // PlayOffset trails (where app should read from, ~one frame behind for safety)
-        Position->WriteOffset = (pos + m_BufferSize - m_BytesPerFrame) % m_BufferSize;
-        Position->PlayOffset  = (pos + m_BufferSize - m_BytesPerFrame * 2) % m_BufferSize;
+        // Capture: driver writes at pos; app reads the valid data behind it.
+        // WriteOffset = next write position (current hardware write pointer).
+        // PlayOffset  = oldest valid sample, one frame after WriteOffset in the cycle
+        // so the whole ring except the next write slot is exposed to the app.
+        Position->WriteOffset = pos;
+        Position->PlayOffset  = (pos + m_BytesPerFrame) % m_BufferSize;
     } else {
-        // Render: driver reads at pos, app writes ahead of pos
-        // PlayOffset = current position (where "hardware" is playing from)
-        // WriteOffset = where app can write to (128 frames ahead)
+        // Render: driver reads at pos; app writes ahead of it.
+        // PlayOffset  = current hardware read pointer.
+        // WriteOffset = just before PlayOffset in the cycle, exposing the
+        // entire ring except the sample currently being consumed.
         Position->PlayOffset  = pos;
-        Position->WriteOffset = (pos + m_BytesPerFrame * 128) % m_BufferSize;
+        Position->WriteOffset = (pos + m_BufferSize - m_BytesPerFrame) % m_BufferSize;
     }
     return STATUS_SUCCESS;
 }
