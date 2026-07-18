@@ -120,8 +120,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(
     Port->AddRef();
 
     // Initialize high-resolution timing for the position counter
-    KeQueryPerformanceFrequency(&m_QPCFrequency);
-    KeQueryPerformanceCounter(&m_LastDpcTime);
+    m_LastDpcTime = KeQueryPerformanceCounter(&m_QPCFrequency);
 
     // Initialize timer DPC that simulates hardware position counter
     KeInitializeDpc(&m_Dpc, TimerDpc, this);
@@ -180,8 +179,8 @@ void NTAPI CMiniportWaveRT::TimerDpc(PKDPC, PVOID Context, PVOID, PVOID)
 {
     auto* self = static_cast<CMiniportWaveRT*>(Context);
 
-    LARGE_INTEGER now;
-    KeQueryPerformanceCounter(&now);
+    LARGE_INTEGER freq;
+    LARGE_INTEGER now = KeQueryPerformanceCounter(&freq);
 
     KIRQL oldIrql;
     KeAcquireSpinLock(&self->m_PositionLock, &oldIrql);
