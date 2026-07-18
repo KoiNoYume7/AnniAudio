@@ -2,9 +2,9 @@
 
 One install. One config. Full control over your audio.
 
-A system-wide audio processing suite for Windows 11. Ships its own virtual WDM audio driver, a full parametric EQ, GPU-accelerated noise cancellation, and HRTF-based spatial audio — all in a single background process with a REST API, configurable hotkeys, and a routing matrix that lets you wire audio wherever you want.
+A system-wide audio processing suite for Windows 11. It ships its own virtual WDM audio driver, a full parametric EQ, GPU-accelerated noise cancellation, and HRTF-based spatial audio — all in a single background process with a REST API, configurable hotkeys, and a routing matrix that lets you wire audio wherever you want.
 
-Built because SteelSeries Sonar gets close but breaks constantly, has no API, and still isn't flexible enough. And because every other good audio tool is either fragmented across three apps or locks you in with no way out.
+The goal is to replace the fragmented stack of Voicemeeter, RTX Voice, VB-Cable, and Windows Sonic with one cohesive, API-first tool.
 
 Part of the [Anni Ecosystem](https://github.com/KoiNoYume7).
 
@@ -17,7 +17,8 @@ Part of the [Anni Ecosystem](https://github.com/KoiNoYume7).
 What works today:
 
 - Virtual WDM driver builds and links (`AnniAudioCable.sys`).
-- WASAPI routing engine (`AudioEngine`) compiles and can enumerate endpoints.
+- WASAPI routing engine (`AudioEngine`) compiles and enumerates endpoints.
+- `AudioEngine` now supports **WASAPI loopback capture** from a render endpoint through the `process` CLI command.
 - Phase 0 POCs all pass:
   - `poc_eq` — biquad parametric EQ frequency response verified.
   - `poc_rnnoise` — CPU noise cancellation, ~57 dB reduction on white noise.
@@ -28,7 +29,6 @@ What works today:
 Not yet finished:
 
 - The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing.
-- `AudioEngine` does not yet expose a WASAPI **loopback-capture** path from a render endpoint (the `poc_wasapi` proves it is possible, but it isn't wired into the reusable engine).
 - DSP callbacks (EQ, RNNoise, HRTF) are implemented as standalone POCs but are **not yet connected** to the live audio engine.
 - The GUI/TUI are thin prototypes around the CLI, not a polished product UI.
 
@@ -40,7 +40,7 @@ Not yet finished:
 - Visual Studio 2022 BuildTools (or Community/Professional/Enterprise) with the **Desktop development with C++** workload
 - CMake **3.20+**
 - Windows SDK (tested with 10.0.26100.0)
-- Windows Driver Kit (WDK) — only if you want to build the kernel driver
+- Windows Driver Kit (WDK) — only needed to build the kernel driver
 - Git, with submodules support
 
 ---
@@ -109,11 +109,11 @@ driver\build\driver\release\AnniAudioCable.inf
 
 ---
 
-## Driver signing (the blocker for daily use)
+## Driver signing
 
 Windows 11 will not load a new kernel-mode driver unless it is **Microsoft-signed**.
 
-### For development (free, but disables some anti-cheat compatibility)
+### For development
 
 Enable test signing and use a self-signed certificate:
 
@@ -123,7 +123,7 @@ Enable test signing and use a self-signed certificate:
 .\cli\anniaudio.ps1 install
 ```
 
-This is fine for testing, but many games with anti-cheat will refuse to run while test signing is enabled. Use `gaming-mode` to disable it again:
+This is free and fine for testing, but many games with anti-cheat will refuse to run while test signing is enabled. Use `gaming-mode` to disable it again:
 
 ```powershell
 .\cli\anniaudio.ps1 gaming-mode
@@ -132,28 +132,28 @@ This is fine for testing, but many games with anti-cheat will refuse to run whil
 
 ### For distribution or daily gaming use
 
-You must submit the driver to the Microsoft Hardware Dev Center for **attestation signing**:
+Submit the driver to the Microsoft Hardware Dev Center for **attestation signing**:
 
-1. Purchase an **EV code signing certificate** (the cheapest are around $220–$280/year; DigiCert/GlobalSign are more expensive).
+1. Purchase an **EV code signing certificate** (cheapest are around $220–$280/year; DigiCert/GlobalSign are more expensive).
 2. Register a Windows Hardware Dev Center account with that EV cert.
 3. Submit `AnniAudioCable.sys` + `AnniAudioCable.inf` as a signed `.cab`.
 4. Microsoft returns a signed driver package that loads on any Windows 11 machine, even with Secure Boot and anti-cheat enabled.
 
-This is a business expense, not a hobby expense. The recommended path is to finish the product, prove users want it, and then pay for the cert from revenue.
+Attestation signing is a business expense, not a hobby expense. The recommended path is to finish the product, prove users want it, and then pay for the cert from revenue.
 
 ---
 
-## Daily use without the driver (the current realistic path)
+## Daily use without the driver
 
-You do **not** need the virtual driver to use AnniAudio as a system-wide audio processor. The engine can capture the default output via WASAPI loopback, run it through EQ / RNNoise / HRTF, and render it to your headphones.
+The virtual driver is not required to use AnniAudio as a system-wide audio processor. The engine can capture the default output via WASAPI loopback, run it through EQ / RNNoise / HRTF, and render it to headphones.
 
-This is being wired up now. Once it lands, the workflow will be:
+Right now the `process` command passes audio through. DSP wiring is next on the roadmap.
 
 ```powershell
-.\build\bin\Release\route_cli.exe process "Speakers" "Headphones" --eq presets/headphones.json
+.\build\bin\Release\route_cli.exe process "Speakers" "Headphones"
 ```
 
-That command will sit between Windows and your headphones, applying EQ/noise processing in real time, with no driver signing required and no impact on games.
+That command sits between Windows and the selected output, applying processing in real time, with no driver signing required and no impact on games.
 
 See `docs/ROADMAP.md` for the full breakdown.
 
@@ -222,6 +222,7 @@ AnniAudio/
 ├── scripts/         # Build helpers, driver scripts, TUI/GUI wrappers
 ├── config/          # Cable definitions and user settings
 ├── docs/            # Architecture, roadmap, research
+├── tests/           # Unit and integration tests (placeholder)
 ├── third_party/     # Vendored dependencies (rnnoise, etc.)
 ├── assets/          # Icons, bundled HRTF datasets
 ├── CMakeLists.txt
@@ -234,9 +235,9 @@ AnniAudio/
 
 | Phase | Goal | Status |
 |---|---|---|
-| 0 | Research — proof of concept for every major component | **Done** (EQ, RNNoise, WASAPI loopback, driver compile) |
-| 1 | Virtual driver + WASAPI routing — audio flows through AnniAudio | Engine builds; driver builds but **unsigned** |
-| 2 | DSP chain — EQ and noise cancellation working end-to-end | **In progress** (POCs pass, not wired into engine) |
+| 0 | Research — proof of concept for every major component | Done |
+| 1 | Virtual driver + WASAPI routing — audio flows through AnniAudio | Engine + loopback working; driver unsigned |
+| 2 | DSP chain — EQ and noise cancellation working end-to-end | In progress |
 | 3 | Spatial audio — HRTF convolution | Planned |
 | 4 | API + hotkeys + CLI | Planned |
 | 5 | UI | Planned |
@@ -246,30 +247,8 @@ Full detail in `docs/ROADMAP.md`.
 
 ---
 
-## Quick Start (once loopback processing lands)
-
-```powershell
-# 1. Build
-.\cli\anniaudio.ps1 build
-
-# 2. Process the default output through EQ
-.\build\bin\Release\route_cli.exe process "Speakers" "Headphones" --eq config/presets/default.json
-
-# 3. Adjust volume while it runs
-#   + or =  louder
-#   -      quieter
-#   v 75   set to 75%
-#   q      stop
-```
-
----
-
 ## License
 
 MIT — open source, use it freely.
 
-If you use this commercially, consider contributing back.
-
----
-
-*Built late at night with energy drinks and genuine frustration at the state of Windows audio tooling.*
+If this is used commercially, consider contributing back.
