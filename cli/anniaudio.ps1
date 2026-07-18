@@ -26,7 +26,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version")]
+    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default")]
     [string]$Command,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -313,6 +313,17 @@ function Invoke-AnniVersion {
 }
 
 # ---------------------------------------------------------------------------
+# restore-default
+# ---------------------------------------------------------------------------
+function Invoke-AnniRestoreDefault {
+    param([string[]]$RestoreArgs)
+    Show-Header
+    if ($RestoreArgs.Count -eq 0) { $RestoreArgs = @("Headphones") }
+    $exit = Invoke-Script "restore-default.ps1" $RestoreArgs
+    if ($exit -ne 0) { exit $exit }
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -332,7 +343,8 @@ switch ($Command) {
     "gaming-mode"  { Assert-Admin; Invoke-AnniGamingMode }
     "status"       { Invoke-AnniStatus }
     "build"        { Invoke-AnniBuild }
-    "config"       { Invoke-AnniConfig -CfgArgs $Args }
-    "version"      { Invoke-AnniVersion }
-    default        { Write-Host "Unknown command: $Command" -ForegroundColor Red }
+    "config"         { Invoke-AnniConfig -CfgArgs $Args }
+    "version"        { Invoke-AnniVersion }
+    "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $Args }
+    default          { Write-Host "Unknown command: $Command" -ForegroundColor Red }
 }
