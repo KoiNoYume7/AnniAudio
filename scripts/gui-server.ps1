@@ -180,8 +180,6 @@ $localUrl = "http://localhost:$Port/"
 Write-Host "AnniAudio GUI server running at $localUrl" -ForegroundColor Green
 Write-Host "Press Ctrl+C in this window to stop." -ForegroundColor Yellow
 
-$guiHtml = Get-Content $HtmlFile -Raw
-
 try {
     while ($listener.IsListening) {
         $ctx = $listener.GetContext()
@@ -192,7 +190,12 @@ try {
         try {
             switch ($path) {
                 '/' {
-                    Write-HtmlResponse -Context $ctx -Html $guiHtml
+                    try {
+                        $html = Get-Content $HtmlFile -Raw -ErrorAction Stop
+                        Write-HtmlResponse -Context $ctx -Html $html
+                    } catch {
+                        Write-TextResponse -Context $ctx -Text "GUI HTML not found." -StatusCode 500
+                    }
                     continue
                 }
                 '/api/endpoints' {
