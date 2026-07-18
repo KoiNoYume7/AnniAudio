@@ -26,7 +26,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route", "tui")]
+    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route", "tui", "gui")]
     [string]$Command,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -385,5 +385,12 @@ switch ($Command) {
     "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $Args }
     "route"          { Invoke-AnniRoute -RouteArgs $Args }
     "tui"            { $exit = Invoke-Script "tui.ps1"; if ($exit -ne 0) { exit $exit } }
+    "gui"            {
+        $port = if ($Args[1] -match '^\d+$') { $Args[1] } else { "8080" }
+        Write-Host "[gui] Starting web GUI server on port $port..." -ForegroundColor Cyan
+        Start-Process powershell.exe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$REPO_ROOT\scripts\gui-server.ps1", "-Port", $port
+        Start-Sleep -Seconds 1
+        Start-Process "http://localhost:$port/"
+    }
     default          { Write-Host "Unknown command: $Command" -ForegroundColor Red }
 }

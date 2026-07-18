@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnniAudio GUI</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #161922;
+    --text: #e4e6eb;
+    --muted: #9ca3af;
+    --accent: #3b82f6;
+    --accent2: #10b981;
+    --danger: #ef4444;
+    --border: #2a2e3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    padding: 1.5rem 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { margin: 0; font-size: 1.5rem; }
+  header .status { color: var(--muted); font-size: 0.875rem; }
+  main { padding: 1.5rem 2rem; max-width: 1100px; margin: 0 auto; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: var(--text); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 1rem;
+  }
+  .card h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+  .card .sub { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; }
+  .field { margin-bottom: 0.75rem; }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+  select, input[type=range] {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+  }
+  input[type=range] { padding: 0; height: 1.5rem; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
+  .row .vol { flex: 1; }
+  .row .pct { min-width: 2.5rem; text-align: right; font-size: 0.85rem; color: var(--muted); }
+  button {
+    border: none;
+    border-radius: 0.375rem;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-danger { background: var(--danger); color: white; }
+  .btn-secondary { background: #374151; color: var(--text); }
+  .routes-list { background: var(--panel); border: 1px solid var(--border); border-radius: 0.75rem; padding: 1rem; }
+  .route-item { display: flex; align-items: center; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+  .route-item:last-child { border-bottom: none; }
+  .route-item .info { flex: 1; }
+  .route-item .title { font-weight: 500; }
+  .route-item .meta { font-size: 0.8rem; color: var(--muted); }
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    background: var(--accent2);
+    color: black;
+  }
+  .manual {
+    display: grid;
+    grid-template-columns: 1.5fr 1.5fr 120px 120px;
+    gap: 0.75rem;
+    align-items: end;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 1rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>AnniAudio Routing GUI</h1>
+  <span class="status" id="status">Loading...</span>
+</header>
+
+<main>
+  <h2>Groups / Cables</h2>
+  <div class="grid" id="groups">Loading groups...</div>
+
+  <h2>Active Routes</h2>
+  <div class="routes-list" id="routes">Loading routes...</div>
+
+  <h2>Manual Route</h2>
+  <div class="manual">
+    <div class="field">
+      <label>Capture</label>
+      <select id="manualCapture"></select>
+    </div>
+    <div class="field">
+      <label>Render</label>
+      <select id="manualRender"></select>
+    </div>
+    <div class="field">
+      <label>Volume %</label>
+      <input type="number" id="manualVolume" value="100" min="0" max="200" style="width:100%;padding:0.5rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:0.375rem;">
+    </div>
+    <button class="btn-primary" onclick="startManual()">Start Route</button>
+  </div>
+</main>
+
+<script>
+let endpoints = [];
+let groups = [];
+let activeRoutes = [];
+let groupRoutes = {}; // group id -> routeId
+
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text);
+  }
+  return res.json();
+}
+
+function setStatus(msg, ok=true) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.style.color = ok ? '#9ca3af' : '#ef4444';
+}
+
+async function loadEndpoints() {
+  const data = await api('/api/endpoints');
+  endpoints = data.endpoints || [];
+  return endpoints;
+}
+
+async function loadGroups() {
+  const data = await api('/api/groups');
+  groups = data.groups || [];
+  renderGroups();
+  return groups;
+}
+
+async function loadRoutes() {
+  const data = await api('/api/routes');
+  activeRoutes = data.routes || [];
+  renderRoutes();
+  updateGroupStates();
+  return activeRoutes;
+}
+
+function findRouteForGroup(group) {
+  if (!group.capture || !group.render) return null;
+  // Prefer exact capture + selected render match
+  return activeRoutes.find(r => r.capture === group.capture.name && r.render === group.selectedRender) ||
+         activeRoutes.find(r => r.capture === group.capture.name);
+}
+
+function renderGroups() {
+  const container = document.getElementById('groups');
+  if (!groups.length) { container.innerHTML = '<p>No enabled cables in config.</p>'; return; }
+
+  container.innerHTML = '';
+  const renderOptions = endpoints.filter(e => e.flow === 'RENDER')
+    .map(e => `<option value="${e.name}">${e.name}${e.isDefault?' (default)':''}</option>`).join('');
+
+  for (const g of groups) {
+    const capName = g.capture ? g.capture.name : 'not found';
+    const renName = g.render ? g.render.name : 'not found';
+    if (!g.selectedRender) g.selectedRender = g.render ? g.render.name : '';
+
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.id = `group-${g.id}`;
+    div.innerHTML = `
+      <h3>${g.name}</h3>
+      <div class="sub">In: ${capName}<br>Out: ${renName}</div>
+      <div class="field">
+        <label>Route to output</label>
+        <select id="sel-${g.id}" onchange="groupSelect(${g.id})">${renderOptions}</select>
+      </div>
+      <div class="field">
+        <label>Group volume</label>
+        <div class="row">
+          <input class="vol" type="range" id="vol-${g.id}" min="0" max="200" value="100" oninput="volumeDisplay(${g.id})" onchange="setGroupVolume(${g.id})">
+          <span class="pct" id="pct-${g.id}">100%</span>
+        </div>
+      </div>
+      <button class="btn-primary" id="btn-${g.id}" onclick="toggleGroup(${g.id})">Start</button>
+    `;
+    container.appendChild(div);
+    const sel = document.getElementById(`sel-${g.id}`);
+    if (g.selectedRender) { sel.value = g.selectedRender; }
+  }
+  updateGroupStates();
+}
+
+function groupSelect(id) {
+  const g = groups.find(x => x.id === id);
+  if (!g) return;
+  g.selectedRender = document.getElementById(`sel-${id}`).value;
+}
+
+function volumeDisplay(id) {
+  const v = document.getElementById(`vol-${id}`).value;
+  document.getElementById(`pct-${id}`).textContent = v + '%';
+}
+
+function updateGroupStates() {
+  for (const g of groups) {
+    const btn = document.getElementById(`btn-${g.id}`);
+    const sel = document.getElementById(`sel-${g.id}`);
+    const vol = document.getElementById(`vol-${g.id}`);
+    const pct = document.getElementById(`pct-${g.id}`);
+    if (!btn) continue;
+    const route = findRouteForGroup(g);
+    if (route) {
+      groupRoutes[g.id] = route.id;
+      btn.textContent = 'Stop';
+      btn.className = 'btn-danger';
+      btn.onclick = () => stopGroup(g.id);
+      if (sel) sel.value = route.render;
+      if (vol) vol.value = route.volume;
+      if (pct) pct.textContent = route.volume + '%';
+    } else {
+      groupRoutes[g.id] = null;
+      btn.textContent = 'Start';
+      btn.className = 'btn-primary';
+      btn.onclick = () => startGroup(g.id);
+      if (sel && g.selectedRender) sel.value = g.selectedRender;
+    }
+  }
+}
+
+async function startGroup(id) {
+  const g = groups.find(x => x.id === id);
+  if (!g || !g.capture) { setStatus('Group has no capture endpoint', false); return; }
+  const render = document.getElementById(`sel-${id}`).value;
+  const volume = parseInt(document.getElementById(`vol-${id}`).value, 10);
+  try {
+    setStatus('Starting route...');
+    await api('/api/route/start', 'POST', { capture: g.capture.name, render, volume });
+    await loadRoutes();
+    setStatus('Route started');
+  } catch (e) {
+    setStatus(e.message, false);
+  }
+}
+
+async function stopGroup(id) {
+  const rid = groupRoutes[id];
+  if (!rid) return;
+  try {
+    setStatus('Stopping route...');
+    await api('/api/route/stop', 'POST', { id: rid });
+    await loadRoutes();
+    setStatus('Route stopped');
+  } catch (e) {
+    setStatus(e.message, false);
+  }
+}
+
+async function setGroupVolume(id) {
+  const rid = groupRoutes[id];
+  if (!rid) return;
+  const volume = parseInt(document.getElementById(`vol-${id}`).value, 10);
+  try {
+    await api('/api/route/volume', 'POST', { id: rid, volume });
+    setStatus('Volume set');
+  } catch (e) {
+    setStatus(e.message, false);
+  }
+}
+
+function renderRoutes() {
+  const container = document.getElementById('routes');
+  if (!activeRoutes.length) { container.innerHTML = '<p>No active routes.</p>'; return; }
+  container.innerHTML = '';
+  for (const r of activeRoutes) {
+    const div = document.createElement('div');
+    div.className = 'route-item';
+    div.innerHTML = `
+      <div class="info">
+        <div class="title">${r.capture} <span style="color:var(--muted)">→</span> ${r.render}</div>
+        <div class="meta">${r.running ? '<span class="badge">running</span>' : 'stopped'} · ${new Date(r.startTime).toLocaleTimeString()}</div>
+      </div>
+      <input type="range" min="0" max="200" value="${r.volume}" onchange="setRouteVolume('${r.id}', this.value)">
+      <button class="btn-danger" onclick="stopRoute('${r.id}')">Stop</button>
+    `;
+    container.appendChild(div);
+  }
+}
+
+async function setRouteVolume(id, volume) {
+  try {
+    await api('/api/route/volume', 'POST', { id, volume: parseInt(volume,10) });
+    setStatus('Volume updated');
+  } catch (e) { setStatus(e.message, false); }
+}
+
+async function stopRoute(id) {
+  try {
+    await api('/api/route/stop', 'POST', { id });
+    await loadRoutes();
+    setStatus('Route stopped');
+  } catch (e) { setStatus(e.message, false); }
+}
+
+async function startManual() {
+  const capture = document.getElementById('manualCapture').value;
+  const render = document.getElementById('manualRender').value;
+  const volume = parseInt(document.getElementById('manualVolume').value, 10);
+  try {
+    setStatus('Starting manual route...');
+    await api('/api/route/start', 'POST', { capture, render, volume });
+    await loadRoutes();
+    setStatus('Manual route started');
+  } catch (e) { setStatus(e.message, false); }
+}
+
+function renderManualDropdowns() {
+  const captures = endpoints.filter(e => e.flow === 'CAPTURE');
+  const renders = endpoints.filter(e => e.flow === 'RENDER');
+  document.getElementById('manualCapture').innerHTML = captures.map(e => `<option value="${e.name}">${e.name}</option>`).join('');
+  document.getElementById('manualRender').innerHTML = renders.map(e => `<option value="${e.name}">${e.name}${e.isDefault?' (default)':''}</option>`).join('');
+}
+
+async function init() {
+  try {
+    await loadEndpoints();
+    renderManualDropdowns();
+    await loadGroups();
+    await loadRoutes();
+    setInterval(loadRoutes, 2000);
+    setStatus('Ready');
+  } catch (e) {
+    setStatus(e.message, false);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
