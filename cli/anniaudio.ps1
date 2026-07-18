@@ -30,7 +30,7 @@ param(
     [string]$Command,
 
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Args
+    [string[]]$CliArgs
 )
 
 $ErrorActionPreference = "Continue"
@@ -380,13 +380,13 @@ switch ($Command) {
     "gaming-mode"  { Assert-Admin; Invoke-AnniGamingMode }
     "status"       { Invoke-AnniStatus }
     "build"        { Invoke-AnniBuild }
-    "config"         { Invoke-AnniConfig -CfgArgs $Args }
+    "config"         { Invoke-AnniConfig -CfgArgs $CliArgs }
     "version"        { Invoke-AnniVersion }
-    "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $Args }
-    "route"          { Invoke-AnniRoute -RouteArgs $Args }
+    "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $CliArgs }
+    "route"          { Invoke-AnniRoute -RouteArgs $CliArgs }
     "tui"            { $exit = Invoke-Script "tui.ps1"; if ($exit -ne 0) { exit $exit } }
     "gui"            {
-        $port = if ($Args[1] -match '^\d+$') { $Args[1] } else { "8080" }
+        $port = if ($CliArgs.Count -gt 0 -and $CliArgs[0] -match '^\d+$') { $CliArgs[0] } else { "8080" }
         Write-Host "[gui] Starting web GUI server on port $port..." -ForegroundColor Cyan
         Start-Process powershell.exe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$REPO_ROOT\scripts\gui-server.ps1", "-Port", $port
         Start-Sleep -Seconds 1
