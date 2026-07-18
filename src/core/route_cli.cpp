@@ -47,10 +47,11 @@ static void printUsage(const char* prog)
     std::printf("AnniAudio Routing CLI\n");
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
-    std::printf("  %s monitor <cable> [out] [volume]   Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
-    std::printf("  %s inject  <in>   <cable> [volume]  Route physical CAPTURE to cable RENDER\n", prog);
-    std::printf("  %s passthrough <in> <out> [volume]  Route any capture endpoint to any render endpoint\n", prog);
-    std::printf("  %s default <render_device>          Set default playback device to the matching endpoint\n", prog);
+    std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
+    std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
+    std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
+    std::printf("  %s passthrough <in> <out> [volume]    Same as 'route' (legacy alias)\n", prog);
+    std::printf("  %s default <render_device>            Set default playback device to the matching endpoint\n", prog);
     std::printf("\nRouting volume commands while running: + or = louder, - quieter, v <0-100> set, q stop.\n");
     std::printf("\nExamples:\n");
     std::printf("  %s list\n", prog);
@@ -229,8 +230,8 @@ int main(int argc, char* argv[])
         float vol         = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
         return cmdRoute(in, cable, vol);
     }
-    else if (cmd == "passthrough") {
-        if (argc < 4) { std::fprintf(stderr, "Usage: passthrough <capture_name> <render_name> [volume%%]\n"); return 1; }
+    else if (cmd == "route" || cmd == "passthrough") {
+        if (argc < 4) { std::fprintf(stderr, "Usage: route <capture_name> <render_name> [volume%%]\n"); return 1; }
         float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
         return cmdRoute(argv[2], argv[3], vol);
     }
