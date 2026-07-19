@@ -628,10 +628,12 @@ void AudioEngine::stop()
     m_impl->cleanup();
 }
 
-bool     AudioEngine::isRunning()       const { return m_impl->running.load(); }
-uint32_t AudioEngine::sampleRate()      const { return m_impl->renderRate; }
-uint32_t AudioEngine::channelCount()    const { return m_impl->renderCh; }
-uint64_t AudioEngine::framesProcessed() const { return m_impl->framesProcessed.load(); }
+bool     AudioEngine::isRunning()           const { return m_impl->running.load(); }
+uint32_t AudioEngine::sampleRate()          const { return m_impl->renderRate; }
+uint32_t AudioEngine::channelCount()        const { return m_impl->renderCh; }
+uint32_t AudioEngine::captureSampleRate() const { return m_impl->captureRate; }
+uint32_t AudioEngine::captureChannelCount() const { return m_impl->captureCh; }
+uint64_t AudioEngine::framesProcessed()     const { return m_impl->framesProcessed.load(); }
 
 void AudioEngine::setVolume(float v)
 {

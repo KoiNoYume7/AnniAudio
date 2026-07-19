@@ -21,11 +21,10 @@ struct EndpointInfo {
 
 // Routes audio from one WASAPI endpoint to another with optional DSP processing.
 //
-// Source (captureDeviceHint): a CAPTURE endpoint.
-//   Typically the AnniAudio Cable capture endpoint — apps render to the matching
-//   AnniAudio render endpoint; the kernel driver's shared cyclic buffer acts as
-//   the loopback, surfacing the data on the capture side which this engine reads.
+// Source (captureDeviceHint): a CAPTURE endpoint, or a RENDER endpoint for
+//   WASAPI loopback capture. Empty string = use the Windows default capture device.
 // Sink (renderDeviceHint): a RENDER endpoint, e.g. headphones or speakers.
+//   Empty string = use the Windows default playback device.
 //
 // Both endpoints are opened in WASAPI shared mode.  Each device is initialised
 // with its own native mix format; if they differ, linear-interpolation SRC and
@@ -39,6 +38,7 @@ public:
     ~AudioEngine();
 
     // Optional DSP callback.  Defaults to passthrough if not set.
+    // Called on the capture-side audio thread with the source's native format.
     void setProcessCallback(ProcessFn fn);
 
     // Enumerate all active audio endpoints. Does not require start() to be called.
@@ -51,8 +51,10 @@ public:
     void stop();
 
     bool     isRunning()        const;
-    uint32_t sampleRate()       const;
-    uint32_t channelCount()     const;
+    uint32_t sampleRate()       const; // render-side sample rate
+    uint32_t channelCount()     const; // render-side channel count
+    uint32_t captureSampleRate() const;
+    uint32_t captureChannelCount() const;
     uint64_t framesProcessed()  const;
 
     // Volume applied to the rendered output. 0.0 = silence, 1.0 = unity.

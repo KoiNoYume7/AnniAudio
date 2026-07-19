@@ -32,6 +32,10 @@ add_subdirectory(src/core)              # Phase 1: routing engine
 # add_subdirectory(src)   # Full source tree — Phase 1+ (gradual)
 # add_subdirectory(tests) # Enabled from Phase 2 onwards
 
+# --- Production DSP library (Phase 2) ---
+add_library(audio_dsp STATIC src/dsp/eq.cpp)
+target_include_directories(audio_dsp PUBLIC src/dsp)
+
 # --- Phase 0 POC targets (standalone, not part of the main build) ---
 # Each POC is a self-contained executable built only when explicitly requested.
 # They live in src/<module>/ alongside the eventual production code.
@@ -67,8 +71,8 @@ target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
 
 # Routing CLI — lists endpoints and routes audio between cables / physical devices
 add_executable(route_cli src/core/route_cli.cpp src/core/AudioEngine.cpp)
-target_include_directories(route_cli PRIVATE src/core include)
-target_link_libraries(route_cli PRIVATE ole32 avrt)
+target_include_directories(route_cli PRIVATE src/core include src/dsp)
+target_link_libraries(route_cli PRIVATE audio_dsp ole32 avrt)
 # add_executable(poc_nvidia src/noise/poc_nvidia.cpp)
 
 message(STATUS "AnniAudio ${PROJECT_VERSION} — Phase 0 (Research)")

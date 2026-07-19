@@ -1,4 +1,5 @@
 #include "AudioEngine.hpp"
+#include "eq.hpp"
 
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -8,6 +9,7 @@
 
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
+using namespace anniaudio::dsp;
 
 #include <algorithm>
 #include <atomic>
@@ -49,6 +51,7 @@ static void printUsage(const char* prog)
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
     std::printf("  %s process <source> <out> [volume]    Route a RENDER endpoint via loopback capture to a render output\n", prog);
+    std::printf("  %s process-eq <source> <out> [vol]  Same as process, but applies a test EQ chain\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
     std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
     std::printf("  %s passthrough <in> <out> [volume]    Same as 'route' (legacy alias)\n", prog);
@@ -150,6 +153,48 @@ static int cmdRoute(const std::string& captureHint, const std::string& renderHin
     return 0;
 }
 
+static int cmdProcessEq(const std::string& sourceHint, const std::string& renderHint, float startVolume = 1.0f)
+{
+    AudioEngine engine;
+    EqChain eq;
+
+    // Default "can you hear it" preset: high-pass rumble, small mid boost, gentle air shelf.
+    eq.addBand(FilterType::HighPass, 80.0, 0.0, 0.707);
+    eq.addBand(FilterType::Peak, 1500.0, 6.0, 1.0);
+    eq.addBand(FilterType::HighShelf, 12000.0, 3.0, 0.707);
+
+    engine.setProcessCallback([&eq, &engine](float* buf, uint32_t frames, uint32_t ch) {
+        if (!eq.prepared()) {
+            eq.prepare(engine.captureSampleRate(), ch);
+        }
+        eq.process(buf, frames, ch);
+    });
+
+    std::printf("[route] Starting EQ process:  source = \"%s\"  →  render = \"%s\"\n",
+                sourceHint.c_str(), renderHint.c_str());
+
+    if (!engine.start(sourceHint, renderHint)) {
+        std::fprintf(stderr, "[route] Failed to start EQ process.\n");
+        return 1;
+    }
+
+    engine.setVolume(startVolume);
+    printVolume(startVolume);
+
+    std::atomic<bool> stop{false};
+    std::thread input(inputThread, &engine, &stop);
+    std::printf("[route] Running EQ. Commands: +/= louder, - quieter, v <0-100>, q/Enter stop.\n");
+
+    while (!stop.load()) {
+        Sleep(100);
+    }
+
+    engine.stop();
+    if (input.joinable()) input.join();
+    std::printf("[route] Stopped.\n");
+    return 0;
+}
+
 static std::wstring utf8ToWide(const std::string& s)
 {
     if (s.empty()) return {};
@@ -236,6 +281,11 @@ int main(int argc, char* argv[])
         if (argc < 4) { std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%]\n"); return 1; }
         float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
         return cmdRoute(argv[2], argv[3], vol);
+    }
+    else if (cmd == "process-eq") {
+        if (argc < 4) { std::fprintf(stderr, "Usage: process-eq <loopback_source> <render_output> [volume%%]\n"); return 1; }
+        float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
+        return cmdProcessEq(argv[2], argv[3], vol);
     }
     else if (cmd == "route" || cmd == "passthrough") {
         if (argc < 4) { std::fprintf(stderr, "Usage: route <capture_name> <render_name> [volume%%]\n"); return 1; }
