@@ -29,7 +29,7 @@ What works today:
 Not yet finished:
 
 - The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing.
-- **EQ is now connected** to the live `process` command and loads from JSON presets. **RNNoise** and **HRTF** are still standalone POCs only.
+- **EQ and RNNoise are now connected** to the live `process` command. **HRTF** is still a standalone POC only.
 - The GUI/TUI are thin prototypes around the CLI, not a polished product UI.
 
 ---
@@ -153,9 +153,15 @@ The virtual driver is not required to use AnniAudio as a system-wide audio proce
 
 # EQ from a JSON preset
 .\build\bin\Release\route_cli.exe process "Speakers" "Headphones" 80 --preset config/presets/headphones.json
+
+# RNNoise noise suppression (capture source must be 48 kHz)
+.\build\bin\Release\route_cli.exe process "Microphone" "Headphones" 80 --rnnoise
+
+# EQ + RNNoise combined
+.\build\bin\Release\route_cli.exe process "Microphone" "Headphones" 80 --preset config/presets/clean_voice.json --rnnoise
 ```
 
-Both commands run in real time, with no driver signing required and no impact on games. Preset files live in `config/presets/` and define a list of biquad bands (`peak`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `notch`, `allpass`).
+All of these run in real time, with no driver signing required and no impact on games. Preset files live in `config/presets/` and define a list of biquad bands (`peak`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `notch`, `allpass`). RNNoise currently requires a 48 kHz source; it will be skipped otherwise.
 
 See `docs/ROADMAP.md` for the full breakdown.
 

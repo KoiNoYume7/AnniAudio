@@ -1,5 +1,6 @@
 #include "AudioEngine.hpp"
 #include "eq.hpp"
+#include "noise_suppressor.hpp"
 
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -54,8 +55,8 @@ static void printUsage(const char* prog)
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
-    std::printf("  %s process <source> <out> [vol] [--preset <file>]  Loopback capture + optional EQ preset\n", prog);
-    std::printf("  %s process-eq <source> <out> [vol]                   Same as process, but applies a hardcoded test EQ chain\n", prog);
+    std::printf("  %s process <source> <out> [vol] [--preset <file>] [--rnnoise]  Loopback capture + optional EQ / NR\n", prog);
+    std::printf("  %s process-eq <source> <out> [vol]                              Same as process, but applies a hardcoded test EQ chain\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
     std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
     std::printf("  %s passthrough <in> <out> [volume]    Same as 'route' (legacy alias)\n", prog);
@@ -63,7 +64,7 @@ static void printUsage(const char* prog)
     std::printf("\nRouting volume commands while running: + or = louder, - quieter, v <0-100> set, q stop.\n");
     std::printf("\nExamples:\n");
     std::printf("  %s list\n", prog);
-    std::printf("  %s process \"Speakers\" \"Headphones\" 80 --preset config/presets/headphones.json\n", prog);
+    std::printf("  %s process \"Speakers\" \"Headphones\" 80 --preset config/presets/headphones.json --rnnoise\n", prog);
     std::printf("  %s monitor \"Studio Main\"      -- listen to cable 1 on your headphones\n", prog);
     std::printf("  %s monitor \"My Studio Cable\" \"Headphones\" 50\n", prog);
     std::printf("  %s default \"Headphones (Crusher ANC 2)\" -- restore default output\n", prog);
@@ -181,22 +182,48 @@ static bool loadEqPreset(EqChain& eq, const std::string& path)
 }
 
 static int cmdRoute(const std::string& captureHint, const std::string& renderHint,
-                    float startVolume = 1.0f, const std::string& eqPresetPath = "")
+                    float startVolume = 1.0f,
+                    const std::string& eqPresetPath = "",
+                    bool useRnnoise = false)
 {
     AudioEngine engine;
     std::unique_ptr<EqChain> eq;
+    std::unique_ptr<NoiseSuppressor> ns;
 
+    if (useRnnoise) {
+        ns = std::make_unique<NoiseSuppressor>();
+    }
     if (!eqPresetPath.empty()) {
         eq = std::make_unique<EqChain>();
         if (!loadEqPreset(*eq, eqPresetPath)) {
             return 1;
         }
         std::printf("[route] Loaded EQ preset '%s' (%zu bands)\n", eqPresetPath.c_str(), eq->bandCount());
-        engine.setProcessCallback([&eq, &engine](float* buf, uint32_t frames, uint32_t ch) {
-            if (!eq->prepared()) {
-                eq->prepare(engine.captureSampleRate(), ch);
+    }
+
+    if (eq || ns) {
+        engine.setProcessCallback([useEq = !!eq, useNr = !!ns,
+                                   &eq, &ns, &engine](float* buf, uint32_t frames, uint32_t ch) {
+            if (useNr) {
+                // RNNoise is trained on 48 kHz. Running it on other rates silently
+                // misinterprets the time/frequency scale.
+                if (engine.captureSampleRate() != 48000) {
+                    static bool warned = false;
+                    if (!warned) {
+                        std::fprintf(stderr, "[route] RNNoise requires a 48 kHz capture source; skipping.\n");
+                        warned = true;
+                    }
+                } else {
+                    if (!ns->prepared()) ns->prepare(ch);
+                    ns->process(buf, frames, ch);
+                }
             }
-            eq->process(buf, frames, ch);
+            if (useEq) {
+                if (!eq->prepared()) {
+                    eq->prepare(engine.captureSampleRate(), ch);
+                }
+                eq->process(buf, frames, ch);
+            }
         });
     }
 
@@ -351,11 +378,12 @@ int main(int argc, char* argv[])
     }
     else if (cmd == "process") {
         if (argc < 4) {
-            std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%] [--preset <file.json>]\n");
+            std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%] [--preset <file.json>] [--rnnoise]\n");
             return 1;
         }
         float vol = 1.0f;
         std::string preset;
+        bool useRnnoise = false;
         for (int i = 4; i < argc; ) {
             std::string a = argv[i];
             std::string al;
@@ -366,6 +394,9 @@ int main(int argc, char* argv[])
                 if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
                 preset = argv[i + 1];
                 i += 2;
+            } else if (al == "--rnnoise" || al == "-n") {
+                useRnnoise = true;
+                i += 1;
             } else if (al[0] == '-') {
                 std::fprintf(stderr, "Unknown option: %s\n", a.c_str());
                 return 1;
@@ -376,7 +407,7 @@ int main(int argc, char* argv[])
                 i += 1;
             }
         }
-        return cmdRoute(argv[2], argv[3], vol, preset);
+        return cmdRoute(argv[2], argv[3], vol, preset, useRnnoise);
     }
     else if (cmd == "process-eq") {
         if (argc < 4) { std::fprintf(stderr, "Usage: process-eq <loopback_source> <render_output> [volume%%]\n"); return 1; }

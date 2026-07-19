@@ -32,17 +32,7 @@ add_subdirectory(src/core)              # Phase 1: routing engine
 # add_subdirectory(src)   # Full source tree — Phase 1+ (gradual)
 # add_subdirectory(tests) # Enabled from Phase 2 onwards
 
-# --- Production DSP library (Phase 2) ---
-add_library(audio_dsp STATIC src/dsp/eq.cpp)
-target_include_directories(audio_dsp PUBLIC src/dsp)
-
-# --- Phase 0 POC targets (standalone, not part of the main build) ---
-# Each POC is a self-contained executable built only when explicitly requested.
-# They live in src/<module>/ alongside the eventual production code.
-#
-# Uncomment each target as you work through Phase 0:
-#
-add_executable(poc_eq src/dsp/poc_eq.cpp)
+# --- RNNoise static library (Phase 0 POC + production use) ---
 set(RNNOISE_SOURCES
     third_party/rnnoise/src/denoise.c
     third_party/rnnoise/src/rnn.c
@@ -55,16 +45,31 @@ set(RNNOISE_SOURCES
     third_party/rnnoise/src/rnnoise_data.c
     third_party/rnnoise/src/rnnoise_tables.c
 )
-add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp ${RNNOISE_SOURCES})
-target_include_directories(poc_rnnoise PRIVATE
+add_library(rnnoise STATIC ${RNNOISE_SOURCES})
+target_include_directories(rnnoise PUBLIC
     third_party/rnnoise/include
     third_party/rnnoise/src
 )
-target_compile_definitions(poc_rnnoise PRIVATE RNNOISE_BUILD)
+target_compile_definitions(rnnoise PRIVATE RNNOISE_BUILD)
 if(MSVC)
     set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
         COMPILE_FLAGS "/wd4244 /wd4267 /wd4305 /wd4996")
 endif()
+
+# --- Production DSP library (Phase 2) ---
+add_library(audio_dsp STATIC src/dsp/eq.cpp src/dsp/noise_suppressor.cpp)
+target_include_directories(audio_dsp PUBLIC src/dsp third_party/rnnoise/include)
+target_link_libraries(audio_dsp PUBLIC rnnoise)
+
+# --- Phase 0 POC targets (standalone, not part of the main build) ---
+# Each POC is a self-contained executable built only when explicitly requested.
+# They live in src/<module>/ alongside the eventual production code.
+#
+# Uncomment each target as you work through Phase 0:
+#
+add_executable(poc_eq src/dsp/poc_eq.cpp)
+add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp)
+target_link_libraries(poc_rnnoise PRIVATE rnnoise)
 # add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
 add_executable(poc_wasapi src/core/poc_wasapi.cpp)
 target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
