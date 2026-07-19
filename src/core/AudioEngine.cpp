@@ -14,7 +14,6 @@
 #include <string>
 #include <vector>
 
-using Microsoft::WRL::ComPtr;
 using namespace anniaudio::core;
 
 // ---------------------------------------------------------------------------

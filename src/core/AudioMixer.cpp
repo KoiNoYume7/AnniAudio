@@ -13,10 +13,9 @@
 #include <windows.h>
 #include <avrt.h>
 
-using Microsoft::WRL::ComPtr;
-using namespace anniaudio::core;
-
 namespace anniaudio::core {
+
+using Microsoft::WRL::ComPtr;
 
 constexpr UINT64 kDefaultBuffer100Ns = 2000000; // 200 ms shared buffer
 
@@ -72,7 +71,6 @@ struct AudioMixer::Impl {
 
     bool openOutput(const std::string& outputHint);
     bool openStrip(Strip& s, const std::string& sourceHint);
-    void allocateStripBuffers(Strip& s);
 
     void run();
     void processRender();
@@ -331,12 +329,7 @@ void AudioMixer::Impl::processRender()
             fbuf[i] = v;
         }
     } else {
-        for (size_t i = 0; i < outSamples; ++i) {
-            float v = mixBuf[i];
-            if (v >  1.0f) v =  1.0f;
-            if (v < -1.0f) v = -1.0f;
-            // floatToPcm16 needs one sample at a time clamping already done, but it also clamps.
-        }
+        // floatToPcm16 clamps each sample itself.
         floatToPcm16(mixBuf.data(), outSamples, buf);
     }
 

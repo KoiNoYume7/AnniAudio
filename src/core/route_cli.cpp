@@ -485,22 +485,6 @@ static int cmdMixer(const std::string& configPath)
     }
     if (strips.empty()) { std::fprintf(stderr, "[mixer] Config missing 'strips' array\n"); return 1; }
 
-    std::string midiDeviceHint;
-    std::vector<int> midiCcVolumes;
-    std::vector<int> midiNoteMutes;
-    float midiMaxVolume = 1.0f;
-    if (j.contains("midi") && j["midi"].is_object()) {
-        const auto& m = j["midi"];
-        midiDeviceHint = m.value("device", std::string{});
-        midiMaxVolume  = m.value("maxVolume", 1.0f);
-        if (m.contains("ccVolume") && m["ccVolume"].is_array()) {
-            for (const auto& item : m["ccVolume"]) midiCcVolumes.push_back(item.get<int>());
-        }
-        if (m.contains("noteMute") && m["noteMute"].is_array()) {
-            for (const auto& item : m["noteMute"]) midiNoteMutes.push_back(item.get<int>());
-        }
-    }
-
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
         std::fprintf(stderr, "[mixer] CoInitializeEx failed 0x%08X\n", (unsigned)hr);
@@ -531,33 +515,6 @@ static int cmdMixer(const std::string& configPath)
 
     std::printf("[mixer] Running. Commands: v <strip> <vol>, m <strip>, +/=, -, ?, q\n");
     printMixerHelp(mixer);
-
-    anniaudio::midi::MidiInput midi;
-    if (!midiDeviceHint.empty()) {
-        auto cb = [&](const anniaudio::midi::MidiMessage& msg) {
-            uint8_t type = msg.status & 0xF0;
-            if (type == 0xB0) {
-                for (size_t i = 0; i < midiCcVolumes.size(); ++i) {
-                    if ((int)msg.data1 == midiCcVolumes[i] && i < mixer.stripCount()) {
-                        float vol = (msg.data2 / 127.0f) * midiMaxVolume;
-                        if (vol < 0.0f) vol = 0.0f;
-                        if (vol > 2.0f) vol = 2.0f;
-                        mixer.setStripVolume(i, vol);
-                    }
-                }
-            } else if (type == 0x90 && msg.data2 > 0) {
-                for (size_t i = 0; i < midiNoteMutes.size(); ++i) {
-                    if ((int)msg.data1 == midiNoteMutes[i] && i < mixer.stripCount()) {
-                        mixer.setStripMuted(i, !mixer.stripMuted(i));
-                    }
-                }
-            }
-        };
-        if (!midi.open(midiDeviceHint, cb)) {
-            std::fprintf(stderr, "[mixer] Could not open MIDI device '%s'. Continuing without MIDI.\n",
-                         midiDeviceHint.c_str());
-        }
-    }
 
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -653,7 +610,7 @@ int main(int argc, char* argv[])
     }
     else if (cmd == "process") {
         ProcessProfile profile;
-        bool hasSource = false, hasOutput = false, hasVolume = false, hasPreset = false, hasRnnoise = false;
+        bool hasSource = false, hasOutput = false, hasVolume = false;
 
         for (int i = 2; i < argc; ) {
             std::string a = argv[i];
@@ -668,15 +625,12 @@ int main(int argc, char* argv[])
             } else if (al == "--preset" || al == "-p") {
                 if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
                 profile.preset = argv[i + 1];
-                hasPreset = true;
                 i += 2;
             } else if (al == "--rnnoise" || al == "-n") {
                 profile.rnnoise = true;
-                hasRnnoise = true;
                 i += 1;
             } else if (al == "--no-rnnoise") {
                 profile.rnnoise = false;
-                hasRnnoise = true;
                 i += 1;
             } else if (al[0] == '-') {
                 std::fprintf(stderr, "Unknown option: %s\n", a.c_str());

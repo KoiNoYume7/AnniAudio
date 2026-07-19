@@ -174,30 +174,15 @@ The `mixer` command mixes any number of WASAPI sources into one output with per-
 # Run the example mixer
 .\build\bin\Release\route_cli.exe mixer config/mixers/default.json
 
-# Loupedeck Live 6-knob layout (Game / Music / Chat / Ext / System / Mic)
+# 6-strip layout for Loupedeck Live control (Game / Music / Chat / Ext / System / Mic)
 .\build\bin\Release\route_cli.exe mixer config/mixers/loupedeck.json
 ```
 
-Mixer config files live in `config/mixers/`. The optional `midi` section binds CC messages to strip volumes and note messages to mute toggles:
+Mixer config files live in `config/mixers/` and act as presets: `output`, `master` volume, and a `strips` array of `{ name, source, volume, muted }`.
 
-```json
-{
-  "output": "Logitech G560 Gaming Speaker",
-  "master": 80,
-  "strips": [
-    { "name": "Game", "source": "Game (Virtual Audio Cable)", "volume": 100 },
-    { "name": "Chat", "source": "Chat (Virtual Audio Cable)", "volume": 80 }
-  ],
-  "midi": {
-    "device": "Loupedeck",
-    "ccVolume": [1, 2],
-    "noteMute": [60, 61],
-    "maxVolume": 1.0
-  }
-}
-```
+A local control API and a dedicated mixer GUI, plus a proper Loupedeck Live plugin (via the Logi Actions C# SDK) to drive it from the device's 6 knobs, are in progress — see `docs/MIXER-CONTROL-API.md` for the design.
 
-Use `route_cli midi list` and `route_cli midi Loupedeck` to discover CC/note messages while turning knobs, then edit `config/mixers/*.json` to match.
+`route_cli midi list` / `route_cli midi <device-hint>` remain available as a standalone diagnostic to inspect raw MIDI messages from any connected controller; it is not used to control the mixer.
 
 See `docs/ROADMAP.md` for the full breakdown.
 
