@@ -66,7 +66,7 @@
   #patchbay {
     flex: 1;
     display: grid;
-    grid-template-columns: 260px 1fr 260px;
+    grid-template-columns: 280px 1fr 280px;
     gap: 1rem;
     padding: 1rem;
     position: relative;
@@ -84,7 +84,7 @@
     stroke: var(--cable);
     stroke-width: 3;
     stroke-linecap: round;
-    opacity: 0.75;
+    opacity: 0.7;
     transition: stroke 0.1s, opacity 0.1s, stroke-width 0.1s;
     filter: drop-shadow(0 0 2px rgba(99,102,241,0.5));
   }
@@ -132,10 +132,11 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    min-height: 130px;
+    gap: 0.45rem;
+    min-height: 110px;
   }
   .node.output { border-color: var(--accent); }
+  .node.route { border-color: #4f46e5; }
   .node-header {
     display: flex;
     justify-content: space-between;
@@ -148,6 +149,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 0;
+    flex: 1;
+  }
+  .node-title:focus {
+    outline: 1px solid var(--accent);
+    background: var(--input-bg);
   }
   .node-sub {
     font-size: 0.7rem;
@@ -165,7 +175,7 @@
 
   .meter {
     width: 12px;
-    height: 90px;
+    height: 80px;
     background: var(--input-bg);
     border-radius: 6px;
     overflow: hidden;
@@ -195,7 +205,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.35rem;
     min-width: 0;
   }
   .fader-row {
@@ -226,9 +236,10 @@
 
   .btn-mute {
     font-size: 0.75rem;
-    padding: 0.3rem 0.5rem;
+    padding: 0.25rem 0.5rem;
   }
   .btn-mute.muted { background: var(--danger); border-color: var(--danger); color: white; }
+  .btn-row { display: flex; gap: 0.4rem; }
 
   .port {
     width: 14px; height: 14px;
@@ -239,15 +250,13 @@
     top: 50%;
     transform: translateY(-50%);
     z-index: 20;
-    cursor: crosshair;
     transition: transform 0.15s, border-color 0.15s, background 0.15s;
   }
-  .port:hover { transform: translateY(-50%) scale(1.3); border-color: var(--cable-active); background: var(--cable-active); }
-  .port.in { left: -8px; }
   .port.out { right: -8px; }
-  .port.connected { background: var(--cable-active); border-color: var(--cable-active); box-shadow: 0 0 8px var(--cable-active); }
+  .port.in { left: -8px; }
+  .port:hover { transform: translateY(-50%) scale(1.3); border-color: var(--cable-active); background: var(--cable-active); }
 
-  .add-source {
+  .add-btn {
     margin: 0.75rem;
     padding: 0.6rem;
     text-align: center;
@@ -257,7 +266,7 @@
     cursor: pointer;
     transition: border-color 0.15s, color 0.15s;
   }
-  .add-source:hover { border-color: var(--accent); color: var(--text); }
+  .add-btn:hover { border-color: var(--accent); color: var(--text); }
 
   .modal-overlay {
     position: fixed;
@@ -275,7 +284,7 @@
     border-radius: 0.75rem;
     padding: 1.25rem;
     width: 90%;
-    max-width: 420px;
+    max-width: 440px;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -292,7 +301,6 @@
     text-align: center;
     font-size: 0.85rem;
   }
-  .hint { padding: 0.5rem 1rem; font-size: 0.8rem; color: var(--muted); text-align: center; border-bottom: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -308,55 +316,42 @@
 <div id="patchbay">
   <svg id="cables"><g id="cable-layer"></g></svg>
 
-  <div class="column" id="col-sources">
-    <div class="col-header">Sources <span class="status" id="source-count">0</span></div>
-    <div class="node-list" id="sources"></div>
-    <div class="add-source" id="btn-add">+ Add source</div>
+  <div class="column" id="col-routes">
+    <div class="col-header">Routes <span id="route-count" class="status">0</span></div>
+    <div class="node-list" id="routes"></div>
+    <div class="add-btn" id="btn-add-route">+ Add route</div>
   </div>
 
   <div class="column" id="col-workspace" style="background:transparent; border:none; z-index:1;"></div>
 
   <div class="column" id="col-outputs">
-    <div class="col-header">Outputs</div>
-    <div class="node-list" id="outputs">
-      <div class="node output" id="master-node" data-type="master">
-        <div class="port in" style="left:-8px;"></div>
-        <div class="node-header">
-          <span class="node-title" id="master-title">Master</span>
-        </div>
-        <div class="node-sub" id="master-output-name">—</div>
-        <div class="node-body">
-          <div class="meter" id="master-meter"><div class="meter-fill"></div><div class="meter-peak"></div></div>
-          <div class="controls">
-            <div class="fader-row">
-              <input id="master-volume" type="range" min="0" max="200" value="100">
-              <span id="master-value">100%</span>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div class="col-header">Outputs <span id="output-count" class="status">0</span></div>
+    <div class="node-list" id="outputs"></div>
+    <div class="add-btn" id="btn-add-output">+ Add output</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="route-modal">
+  <div class="modal">
+    <h2>Add route</h2>
+    <div class="modal-row"><label>Source endpoint</label><select id="route-source"></select></div>
+    <div class="modal-row"><label>Output</label><select id="route-output"></select></div>
+    <div class="modal-row"><label>Name (optional)</label><input id="route-name" type="text" placeholder="defaults to source name"></div>
+    <div class="modal-row"><label>Initial volume (%)</label><input id="route-volume" type="number" value="100" min="0" max="200"></div>
+    <div class="modal-actions">
+      <button id="route-cancel">Cancel</button>
+      <button id="route-ok" class="primary">Add</button>
     </div>
   </div>
 </div>
 
-<div class="modal-overlay" id="add-modal">
+<div class="modal-overlay" id="output-modal">
   <div class="modal">
-    <h2>Add source</h2>
-    <div class="modal-row">
-      <label>Source endpoint</label>
-      <select id="add-source"></select>
-    </div>
-    <div class="modal-row">
-      <label>Name (optional)</label>
-      <input id="add-name" type="text" placeholder="defaults to source name">
-    </div>
-    <div class="modal-row">
-      <label>Initial volume (%)</label>
-      <input id="add-volume" type="number" value="100" min="0" max="200">
-    </div>
+    <h2>Add output</h2>
+    <div class="modal-row"><label>Render endpoint</label><select id="output-source"></select></div>
     <div class="modal-actions">
-      <button id="add-cancel">Cancel</button>
-      <button id="add-ok" class="primary">Add</button>
+      <button id="output-cancel">Cancel</button>
+      <button id="output-ok" class="primary">Add</button>
     </div>
   </div>
 </div>
@@ -364,10 +359,7 @@
 <div class="modal-overlay" id="save-modal">
   <div class="modal">
     <h2>Save preset</h2>
-    <div class="modal-row">
-      <label>Filename (relative to project root, e.g. config/mixers/my_mix.json)</label>
-      <input id="save-path" type="text" value="config/mixers/">
-    </div>
+    <div class="modal-row"><label>Path (e.g. config/mixers/my_mix.json)</label><input id="save-path" type="text" value="config/mixers/"></div>
     <div class="modal-actions">
       <button id="save-cancel">Cancel</button>
       <button id="save-ok" class="primary">Save</button>
@@ -383,6 +375,7 @@ portInput.value = port;
 
 let base = `http://127.0.0.1:${port}`;
 let state = null;
+let endpoints = [];
 let es = null;
 
 function setStatus(text, cls) {
@@ -416,7 +409,7 @@ function connect() {
   if (es) { es.close(); es = null; }
   setStatus('Connecting...');
   es = new EventSource(base + '/api/events');
-  es.onopen = () => setStatus('Connected', 'connected');
+  es.onopen = () => { setStatus('Connected', 'connected'); refreshEndpoints(); };
   es.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data.replace(/^data: /, ''));
@@ -437,71 +430,8 @@ function dbFromLinear(v) {
 }
 
 function meterPercent(v) {
-  // Map -60..0 dB to 0..100%
   const db = dbFromLinear(v);
   return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
-}
-
-function render() {
-  if (!state) return;
-
-  document.getElementById('source-count').textContent = state.strips ? state.strips.length : 0;
-  document.getElementById('master-output-name').textContent = state.output || '—';
-  document.getElementById('master-title').textContent = 'Master';
-
-  const mv = document.getElementById('master-volume');
-  if (document.activeElement !== mv) mv.value = Math.round(state.master);
-  document.getElementById('master-value').textContent = Math.round(state.master) + '%';
-  updateMeter(document.getElementById('master-meter'), state.masterPeak || 0, state.masterRms || 0);
-
-  const sources = document.getElementById('sources');
-  if (!state.strips || state.strips.length === 0) {
-    sources.innerHTML = '<div class="empty">No sources connected. Click + Add source to start.</div>';
-  } else {
-    sources.innerHTML = '';
-    for (const s of state.strips) {
-      const el = document.createElement('div');
-      el.className = 'node' + (s.muted ? ' muted' : '');
-      el.dataset.id = s.id;
-      el.id = 'strip-' + s.id;
-      el.innerHTML = `
-        <div class="port out"></div>
-        <div class="node-header">
-          <input class="node-title strip-name" value="${escapeHtml(s.name)}" title="${escapeHtml(s.name)}">
-          <button class="danger strip-remove" title="Remove">×</button>
-        </div>
-        <div class="node-sub" title="${escapeHtml(s.source)}">${escapeHtml(s.source)}</div>
-        <div class="node-body">
-          <div class="meter" id="meter-${s.id}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
-          <div class="controls">
-            <div class="fader-row">
-              <input type="range" min="0" max="200" value="${Math.round(s.volume)}" class="strip-fader">
-              <span>${Math.round(s.volume)}%</span>
-            </div>
-            <button class="btn-mute ${s.muted ? 'muted' : ''}">${s.muted ? 'Unmute' : 'Mute'}</button>
-          </div>
-        </div>
-      `;
-      const nameInput = el.querySelector('.strip-name');
-      nameInput.addEventListener('change', () => patchStrip(s.id, { name: nameInput.value }));
-
-      const fader = el.querySelector('.strip-fader');
-      fader.addEventListener('input', () => { el.querySelector('.fader-row span').textContent = fader.value + '%'; });
-      fader.addEventListener('change', () => patchStrip(s.id, { volume: parseFloat(fader.value) }));
-
-      const muteBtn = el.querySelector('.btn-mute');
-      muteBtn.addEventListener('click', () => patchStrip(s.id, { muted: !s.muted }));
-
-      const removeBtn = el.querySelector('.strip-remove');
-      removeBtn.addEventListener('click', () => removeStrip(s.id));
-
-      sources.appendChild(el);
-
-      updateMeter(document.getElementById('meter-' + s.id), s.peak || 0, s.rms || 0);
-    }
-  }
-
-  drawCables();
 }
 
 function updateMeter(meter, peak, rms) {
@@ -512,90 +442,238 @@ function updateMeter(meter, peak, rms) {
   pk.style.bottom = meterPercent(peak) + '%';
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function outputCard(out) {
+  const el = document.createElement('div');
+  el.className = 'node output';
+  el.id = 'output-' + out.name.replace(/[^a-zA-Z0-9]/g, '_');
+  el.dataset.name = out.name;
+  el.innerHTML = `
+    <div class="port in"></div>
+    <div class="node-header">
+      <input class="node-title output-name" value="${escapeHtml(out.name)}" readonly title="${escapeHtml(out.name)}">
+      <button class="danger output-remove" title="Remove">×</button>
+    </div>
+    <div class="node-body">
+      <div class="meter" id="meter-out-${out.name.replace(/[^a-zA-Z0-9]/g, '_')}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
+      <div class="controls">
+        <div class="fader-row">
+          <input type="range" min="0" max="200" value="${Math.round(out.master)}" class="output-fader">
+          <span>${Math.round(out.master)}%</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const fader = el.querySelector('.output-fader');
+  fader.addEventListener('input', () => { el.querySelector('.fader-row span').textContent = fader.value + '%'; });
+  fader.addEventListener('change', async () => {
+    try { await api('/api/outputs/master', { method: 'POST', body: JSON.stringify({ name: out.name, volume: parseFloat(fader.value) }) }); }
+    catch (e) { setStatus(e.message, 'error'); }
+  });
+
+  el.querySelector('.output-remove').addEventListener('click', async () => {
+    try { await api('/api/outputs', { method: 'DELETE', body: JSON.stringify({ name: out.name }) }); }
+    catch (e) { setStatus(e.message, 'error'); }
+  });
+
+  return el;
 }
 
-async function patchStrip(id, changes) {
-  try {
-    await api(`/api/strips/${id}`, { method: 'PATCH', body: JSON.stringify(changes) });
-  } catch (e) {
-    setStatus(e.message, 'error');
-    setTimeout(() => setStatus('Connected', 'connected'), 2000);
-  }
+function routeCard(s) {
+  const el = document.createElement('div');
+  el.className = 'node route';
+  el.id = 'route-' + s.id;
+  el.dataset.id = s.id;
+  el.dataset.output = s.output;
+  el.innerHTML = `
+    <div class="port out"></div>
+    <div class="node-header">
+      <input class="node-title route-name" value="${escapeHtml(s.name)}" title="${escapeHtml(s.name)}">
+      <button class="danger route-remove" title="Remove">×</button>
+    </div>
+    <div class="node-sub" title="${escapeHtml(s.source)}">${escapeHtml(s.source)} → ${escapeHtml(s.output)}</div>
+    <div class="node-body">
+      <div class="meter" id="meter-route-${s.id}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
+      <div class="controls">
+        <div class="fader-row">
+          <input type="range" min="0" max="200" value="${Math.round(s.volume)}" class="route-fader">
+          <span>${Math.round(s.volume)}%</span>
+        </div>
+        <button class="btn-mute ${s.muted ? 'muted' : ''}">${s.muted ? 'Unmute' : 'Mute'}</button>
+      </div>
+    </div>
+  `;
+
+  const nameInput = el.querySelector('.route-name');
+  nameInput.addEventListener('change', async () => {
+    try { await api(`/api/strips/${s.id}`, { method: 'PATCH', body: JSON.stringify({ name: nameInput.value }) }); }
+    catch (e) { setStatus(e.message, 'error'); }
+  });
+
+  const fader = el.querySelector('.route-fader');
+  fader.addEventListener('input', () => { el.querySelector('.fader-row span').textContent = fader.value + '%'; });
+  fader.addEventListener('change', async () => {
+    try { await api(`/api/strips/${s.id}`, { method: 'PATCH', body: JSON.stringify({ volume: parseFloat(fader.value) }) }); }
+    catch (e) { setStatus(e.message, 'error'); }
+  });
+
+  const muteBtn = el.querySelector('.btn-mute');
+  muteBtn.addEventListener('click', async () => {
+    try { await api(`/api/strips/${s.id}`, { method: 'PATCH', body: JSON.stringify({ muted: !s.muted }) }); }
+    catch (e) { setStatus(e.message, 'error'); }
+  });
+
+  el.querySelector('.route-remove').addEventListener('click', async () => {
+    try { await api(`/api/strips/${s.id}`, { method: 'DELETE' }); }
+    catch (e) { setStatus(e.message, 'error'); }
+  });
+
+  return el;
 }
 
-async function removeStrip(id) {
-  try { await api(`/api/strips/${id}`, { method: 'DELETE' }); }
-  catch (e) { setStatus(e.message, 'error'); }
-}
+function render() {
+  if (!state) return;
+  const outputs = state.outputs || [];
+  const routes = outputs.reduce((acc, o) => acc.concat(o.strips || []), []);
+  document.getElementById('output-count').textContent = outputs.length;
+  document.getElementById('route-count').textContent = routes.length;
 
-async function addStrip() {
-  const source = document.getElementById('add-source').value;
-  if (!source) return;
-  const name = document.getElementById('add-name').value;
-  const volume = parseFloat(document.getElementById('add-volume').value) || 100;
-  try {
-    await api('/api/strips', { method: 'POST', body: JSON.stringify({ source, name, volume }) });
-    document.getElementById('add-modal').classList.remove('open');
-    document.getElementById('add-name').value = '';
-    document.getElementById('add-volume').value = '100';
-  } catch (e) { alert('Failed to add source: ' + e.message); }
-}
-
-async function refreshEndpoints() {
-  try {
-    const { endpoints } = await api('/api/endpoints');
-    const sel = document.getElementById('add-source');
-    sel.innerHTML = '';
-    for (const ep of endpoints) {
-      const opt = document.createElement('option');
-      opt.value = ep.name;
-      opt.textContent = `${ep.isRender ? '[Render]' : '[Capture]'} ${ep.name}${ep.isDefault ? ' (default)' : ''}`;
-      sel.appendChild(opt);
+  const outList = document.getElementById('outputs');
+  outList.innerHTML = '';
+  if (outputs.length === 0) {
+    outList.innerHTML = '<div class="empty">No outputs. Add one to get started.</div>';
+  } else {
+    for (const out of outputs) {
+      outList.appendChild(outputCard(out));
+      updateMeter(document.getElementById('meter-out-' + out.name.replace(/[^a-zA-Z0-9]/g, '_')), out.masterPeak || 0, out.masterRms || 0);
     }
-  } catch (e) { console.error('Endpoints load failed', e); }
+  }
+
+  const routeList = document.getElementById('routes');
+  routeList.innerHTML = '';
+  if (routes.length === 0) {
+    routeList.innerHTML = '<div class="empty">No routes. Click + Add route to connect a source to an output.</div>';
+  } else {
+    for (const s of routes) {
+      routeList.appendChild(routeCard(s));
+      updateMeter(document.getElementById('meter-route-' + s.id), s.peak || 0, s.rms || 0);
+    }
+  }
+
+  drawCables();
+  populateEndpointSelects();
+}
+
+function getOutputEl(name) {
+  return document.querySelector(`.output[data-name="${CSS.escape(name)}"]`);
 }
 
 function drawCables() {
   const svg = document.getElementById('cable-layer');
   svg.innerHTML = '';
-  if (!state || !state.strips) return;
+  if (!state || !state.outputs) return;
 
-  const master = document.getElementById('master-node');
-  if (!master) return;
-  const mRect = master.getBoundingClientRect();
   const pbRect = document.getElementById('patchbay').getBoundingClientRect();
-  const mx = mRect.left - pbRect.left;
-  const my = mRect.top + mRect.height / 2 - pbRect.top;
 
-  for (const s of state.strips) {
-    const src = document.getElementById('strip-' + s.id);
-    if (!src) continue;
+  const routes = state.outputs.reduce((acc, o) => acc.concat(o.strips || []), []);
+  for (const s of routes) {
+    const src = document.getElementById('route-' + s.id);
+    const dst = getOutputEl(s.output);
+    if (!src || !dst) continue;
     const sRect = src.getBoundingClientRect();
+    const dRect = dst.getBoundingClientRect();
     const sx = sRect.right - pbRect.left;
     const sy = sRect.top + sRect.height / 2 - pbRect.top;
-
+    const dx = dRect.left - pbRect.left;
+    const dy = dRect.top + dRect.height / 2 - pbRect.top;
     const c = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    const dx = (mx - sx) * 0.5;
-    c.setAttribute('d', `M ${sx} ${sy} C ${sx + dx} ${sy}, ${mx - dx} ${my}, ${mx} ${my}`);
-    c.classList.baseVal.add(s.peak > 0.01 ? 'active' : '');
+    const ox = (dx - sx) * 0.5;
+    c.setAttribute('d', `M ${sx} ${sy} C ${sx + ox} ${sy}, ${dx - ox} ${dy}, ${dx} ${dy}`);
+    if (s.peak > 0.01) c.classList.baseVal.add('active');
     svg.appendChild(c);
   }
 }
 
+function populateEndpointSelects() {
+  const routeSource = document.getElementById('route-source');
+  const outputSource = document.getElementById('output-source');
+  const routeOutput = document.getElementById('route-output');
+
+  // Only rebuild if empty to avoid clearing user selection.
+  if (routeSource.children.length === 0 && endpoints.length) {
+    for (const ep of endpoints) {
+      const opt = document.createElement('option');
+      opt.value = ep.name;
+      opt.textContent = `${ep.isRender ? '[Render]' : '[Capture]'} ${ep.name}`;
+      routeSource.appendChild(opt);
+    }
+  }
+  if (outputSource.children.length === 0 && endpoints.length) {
+    for (const ep of endpoints) {
+      if (!ep.isRender) continue;
+      const opt = document.createElement('option');
+      opt.value = ep.name;
+      opt.textContent = ep.name;
+      outputSource.appendChild(opt);
+    }
+  }
+
+  routeOutput.innerHTML = '';
+  if (state && state.outputs) {
+    for (const out of state.outputs) {
+      const opt = document.createElement('option');
+      opt.value = out.name;
+      opt.textContent = out.name;
+      routeOutput.appendChild(opt);
+    }
+  }
+}
+
+async function refreshEndpoints() {
+  try {
+    const data = await api('/api/endpoints');
+    endpoints = data.endpoints;
+    document.getElementById('route-source').innerHTML = '';
+    document.getElementById('output-source').innerHTML = '';
+    populateEndpointSelects();
+  } catch (e) { console.error('Endpoints load failed', e); }
+}
+
 window.addEventListener('resize', drawCables);
-document.getElementById('sources').addEventListener('scroll', drawCables, { passive: true });
+document.getElementById('routes').addEventListener('scroll', drawCables, { passive: true });
 document.getElementById('outputs').addEventListener('scroll', drawCables, { passive: true });
 
-document.getElementById('master-volume').addEventListener('change', async (e) => {
-  try { await api('/api/master', { method: 'POST', body: JSON.stringify({ volume: parseFloat(e.target.value) }) }); }
-  catch (err) { setStatus(err.message, 'error'); }
+document.getElementById('btn-add-route').addEventListener('click', async () => {
+  await refreshEndpoints();
+  document.getElementById('route-modal').classList.add('open');
+});
+document.getElementById('route-cancel').addEventListener('click', () => document.getElementById('route-modal').classList.remove('open'));
+document.getElementById('route-ok').addEventListener('click', async () => {
+  const source = document.getElementById('route-source').value;
+  const output = document.getElementById('route-output').value;
+  const name = document.getElementById('route-name').value;
+  const volume = parseFloat(document.getElementById('route-volume').value) || 100;
+  try {
+    await api('/api/strips', { method: 'POST', body: JSON.stringify({ source, output, name, volume }) });
+    document.getElementById('route-modal').classList.remove('open');
+    document.getElementById('route-name').value = '';
+  } catch (e) { alert('Failed to add route: ' + e.message); }
 });
 
-document.getElementById('btn-add').addEventListener('click', () => { refreshEndpoints(); document.getElementById('add-modal').classList.add('open'); });
-document.getElementById('add-cancel').addEventListener('click', () => document.getElementById('add-modal').classList.remove('open'));
-document.getElementById('add-ok').addEventListener('click', addStrip);
+document.getElementById('btn-add-output').addEventListener('click', async () => {
+  await refreshEndpoints();
+  document.getElementById('output-modal').classList.add('open');
+});
+document.getElementById('output-cancel').addEventListener('click', () => document.getElementById('output-modal').classList.remove('open'));
+document.getElementById('output-ok').addEventListener('click', async () => {
+  const name = document.getElementById('output-source').value;
+  try {
+    await api('/api/outputs', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('output-modal').classList.remove('open');
+  } catch (e) { alert('Failed to add output: ' + e.message); }
+});
 
 document.getElementById('btn-save').addEventListener('click', () => document.getElementById('save-modal').classList.add('open'));
 document.getElementById('save-cancel').addEventListener('click', () => document.getElementById('save-modal').classList.remove('open'));

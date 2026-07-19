@@ -32,6 +32,7 @@ struct StripSnapshot {
     StripId             id = 0;
     std::string         name;
     std::string         source;
+    std::string         output; // name of the mixer output this strip feeds
     float               volume = 1.0f;
     bool                muted  = false;
     std::optional<int>  knobIndex;

@@ -153,7 +153,7 @@ struct AudioMixer::Impl {
     std::shared_ptr<Strip> findStripLocked(StripId id) const; // caller holds structureMutex
     std::shared_ptr<Strip> findStrip(StripId id) const;        // takes the lock itself
 
-    static StripSnapshot toSnapshot(const Strip& s);
+    StripSnapshot toSnapshot(const Strip& s) const;
 };
 
 std::shared_ptr<AudioMixer::Impl::Strip> AudioMixer::Impl::findStripLocked(StripId id) const
@@ -170,12 +170,13 @@ std::shared_ptr<AudioMixer::Impl::Strip> AudioMixer::Impl::findStrip(StripId id)
     return findStripLocked(id);
 }
 
-StripSnapshot AudioMixer::Impl::toSnapshot(const Strip& s)
+StripSnapshot AudioMixer::Impl::toSnapshot(const Strip& s) const
 {
     StripSnapshot snap;
     snap.id        = s.id;
     snap.name      = s.name;
     snap.source    = s.source;
+    snap.output    = outputName;
     snap.volume    = s.volume.load();
     snap.muted     = s.muted.load();
     snap.knobIndex = s.knobIndex;
@@ -707,7 +708,7 @@ std::vector<StripSnapshot> AudioMixer::snapshot() const
     std::vector<StripSnapshot> out;
     std::lock_guard<std::mutex> lk(m_impl->structureMutex);
     out.reserve(m_impl->strips.size());
-    for (auto& s : m_impl->strips) out.push_back(Impl::toSnapshot(*s));
+    for (auto& s : m_impl->strips) out.push_back(m_impl->toSnapshot(*s));
     return out;
 }
 
@@ -715,7 +716,7 @@ std::optional<StripSnapshot> AudioMixer::stripSnapshot(StripId id) const
 {
     auto s = m_impl->findStrip(id);
     if (!s) return std::nullopt;
-    return Impl::toSnapshot(*s);
+    return m_impl->toSnapshot(*s);
 }
 
 std::vector<EndpointInfo> AudioMixer::listEndpoints() const

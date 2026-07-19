@@ -1,5 +1,6 @@
 #include "AudioEngine.hpp"
 #include "AudioMixer.hpp"
+#include "AudioMixerMatrix.hpp"
 #include "MixerControlServer.hpp"
 #include "eq.hpp"
 #include "midi_input.hpp"
@@ -437,25 +438,47 @@ static int cmdMidi(const std::string& arg)
 // resolved to the strip's real StripId right here, at the moment the command
 // is typed -- it is not held onto, so it can't go stale like a GUI holding a
 // raw index across multiple actions would.
-static std::vector<anniaudio::core::StripSnapshot> printMixerHelp(const anniaudio::core::AudioMixer& mixer)
+static void printMixerHelp(anniaudio::core::AudioMixerMatrix& matrix)
 {
-    auto strips = mixer.snapshot();
+    auto outputs = matrix.outputs();
     std::printf("\n[mixer] Controls:\n");
-    std::printf("  <1-%zu>+<Enter>  select strip (not yet used in text mode)\n", strips.size());
-    std::printf("  v <strip> <0-200>   set strip volume (strips are 1-%zu)\n", strips.size());
+    std::printf("  v <strip> <0-200>   set strip volume\n");
     std::printf("  m <strip>           toggle mute\n");
-    std::printf("  + / -               master volume +/- 5%%\n");
+    std::printf("  o <output>          select output for master +/-\n");
+    std::printf("  + / -               master volume +/- 5%% on selected output\n");
     std::printf("  ?                   print this help\n");
     std::printf("  q                   quit\n\n");
-    std::printf("[mixer] Current state:\n");
-    std::printf("  Output : %s (master %.0f%%)\n", mixer.outputName().c_str(), mixer.masterVolume() * 100.0f);
+
+    std::printf("[mixer] Outputs:\n");
+    int oidx = 1;
+    for (const auto& outName : outputs) {
+        std::printf("  [%d] %s (master %.0f%%)\n", oidx++, outName.c_str(), matrix.outputMasterVolume(outName) * 100.0f);
+    }
+
+    std::printf("\n[mixer] Routes:\n");
+    auto strips = matrix.snapshot();
     for (size_t i = 0; i < strips.size(); ++i) {
-        std::printf("  [%zu] %-20s  %3.0f%%  %s\n",
-                    i + 1, strips[i].name.c_str(),
+        std::printf("  [%zu] %-20s -> %-20s  %3.0f%%  %s\n",
+                    i + 1, strips[i].name.c_str(), strips[i].output.c_str(),
                     strips[i].volume * 100.0f,
                     strips[i].muted ? "MUTED" : "");
     }
-    return strips;
+}
+
+static anniaudio::core::MixerStripConfig stripConfigFromJson(const nlohmann::json& item)
+{
+    anniaudio::core::MixerStripConfig cfg;
+    cfg.name   = item.value("name", std::string{});
+    cfg.source = item.value("source", std::string{});
+    cfg.volume = item.value("volume", 100.0f) / 100.0f;
+    cfg.muted  = item.value("muted", false);
+    if (item.contains("knobIndex") && !item["knobIndex"].is_null()) {
+        cfg.knobIndex = item["knobIndex"].get<int>();
+    }
+    if (cfg.volume < 0.0f) cfg.volume = 0.0f;
+    if (cfg.volume > 2.0f) cfg.volume = 2.0f;
+    if (cfg.name.empty()) cfg.name = cfg.source;
+    return cfg;
 }
 
 static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portOverride = std::nullopt)
@@ -470,33 +493,6 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         return 1;
     }
 
-    std::string output = j.value("output", std::string{});
-    if (output.empty()) { std::fprintf(stderr, "[mixer] Config missing 'output'\n"); return 1; }
-
-    float master = j.value("master", 100.0f) / 100.0f;
-    if (master < 0.0f) master = 0.0f;
-    if (master > 2.0f) master = 2.0f;
-
-    std::vector<anniaudio::core::MixerStripConfig> strips;
-    if (j.contains("strips") && j["strips"].is_array()) {
-        for (const auto& item : j["strips"]) {
-            anniaudio::core::MixerStripConfig cfg;
-            cfg.name   = item.value("name", std::string{});
-            cfg.source = item.value("source", std::string{});
-            cfg.volume = item.value("volume", 100.0f) / 100.0f;
-            cfg.muted  = item.value("muted", false);
-            if (item.contains("knobIndex") && !item["knobIndex"].is_null()) {
-                cfg.knobIndex = item["knobIndex"].get<int>();
-            }
-            if (cfg.source.empty()) { std::fprintf(stderr, "[mixer] Strip missing 'source'\n"); return 1; }
-            if (cfg.name.empty()) cfg.name = cfg.source;
-            if (cfg.volume < 0.0f) cfg.volume = 0.0f;
-            if (cfg.volume > 2.0f) cfg.volume = 2.0f;
-            strips.push_back(cfg);
-        }
-    }
-    if (strips.empty()) { std::fprintf(stderr, "[mixer] Config missing 'strips' array\n"); return 1; }
-
     // 0 disables the control API entirely. CLI --port overrides the config file.
     uint16_t controlPort = portOverride.value_or(static_cast<uint16_t>(j.value("controlPort", 8850)));
 
@@ -506,23 +502,90 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         return 1;
     }
 
-    anniaudio::core::AudioMixer mixer;
-    if (!mixer.init(output)) {
-        std::fprintf(stderr, "[mixer] Failed to init output '%s'\n", output.c_str());
-        CoUninitialize();
-        return 1;
-    }
-    mixer.setMasterVolume(master);
+    anniaudio::core::AudioMixerMatrix matrix;
 
-    for (const auto& cfg : strips) {
-        if (!mixer.addStrip(cfg).has_value()) {
-            std::fprintf(stderr, "[mixer] Failed to add strip '%s'\n", cfg.name.c_str());
+    // --- outputs ---------------------------------------------------------------
+    std::vector<std::string> outputNames;
+    std::vector<float> outputMasters;
+    if (j.contains("outputs") && j["outputs"].is_array()) {
+        for (const auto& item : j["outputs"]) {
+            std::string name;
+            float master = 1.0f;
+            if (item.is_string()) {
+                name = item.get<std::string>();
+            } else if (item.is_object()) {
+                name = item.value("name", std::string{});
+                master = item.value("master", 100.0f) / 100.0f;
+            }
+            if (name.empty()) { std::fprintf(stderr, "[mixer] Output missing name\n"); CoUninitialize(); return 1; }
+            if (master < 0.0f) master = 0.0f;
+            if (master > 2.0f) master = 2.0f;
+            outputNames.push_back(name);
+            outputMasters.push_back(master);
+        }
+    } else if (j.contains("output") && j["output"].is_string()) {
+        std::string name = j["output"].get<std::string>();
+        float master = j.value("master", 100.0f) / 100.0f;
+        if (master < 0.0f) master = 0.0f;
+        if (master > 2.0f) master = 2.0f;
+        outputNames.push_back(name);
+        outputMasters.push_back(master);
+    }
+
+    if (outputNames.empty()) { std::fprintf(stderr, "[mixer] Config missing 'outputs' or 'output'\n"); CoUninitialize(); return 1; }
+
+    for (size_t i = 0; i < outputNames.size(); ++i) {
+        if (!matrix.addOutput(outputNames[i])) {
+            std::fprintf(stderr, "[mixer] Failed to init output '%s'\n", outputNames[i].c_str());
             CoUninitialize();
             return 1;
         }
+        matrix.setOutputMasterVolume(outputNames[i], outputMasters[i]);
     }
 
-    if (!mixer.start()) {
+    // --- routes / strips -------------------------------------------------------
+    struct RouteSpec {
+        std::string source;
+        std::string output;
+        anniaudio::core::MixerStripConfig cfg;
+    };
+    std::vector<RouteSpec> routes;
+
+    auto addRouteOrStrip = [&](const nlohmann::json& item, const std::string& defaultOutput) {
+        RouteSpec r;
+        r.cfg = stripConfigFromJson(item);
+        r.source = r.cfg.source;
+        r.output = item.value("output", defaultOutput);
+        if (r.source.empty()) {
+            std::fprintf(stderr, "[mixer] Route missing 'source'\n");
+            return false;
+        }
+        if (r.output.empty()) r.output = defaultOutput;
+        routes.push_back(r);
+        return true;
+    };
+
+    if (j.contains("routes") && j["routes"].is_array()) {
+        for (const auto& item : j["routes"]) {
+            if (!addRouteOrStrip(item, "")) { CoUninitialize(); return 1; }
+        }
+    }
+    if (j.contains("strips") && j["strips"].is_array()) {
+        for (const auto& item : j["strips"]) {
+            if (!addRouteOrStrip(item, outputNames.empty() ? "" : outputNames[0])) { CoUninitialize(); return 1; }
+        }
+    }
+
+    if (routes.empty()) { std::fprintf(stderr, "[mixer] Config missing 'routes' or 'strips' array\n"); CoUninitialize(); return 1; }
+
+    for (const auto& r : routes) {
+        if (!matrix.addRoute(r.source, r.output, r.cfg).has_value()) {
+            std::fprintf(stderr, "[mixer] Failed to add route '%s' -> '%s'\n", r.source.c_str(), r.output.c_str());
+            // Keep going so other routes can still work.
+        }
+    }
+
+    if (!matrix.start()) {
         std::fprintf(stderr, "[mixer] Failed to start mixer\n");
         CoUninitialize();
         return 1;
@@ -530,16 +593,17 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
 
     std::unique_ptr<anniaudio::core::MixerControlServer> controlServer;
     if (controlPort != 0) {
-        controlServer = std::make_unique<anniaudio::core::MixerControlServer>(mixer);
+        controlServer = std::make_unique<anniaudio::core::MixerControlServer>(matrix);
         if (!controlServer->start(controlPort)) {
             std::fprintf(stderr, "[mixer] Warning: control API could not bind port %u; continuing without it\n", controlPort);
             controlServer.reset();
         }
     }
 
-    std::printf("[mixer] Running. Commands: v <strip> <vol>, m <strip>, +/=, -, ?, q\n");
-    printMixerHelp(mixer);
+    std::printf("[mixer] Running. Commands: v <strip> <vol>, m <strip>, o <out>, +/=, -, ?, q\n");
+    printMixerHelp(matrix);
 
+    std::string selectedOutput = outputNames.empty() ? "" : outputNames[0];
     std::string line;
     while (std::getline(std::cin, line)) {
         // trim leading whitespace
@@ -552,29 +616,48 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         if (cmdChar == 'q') break;
 
         if (cmdChar == '?') {
-            printMixerHelp(mixer);
+            printMixerHelp(matrix);
+            continue;
+        }
+
+        if (cmdChar == 'o') {
+            auto outputs = matrix.outputs();
+            std::stringstream ss(a.substr(1));
+            int idx = 0; ss >> idx;
+            if (idx < 1 || idx > static_cast<int>(outputs.size())) {
+                std::fprintf(stderr, "[mixer] Output index must be between 1 and %zu\n", outputs.size());
+            } else {
+                selectedOutput = outputs[idx - 1];
+                std::printf("[mixer] Selected output: %s\n", selectedOutput.c_str());
+            }
             continue;
         }
 
         if (cmdChar == '+' || cmdChar == '=') {
-            float v = mixer.masterVolume() + 0.05f;
+            if (selectedOutput.empty()) {
+                std::fprintf(stderr, "[mixer] No output selected (use 'o <n>')\n"); continue;
+            }
+            float v = matrix.outputMasterVolume(selectedOutput) + 0.05f;
             if (v > 2.0f) v = 2.0f;
-            mixer.setMasterVolume(v);
-            std::printf("[mixer] Master volume: %.0f%%\n", v * 100.0f);
+            matrix.setOutputMasterVolume(selectedOutput, v);
+            std::printf("[mixer] %s master: %.0f%%\n", selectedOutput.c_str(), v * 100.0f);
             continue;
         }
         if (cmdChar == '-') {
-            float v = mixer.masterVolume() - 0.05f;
+            if (selectedOutput.empty()) {
+                std::fprintf(stderr, "[mixer] No output selected (use 'o <n>')\n"); continue;
+            }
+            float v = matrix.outputMasterVolume(selectedOutput) - 0.05f;
             if (v < 0.0f) v = 0.0f;
-            mixer.setMasterVolume(v);
-            std::printf("[mixer] Master volume: %.0f%%\n", v * 100.0f);
+            matrix.setOutputMasterVolume(selectedOutput, v);
+            std::printf("[mixer] %s master: %.0f%%\n", selectedOutput.c_str(), v * 100.0f);
             continue;
         }
 
         if (cmdChar == 'm' || cmdChar == 'v') {
             // format: m <1-based strip>
             // format: v <1-based strip> <0-200>
-            auto strips = mixer.snapshot();
+            auto strips = matrix.snapshot();
             std::stringstream ss(a.substr(1));
             int idx = 0; ss >> idx;
             if (idx < 1 || (size_t)idx > strips.size()) {
@@ -582,17 +665,19 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
                 continue;
             }
             const auto& target = strips[idx - 1];
+            anniaudio::core::AudioMixerMatrix::RouteId id =
+                static_cast<anniaudio::core::AudioMixerMatrix::RouteId>(target.id);
 
             if (cmdChar == 'm') {
                 bool mute = !target.muted;
-                mixer.setStripMuted(target.id, mute);
+                matrix.setRouteMuted(id, mute);
                 std::printf("[mixer] [%d] %s\n", idx, mute ? "MUTED" : "unmuted");
             } else {
                 int volInt = 0; ss >> volInt;
                 float vol = volInt / 100.0f;
                 if (vol < 0.0f) vol = 0.0f;
                 if (vol > 2.0f) vol = 2.0f;
-                mixer.setStripVolume(target.id, vol);
+                matrix.setRouteVolume(id, vol);
                 std::printf("[mixer] [%d] volume %.0f%%\n", idx, vol * 100.0f);
             }
             continue;
@@ -603,7 +688,7 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
 
     std::printf("[mixer] Stopping...\n");
     if (controlServer) controlServer->stop();
-    mixer.stop();
+    matrix.stop();
     CoUninitialize();
     std::printf("[mixer] Stopped.\n");
     return 0;

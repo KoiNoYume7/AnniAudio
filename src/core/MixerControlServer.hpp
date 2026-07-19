@@ -6,9 +6,9 @@
 
 namespace anniaudio::core {
 
-class AudioMixer;
+class AudioMixerMatrix;
 
-// Local HTTP + Server-Sent-Events control API for a running AudioMixer.
+// Local HTTP + Server-Sent-Events control API for a running AudioMixerMatrix.
 // See docs/MIXER-CONTROL-API.md for the full design and endpoint list.
 //
 // Always binds to 127.0.0.1 only. There is no authentication layer by
@@ -17,7 +17,7 @@ class AudioMixer;
 // the local machine. Do not bind this to any other interface.
 class MixerControlServer {
 public:
-    explicit MixerControlServer(AudioMixer& mixer);
+    explicit MixerControlServer(AudioMixerMatrix& matrix);
     ~MixerControlServer();
 
     MixerControlServer(const MixerControlServer&) = delete;

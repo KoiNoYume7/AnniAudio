@@ -168,33 +168,30 @@ already-vendored `nlohmann/json`.
 
 All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4xx/5xx status.
 
-| Method   | Path                    | Body                                   | Description |
-|----------|-------------------------|-----------------------------------------|--------------|
-| `GET`    | `/api/state`            | —                                        | Full snapshot: `{ output, master, strips: [...] }` |
-| `GET`    | `/api/endpoints`        | —                                        | Live WASAPI endpoints, for the source picker |
-| `GET`    | `/api/events`           | —                                        | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
-| `POST`   | `/api/strips`           | `{ name?, source, volume?, muted?, knobIndex? }` | Add a strip. Returns the new `StripSnapshot` (with `id`) or a 4xx error |
-| `PATCH`  | `/api/strips/{id}`      | `{ name?, volume?, muted?, knobIndex? }` | Partial update of an existing strip |
-| `DELETE` | `/api/strips/{id}`      | —                                        | Remove a strip |
-| `POST`   | `/api/master`           | `{ volume }`                             | Set master volume |
-| `POST`   | `/api/presets/save`     | `{ path }`                               | Write current live state to a `config/mixers/*.json` preset file |
+| Method   | Path                    | Body                                           | Description |
+|----------|-------------------------|-------------------------------------------------|-------------|
+| `GET`    | `/api/state`            | —                                               | Full snapshot: `{ running, outputs: [{ name, master, masterPeak, masterRms, strips: [...] }] }` |
+| `GET`    | `/api/endpoints`        | —                                               | Live WASAPI endpoints, for the source picker |
+| `GET`    | `/api/events`           | —                                               | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
+| `POST`   | `/api/outputs`          | `{ name }`                                      | Add a render output by endpoint name |
+| `DELETE` | `/api/outputs`          | `{ name }`                                      | Remove an output and all routes feeding it |
+| `POST`   | `/api/outputs/master`   | `{ name, volume }`                              | Set an output's master volume |
+| `POST`   | `/api/strips`           | `{ source, output, name?, volume?, muted?, knobIndex? }` | Add a route from a source to an output |
+| `PATCH`  | `/api/strips/{id}`      | `{ name?, volume?, muted?, knobIndex? }`        | Partial update of an existing route |
+| `DELETE` | `/api/strips/{id}`      | —                                               | Remove a route |
+| `POST`   | `/api/presets/save`     | `{ path }`                                      | Write current live state to a `config/mixers/*.json` preset file |
 
-Note: `source` is **not** patchable on an existing strip in v1 — changing a strip's source is
-modeled as remove + add (fewer code paths, and the GUI can implement "change source" as
-delete-then-recreate under the hood without the user noticing). This can be revisited if it
-turns out to be a common enough action to deserve its own endpoint.
+Note: `source` is **not** patchable on an existing route in v1 — changing a source is modeled as
+remove + add.
 
-**Optional `knobIndex` field.** Each strip may carry an optional `knobIndex: 0..5 | null` in its
+**Optional `knobIndex` field.** Each route may carry an optional `knobIndex: 0..5 | null` in its
 config/state, settable from the GUI ("assign to knob N"). This gives the Loupedeck plugin (or any
-future physical controller) a stable mapping from "the 3rd knob" to a specific strip that
-survives strips being reordered, added, or removed — the plugin only ever looks at
-`knobIndex`, never at list position. Strips without a `knobIndex` are simply not controllable
-from the device.
+future physical controller) a stable mapping from a physical control to a specific route that
+survives routes being reordered, added, or removed.
 
 **SSE, not polling.** `/api/events` is the source of truth for "did anything change" for both the
 GUI and the future plugin. Every structural or volume/mute change broadcasts a `state` event to
-all connected listeners. This avoids every client needing its own poll loop and keeps multiple
-simultaneous controllers (GUI open + Loupedeck plugin active) in sync with each other.
+all connected listeners.
 
 **COM/WASAPI threading note.** HTTP worker threads that touch `IMMDeviceEnumerator`/`IMMDevice`
 (e.g. `/api/endpoints`, or preparing a new strip for `POST /api/strips`) must call
@@ -206,19 +203,21 @@ worker threads are plain OS threads with no COM initialization by default.
 
 ## GUI
 
-A new, dedicated mixer page (not bolted onto the existing patchbay `scripts/gui.html`):
+`scripts/mixer.html` is a MIXLINE-style patchbay page:
 
-- One fader + mute button + name + remove button per strip, plus a master fader.
-- "Add strip" opens a picker backed by `GET /api/endpoints`.
-- "Assign to knob" per strip (sets `knobIndex`), for when the Loupedeck plugin exists.
-- "Save as preset" writes the current state to a file under `config/mixers/`.
-- Connects to `/api/events` (SSE) on load and keeps its UI in sync with any other connected
-  client (e.g. the Loupedeck plugin) live.
+- **Routes** on the left: one node per source-to-output connection, showing source name,
+  destination output, a live level meter, a volume fader, mute, rename and remove.
+- **Outputs** on the right: one node per render output, with a master fader and live meter.
+- **Cables**: SVG Bezier curves connecting each route node to its output node; cables glow
+  when signal is present.
+- **Add route** opens a picker backed by `GET /api/endpoints` and lets you choose source and
+  output.
+- **Add output** adds a new render endpoint to the matrix.
+- **Save as preset** writes the current state to a file under `config/mixers/`.
+- Connects to `/api/events` (SSE) on load and keeps the patchbay in sync with any other
+  connected client live.
 
-Talks directly to the control API over `fetch`/`EventSource` — no PowerShell process in the
-middle. This removes a moving part `scripts/gui-server.ps1` currently has (per-route child
-process management via stdin) for the mixer specifically; the existing patchbay GUI/server is
-untouched for now.
+Talks directly to the control API over `fetch`/`EventSource`.
 
 ---
 
@@ -241,10 +240,12 @@ Once the control API exists, the plugin (C# via the Logi Actions SDK, scaffolded
 
 ## Migration notes
 
-- Removed: the `"midi"` block in `config/mixers/*.json` and its handling in `cmdMixer`
-  (`route_cli.cpp`). Mixer JSON files are now pure presets: `output`, `master`, `strips`.
+- Removed: the `"midi"` block in `config/mixers/*.json` and its handling in `cmdMixer`.
+  Mixer JSON files are now pure presets. The new preferred shape is `outputs` (array of endpoint
+  names/objects) and `routes` (source-to-output connections), but the legacy single-output shape
+  (`output`, `master`, `strips`) is still accepted for backward compatibility.
 - Kept: `route_cli midi list` / `route_cli midi <device-hint>` as a standalone diagnostic with no
   relationship to the mixer.
-- `AudioMixer`'s `size_t`-indexed strip API has been replaced by the `StripId`-based one
-  described above, and `route_cli mixer`'s interactive commands resolve position → `StripId` at the
-  point of use.
+- `AudioMixer`'s `size_t`-indexed strip API has been replaced by a `StripId`-based one, and
+  `route_cli mixer` now drives an `AudioMixerMatrix` that owns one `AudioMixer` per output.  The
+  interactive text commands resolve position → route `id` at the point of use.
