@@ -11,6 +11,13 @@ if not exist "build\bin\Release\route_cli.exe" (
 )
 
 set CONFIG=%~1
-if "%CONFIG%"=="" set CONFIG=config\mixers\default.json
+if "%CONFIG%"=="" (
+    if exist "config\mixers\main.json" (
+        set CONFIG=config\mixers\main.json
+    ) else (
+        set CONFIG=config\mixers\default.json
+    )
+)
 
+echo Starting mixer with %CONFIG% on port 8850...
 start "AnniAudio Mixer" "build\bin\Release\route_cli.exe" mixer "%CONFIG%" --port 8850

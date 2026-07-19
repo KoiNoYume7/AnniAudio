@@ -266,12 +266,19 @@ void MixerControlServer::Impl::registerRoutes()
         res.set_chunked_content_provider("text/event-stream",
             [this, client, clientId](size_t, httplib::DataSink& sink) {
                 std::unique_lock<std::mutex> lk(client->mutex);
-                client->cv.wait(lk, [&] { return !client->queue.empty() || client->closed; });
+                bool got = client->cv.wait_for(lk, std::chrono::seconds(5),
+                    [&] { return !client->queue.empty() || client->closed; });
                 if (client->closed) return false;
-                auto chunk = std::move(client->queue.front());
-                client->queue.pop_front();
+                if (got && !client->queue.empty()) {
+                    auto chunk = std::move(client->queue.front());
+                    client->queue.pop_front();
+                    lk.unlock();
+                    return sink.write(chunk.data(), chunk.size());
+                }
+                // heartbeat: keep idle SSE connections alive
                 lk.unlock();
-                return sink.write(chunk.data(), chunk.size());
+                std::string hb = ": hb\n\n";
+                return sink.write(hb.data(), hb.size());
             },
             [this, client, clientId](bool) {
                 std::lock_guard<std::mutex> lk(client->mutex);

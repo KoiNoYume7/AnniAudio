@@ -65,7 +65,8 @@ def api_worker(port):
             break
         method, path, body = task
         try:
-            kwargs = {"timeout": 15}
+            # Long timeout for structural changes that open/close WASAPI devices.
+            kwargs = {"timeout": (5, 60)}
             if body is not None:
                 kwargs["json"] = body
             r = session.request(method, base + path, **kwargs)
@@ -100,7 +101,7 @@ def sse_worker(port):
         try:
             with state_lock:
                 status_text = "SSE connecting..."
-            r = session.get(base + "/api/events", stream=True, timeout=20)
+            r = session.get(base + "/api/events", stream=True, timeout=(5, None))
             if r.status_code != 200:
                 with state_lock:
                     status_text = f"SSE {r.status_code}"
@@ -131,7 +132,7 @@ def sse_worker(port):
 def fetch_endpoints(port):
     global endpoints
     try:
-        r = requests.get(BASE.format(port=port) + "/api/endpoints", timeout=5)
+        r = requests.get(BASE.format(port=port) + "/api/endpoints", timeout=15)
         if r.ok:
             with state_lock:
                 endpoints = r.json().get("endpoints", [])
@@ -143,7 +144,7 @@ def fetch_endpoints(port):
 def fetch_applications(port):
     global applications
     try:
-        r = requests.get(BASE.format(port=port) + "/api/applications", timeout=5)
+        r = requests.get(BASE.format(port=port) + "/api/applications", timeout=15)
         if r.ok:
             with state_lock:
                 applications = r.json().get("applications", [])
@@ -353,14 +354,15 @@ def confirm_dialog(stdscr, text):
 # Main TUI
 # ---------------------------------------------------------------------------
 
-def build_group_rows(local_state):
+def build_group_rows(local_state, expanded_ids):
     rows = []
     for g in local_state.get("groups", []):
         rows.append(("group", g))
-        for iid in g.get("inputIds", []):
-            inp = input_for_id(iid, local_state)
-            if inp:
-                rows.append(("input", g, inp))
+        if g.get("id") in expanded_ids:
+            for iid in g.get("inputIds", []):
+                inp = input_for_id(iid, local_state)
+                if inp:
+                    rows.append(("input", g, inp))
     return rows
 
 
@@ -401,6 +403,7 @@ def main(stdscr, port):
     sel_output_idx = 0
     group_offset = 0
     output_offset = 0
+    expanded_groups = set()
 
     t_api = threading.Thread(target=api_worker, args=(port,), daemon=True)
     t_api.start()
@@ -444,7 +447,7 @@ def main(stdscr, port):
 
         groups = local_state.get("groups", [])
         outputs = local_state.get("outputs", [])
-        group_rows = build_group_rows(local_state)
+        group_rows = build_group_rows(local_state, expanded_groups)
 
         if sel_group_idx >= len(group_rows):
             sel_group_idx = max(0, len(group_rows) - 1)
@@ -479,6 +482,9 @@ def main(stdscr, port):
             if is_group:
                 g = item[1]
                 is_sel = pane == 0 and line == sel_group_idx
+                gid = g.get("id")
+                expanded = gid in expanded_groups
+                arrow = "▼" if expanded else "▶"
                 name = g.get("name", "?")[:18]
                 vol = g.get("volume", 100)
                 muted = g.get("muted", False)
@@ -486,14 +492,18 @@ def main(stdscr, port):
                 pct = dbm_percent(peak)
                 bar = meter_bar(pct, 8)
                 vbar = vol_bar(vol, 10)
-                out_list = ", ".join(g.get("outputIds", []))[:mid - 48]
+                out_list = ", ".join(g.get("outputIds", []))[:mid - 50]
                 color = g.get("color", "#3b82f6")
                 attr = group_color_attr(color, pair_cache, selected=is_sel)
+                n_inputs = len(g.get("inputIds", []))
+                input_hint = f" {n_inputs} in" if n_inputs > 1 else ""
                 try:
-                    stdscr.addstr(y, 1, " ", attr)
-                    stdscr.addstr(y, 2, f"{name:<18} {vbar} {vol:>3.0f}% {bar} {'M' if muted else ' '}", attr)
+                    stdscr.addstr(y, 1, f"{arrow} ", attr)
+                    stdscr.addstr(y, 4, f"{name:<18} {vbar} {vol:>3.0f}% {bar} {'M' if muted else ' '}", attr)
                     if out_list:
                         stdscr.addstr(y, mid - 2 - len(out_list), f"→ {out_list}", attr | curses.A_DIM)
+                    if input_hint:
+                        stdscr.addstr(y, mid - 10, input_hint, attr | curses.A_DIM)
                 except curses.error:
                     pass
             else:
@@ -556,7 +566,7 @@ def main(stdscr, port):
 
         # Footer
         footer = (
-            "Tab:panes  j/k:nav  +/-|v:vol  m:mute  i:add input  g:add group  "
+            "Tab:panes  j/k:nav  +/-|v:vol  m:mute  Enter/e:expand  i:add input  g:add group  "
             "o:add output  c:connect  r:rename  d:delete  s:save  q:quit"
         )
         try:
@@ -643,6 +653,17 @@ def main(stdscr, port):
                     g = item[1]
                     api_call("PATCH", f"/api/groups/{g['id']}", {"muted": not g.get("muted", False)})
 
+        elif ch in (ord('e'), ord('E'), 10, curses.KEY_ENTER):
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    gid = g.get("id")
+                    if gid in expanded_groups:
+                        expanded_groups.remove(gid)
+                    else:
+                        expanded_groups.add(gid)
+
         # Add / connect / rename / delete / save
         elif ch == ord('i'):
             if not group_rows:
@@ -660,23 +681,27 @@ def main(stdscr, port):
             if val is None:
                 continue
             name = val or source
-            # add input, then add to group
-            r = requests.post(BASE.format(port=port) + "/api/inputs",
-                              json={"name": name, "type": "device", "source": source}, timeout=5)
-            if r.ok:
-                inp = r.json()
-                iid = inp.get("id")
-                if iid is not None:
-                    ids = list(g.get("inputIds", []))
-                    if iid not in ids:
-                        ids.append(iid)
-                        api_call("PATCH", f"/api/groups/{g['id']}", {"inputIds": ids})
-            else:
+            # add input, then add to group (input add is cheap; the route rebuild is async)
+            try:
+                r = requests.post(BASE.format(port=port) + "/api/inputs",
+                                  json={"name": name, "type": "device", "source": source}, timeout=15)
+                if r.ok:
+                    inp = r.json()
+                    iid = inp.get("id")
+                    if iid is not None:
+                        ids = list(g.get("inputIds", []))
+                        if iid not in ids:
+                            ids.append(iid)
+                            api_call("PATCH", f"/api/groups/{g['id']}", {"inputIds": ids})
+                else:
+                    with state_lock:
+                        try:
+                            last_error = r.json().get("error", str(r.status_code))
+                        except Exception:
+                            last_error = str(r.status_code)
+            except Exception as e:
                 with state_lock:
-                    try:
-                        last_error = r.json().get("error", str(r.status_code))
-                    except Exception:
-                        last_error = str(r.status_code)
+                    last_error = str(e)
         elif ch == ord('g'):
             val = input_dialog(stdscr, "New group name")
             if val:

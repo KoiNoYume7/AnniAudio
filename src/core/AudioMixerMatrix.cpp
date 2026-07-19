@@ -80,6 +80,17 @@ MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g) {
     return cfg;
 }
 
+const char* palette[] = {
+    "#3b82f6", "#ef4444", "#22c55e", "#eab308", "#a855f7",
+    "#ec4899", "#06b6d4", "#f97316", "#84cc16", "#6366f1"
+};
+std::atomic<size_t> paletteIndex{0};
+
+std::string nextColor() {
+    size_t i = paletteIndex.fetch_add(1) % (sizeof(palette) / sizeof(palette[0]));
+    return palette[i];
+}
+
 } // namespace
 
 struct AudioMixerMatrix::Impl {
@@ -270,7 +281,9 @@ std::optional<GroupId> AudioMixerMatrix::addGroup(const GroupConfig& cfg)
 {
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     GroupId id = m_impl->nextGroupId.fetch_add(1);
-    m_impl->groups[id] = cfg;
+    GroupConfig gc = cfg;
+    if (gc.color.empty()) gc.color = nextColor();
+    m_impl->groups[id] = std::move(gc);
     rebuildGroupRoutesLocked(id);
     maybeAutosave();
     return id;
@@ -698,6 +711,7 @@ bool AudioMixerMatrix::load(const std::string& path)
 
             GroupConfig gc;
             gc.name = r.value("name", ic.name);
+            gc.color = nextColor();
             gc.volume = r.value("volume", 100.0f) / 100.0f;
             gc.muted = r.value("muted", false);
             gc.inputIds = { iid };
@@ -749,6 +763,7 @@ bool AudioMixerMatrix::load(const std::string& path)
                 if (g.contains("knobIndex") && !g["knobIndex"].is_null()) {
                     gc.knobIndex = g["knobIndex"].get<int>();
                 }
+                if (gc.color.empty()) gc.color = nextColor();
                 if (gc.name.empty()) continue;
                 GroupId gid = g.value("id", 0);
                 if (gid == 0) gid = m_impl->nextGroupId.fetch_add(1);
