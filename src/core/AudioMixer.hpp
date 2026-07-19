@@ -35,6 +35,8 @@ struct StripSnapshot {
     float               volume = 1.0f;
     bool                muted  = false;
     std::optional<int>  knobIndex;
+    float               peak = 0.0f; // post-fader peak level (0..1)
+    float               rms  = 0.0f; // post-fader RMS level (0..1)
 };
 
 // Multi-source WASAPI mixer.
@@ -91,6 +93,8 @@ public:
 
     void  setMasterVolume(float v);
     float masterVolume() const;
+    float masterPeak() const; // post-master peak level (0..1)
+    float masterRms() const;  // post-master RMS level (0..1)
 
     size_t stripCount() const noexcept;
     std::vector<StripSnapshot>   snapshot() const;

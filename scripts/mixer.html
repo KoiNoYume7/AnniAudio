@@ -15,6 +15,8 @@
     --accent2: #10b981;
     --danger: #ef4444;
     --border: #2a2e3a;
+    --cable: #6366f1;
+    --cable-active: #22d3ee;
     --input-bg: #0f1118;
   }
   * { box-sizing: border-box; }
@@ -38,8 +40,9 @@
     align-items: center;
     justify-content: space-between;
     flex-shrink: 0;
+    gap: 1rem;
   }
-  header h1 { margin: 0; font-size: 1.25rem; }
+  header h1 { margin: 0; font-size: 1.2rem; letter-spacing: -0.01em; }
   .toolbar { display: flex; align-items: center; gap: 0.75rem; }
   .status { font-size: 0.85rem; color: var(--muted); }
   .status.connected { color: var(--accent2); }
@@ -60,117 +63,149 @@
   button.danger:hover { filter: brightness(1.1); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  #mixer {
+  #patchbay {
     flex: 1;
-    display: flex;
+    display: grid;
+    grid-template-columns: 260px 1fr 260px;
     gap: 1rem;
     padding: 1rem;
-    overflow-x: auto;
-    align-items: stretch;
+    position: relative;
+    overflow: hidden;
   }
-  .strip, .master-strip {
+  #cables {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #cables path {
+    fill: none;
+    stroke: var(--cable);
+    stroke-width: 3;
+    stroke-linecap: round;
+    opacity: 0.75;
+    transition: stroke 0.1s, opacity 0.1s, stroke-width 0.1s;
+    filter: drop-shadow(0 0 2px rgba(99,102,241,0.5));
+  }
+  #cables path.active {
+    stroke: var(--cable-active);
+    opacity: 1;
+    stroke-width: 4;
+    filter: drop-shadow(0 0 5px rgba(34,211,238,0.7));
+  }
+
+  .column {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 0.75rem;
-    width: 120px;
-    min-width: 120px;
     display: flex;
     flex-direction: column;
-    padding: 0.75rem 0.5rem;
-    gap: 0.6rem;
+    overflow: hidden;
+    z-index: 10;
     position: relative;
   }
-  .strip.muted { opacity: 0.65; }
-  .strip-header { text-align: center; min-height: 3.5rem; }
-  .strip-name {
-    width: 100%;
-    text-align: center;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid transparent;
-    color: var(--text);
+  .col-header {
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .node-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .node {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 130px;
+  }
+  .node.output { border-color: var(--accent); }
+  .node-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .node-title {
     font-weight: 600;
     font-size: 0.9rem;
-    padding: 0.2rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .strip-name:hover, .strip-name:focus {
-    border-bottom-color: var(--border);
-    outline: none;
-  }
-  .strip-source {
+  .node-sub {
     font-size: 0.7rem;
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: 0.2rem;
   }
-  .fader-wrap {
+  .node-body {
     flex: 1;
     display: flex;
     align-items: center;
-    justify-content: center;
-    min-height: 120px;
+    gap: 0.75rem;
   }
-  .fader-wrap input[type=range] {
-    transform: rotate(-90deg);
-    width: 180px;
-    height: 6px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: var(--border);
-    border-radius: 3px;
-    outline: none;
-  }
-  .fader-wrap input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-  }
-  .fader-wrap input[type=range]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-    border: none;
-  }
-  .value-label {
-    text-align: center;
-    font-size: 0.85rem;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-  .strip-controls { display: flex; gap: 0.4rem; justify-content: center; }
-  .btn-mute {
-    flex: 1;
-    font-size: 0.75rem;
-    padding: 0.35rem 0.3rem;
-  }
-  .btn-mute.muted { background: var(--danger); border-color: var(--danger); color: white; }
-  .knob-select {
-    width: 100%;
-    font-size: 0.75rem;
-    padding: 0.25rem;
-  }
-  #master-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
+
+  .meter {
+    width: 12px;
+    height: 90px;
+    background: var(--input-bg);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
     flex-shrink: 0;
   }
-  #master-section label { font-size: 0.85rem; color: var(--muted); }
-  #master-fader { display: flex; align-items: center; gap: 1rem; }
-  #master-fader input[type=range] {
+  .meter-fill {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: linear-gradient(to top, var(--accent2) 0%, #facc15 60%, var(--danger) 100%);
+    border-radius: 0 0 6px 6px;
+    transition: height 0.05s linear;
+  }
+  .meter-peak {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: #fff;
+    border-radius: 2px;
+    transition: bottom 0.05s linear;
+  }
+
+  .controls {
     flex: 1;
-    max-width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  .fader-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+  }
+  .fader-row input[type=range] {
+    flex: 1;
     -webkit-appearance: none;
     appearance: none;
     height: 6px;
@@ -178,23 +213,51 @@
     border-radius: 3px;
     outline: none;
   }
-  #master-fader input[type=range]::-webkit-slider-thumb {
+  .fader-row input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
-    background: var(--accent2);
+    background: var(--accent);
     cursor: pointer;
   }
-  #master-fader input[type=range]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--accent2);
-    cursor: pointer;
-    border: none;
+  .fader-row span { width: 2.5rem; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .btn-mute {
+    font-size: 0.75rem;
+    padding: 0.3rem 0.5rem;
   }
+  .btn-mute.muted { background: var(--danger); border-color: var(--danger); color: white; }
+
+  .port {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--border);
+    border: 2px solid var(--muted);
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 20;
+    cursor: crosshair;
+    transition: transform 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .port:hover { transform: translateY(-50%) scale(1.3); border-color: var(--cable-active); background: var(--cable-active); }
+  .port.in { left: -8px; }
+  .port.out { right: -8px; }
+  .port.connected { background: var(--cable-active); border-color: var(--cable-active); box-shadow: 0 0 8px var(--cable-active); }
+
+  .add-source {
+    margin: 0.75rem;
+    padding: 0.6rem;
+    text-align: center;
+    border: 2px dashed var(--border);
+    border-radius: 0.5rem;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .add-source:hover { border-color: var(--accent); color: var(--text); }
 
   .modal-overlay {
     position: fixed;
@@ -225,10 +288,11 @@
   .empty {
     color: var(--muted);
     font-style: italic;
-    padding: 2rem;
+    padding: 1rem;
     text-align: center;
-    width: 100%;
+    font-size: 0.85rem;
   }
+  .hint { padding: 0.5rem 1rem; font-size: 0.8rem; color: var(--muted); text-align: center; border-bottom: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -237,25 +301,47 @@
   <div class="toolbar">
     <span class="status" id="status">Disconnected</span>
     <input id="port" type="number" value="8850" min="0" max="65535" style="width:80px" title="Control API port">
-    <button id="btn-save" title="Save current state as a mixer preset">Save preset</button>
-    <button id="btn-add" class="primary">+ Add strip</button>
+    <button id="btn-save">Save preset</button>
   </div>
 </header>
 
-<div id="master-section">
-  <label>Master output: <strong id="master-output">—</strong></label>
-  <div id="master-fader">
-    <span>Master</span>
-    <input id="master-volume" type="range" min="0" max="200" value="100">
-    <span id="master-value" class="value-label">100%</span>
+<div id="patchbay">
+  <svg id="cables"><g id="cable-layer"></g></svg>
+
+  <div class="column" id="col-sources">
+    <div class="col-header">Sources <span class="status" id="source-count">0</span></div>
+    <div class="node-list" id="sources"></div>
+    <div class="add-source" id="btn-add">+ Add source</div>
+  </div>
+
+  <div class="column" id="col-workspace" style="background:transparent; border:none; z-index:1;"></div>
+
+  <div class="column" id="col-outputs">
+    <div class="col-header">Outputs</div>
+    <div class="node-list" id="outputs">
+      <div class="node output" id="master-node" data-type="master">
+        <div class="port in" style="left:-8px;"></div>
+        <div class="node-header">
+          <span class="node-title" id="master-title">Master</span>
+        </div>
+        <div class="node-sub" id="master-output-name">—</div>
+        <div class="node-body">
+          <div class="meter" id="master-meter"><div class="meter-fill"></div><div class="meter-peak"></div></div>
+          <div class="controls">
+            <div class="fader-row">
+              <input id="master-volume" type="range" min="0" max="200" value="100">
+              <span id="master-value">100%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
-<div id="mixer"><div class="empty">Loading mixer state...</div></div>
-
 <div class="modal-overlay" id="add-modal">
   <div class="modal">
-    <h2>Add strip</h2>
+    <h2>Add source</h2>
     <div class="modal-row">
       <label>Source endpoint</label>
       <select id="add-source"></select>
@@ -298,7 +384,6 @@ portInput.value = port;
 let base = `http://127.0.0.1:${port}`;
 let state = null;
 let es = null;
-let ignoreNextEdit = null; // strip id that is mid-drag and should not re-render from SSE
 
 function setStatus(text, cls) {
   const s = document.getElementById('status');
@@ -346,70 +431,85 @@ function updateState(newState) {
   render();
 }
 
+function dbFromLinear(v) {
+  if (v <= 0.00001) return -60;
+  return 20 * Math.log10(Math.min(v, 1));
+}
+
+function meterPercent(v) {
+  // Map -60..0 dB to 0..100%
+  const db = dbFromLinear(v);
+  return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+}
+
 function render() {
   if (!state) return;
-  document.getElementById('master-output').textContent = state.output || '—';
+
+  document.getElementById('source-count').textContent = state.strips ? state.strips.length : 0;
+  document.getElementById('master-output-name').textContent = state.output || '—';
+  document.getElementById('master-title').textContent = 'Master';
+
   const mv = document.getElementById('master-volume');
   if (document.activeElement !== mv) mv.value = Math.round(state.master);
   document.getElementById('master-value').textContent = Math.round(state.master) + '%';
+  updateMeter(document.getElementById('master-meter'), state.masterPeak || 0, state.masterRms || 0);
 
-  const mixer = document.getElementById('mixer');
-  mixer.innerHTML = '';
+  const sources = document.getElementById('sources');
   if (!state.strips || state.strips.length === 0) {
-    mixer.innerHTML = '<div class="empty">No strips. Click + Add strip to get started.</div>';
-    return;
+    sources.innerHTML = '<div class="empty">No sources connected. Click + Add source to start.</div>';
+  } else {
+    sources.innerHTML = '';
+    for (const s of state.strips) {
+      const el = document.createElement('div');
+      el.className = 'node' + (s.muted ? ' muted' : '');
+      el.dataset.id = s.id;
+      el.id = 'strip-' + s.id;
+      el.innerHTML = `
+        <div class="port out"></div>
+        <div class="node-header">
+          <input class="node-title strip-name" value="${escapeHtml(s.name)}" title="${escapeHtml(s.name)}">
+          <button class="danger strip-remove" title="Remove">×</button>
+        </div>
+        <div class="node-sub" title="${escapeHtml(s.source)}">${escapeHtml(s.source)}</div>
+        <div class="node-body">
+          <div class="meter" id="meter-${s.id}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
+          <div class="controls">
+            <div class="fader-row">
+              <input type="range" min="0" max="200" value="${Math.round(s.volume)}" class="strip-fader">
+              <span>${Math.round(s.volume)}%</span>
+            </div>
+            <button class="btn-mute ${s.muted ? 'muted' : ''}">${s.muted ? 'Unmute' : 'Mute'}</button>
+          </div>
+        </div>
+      `;
+      const nameInput = el.querySelector('.strip-name');
+      nameInput.addEventListener('change', () => patchStrip(s.id, { name: nameInput.value }));
+
+      const fader = el.querySelector('.strip-fader');
+      fader.addEventListener('input', () => { el.querySelector('.fader-row span').textContent = fader.value + '%'; });
+      fader.addEventListener('change', () => patchStrip(s.id, { volume: parseFloat(fader.value) }));
+
+      const muteBtn = el.querySelector('.btn-mute');
+      muteBtn.addEventListener('click', () => patchStrip(s.id, { muted: !s.muted }));
+
+      const removeBtn = el.querySelector('.strip-remove');
+      removeBtn.addEventListener('click', () => removeStrip(s.id));
+
+      sources.appendChild(el);
+
+      updateMeter(document.getElementById('meter-' + s.id), s.peak || 0, s.rms || 0);
+    }
   }
-  for (const s of state.strips) {
-    if (ignoreNextEdit === s.id) continue; // being edited; keep existing DOM
-    const el = document.createElement('div');
-    el.className = 'strip' + (s.muted ? ' muted' : '');
-    el.dataset.id = s.id;
-    el.innerHTML = `
-      <div class="strip-header">
-        <input class="strip-name" value="${escapeHtml(s.name)}" title="${escapeHtml(s.name)}">
-        <div class="strip-source" title="${escapeHtml(s.source)}">${escapeHtml(s.source)}</div>
-      </div>
-      <div class="fader-wrap">
-        <input type="range" min="0" max="200" value="${Math.round(s.volume)}" class="strip-fader">
-      </div>
-      <div class="value-label">${Math.round(s.volume)}%</div>
-      <div class="strip-controls">
-        <button class="btn-mute ${s.muted ? 'muted' : ''}">${s.muted ? 'Unmute' : 'Mute'}</button>
-        <button class="danger strip-remove" title="Remove">×</button>
-      </div>
-      <select class="knob-select" title="Assign to controller knob">
-        <option value="">No knob</option>
-        ${[0,1,2,3,4,5].map(k => `<option value="${k}" ${s.knobIndex === k ? 'selected' : ''}>Knob ${k}</option>`).join('')}
-      </select>
-    `;
-    const nameInput = el.querySelector('.strip-name');
-    nameInput.addEventListener('change', () => patchStrip(s.id, { name: nameInput.value }));
 
-    const fader = el.querySelector('.strip-fader');
-    fader.addEventListener('mousedown', () => { ignoreNextEdit = s.id; });
-    fader.addEventListener('touchstart', () => { ignoreNextEdit = s.id; }, { passive: true });
-    fader.addEventListener('input', () => {
-      el.querySelector('.value-label').textContent = fader.value + '%';
-    });
-    fader.addEventListener('change', () => {
-      ignoreNextEdit = null;
-      patchStrip(s.id, { volume: parseFloat(fader.value) });
-    });
+  drawCables();
+}
 
-    const muteBtn = el.querySelector('.btn-mute');
-    muteBtn.addEventListener('click', () => patchStrip(s.id, { muted: !s.muted }));
-
-    const removeBtn = el.querySelector('.strip-remove');
-    removeBtn.addEventListener('click', () => removeStrip(s.id));
-
-    const knobSelect = el.querySelector('.knob-select');
-    knobSelect.addEventListener('change', () => {
-      const val = knobSelect.value;
-      patchStrip(s.id, { knobIndex: val === '' ? null : parseInt(val, 10) });
-    });
-
-    mixer.appendChild(el);
-  }
+function updateMeter(meter, peak, rms) {
+  if (!meter) return;
+  const fill = meter.querySelector('.meter-fill');
+  const pk = meter.querySelector('.meter-peak');
+  fill.style.height = meterPercent(rms) + '%';
+  pk.style.bottom = meterPercent(peak) + '%';
 }
 
 function escapeHtml(s) {
@@ -418,10 +518,7 @@ function escapeHtml(s) {
 
 async function patchStrip(id, changes) {
   try {
-    await api(`/api/strips/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(changes),
-    });
+    await api(`/api/strips/${id}`, { method: 'PATCH', body: JSON.stringify(changes) });
   } catch (e) {
     setStatus(e.message, 'error');
     setTimeout(() => setStatus('Connected', 'connected'), 2000);
@@ -429,11 +526,8 @@ async function patchStrip(id, changes) {
 }
 
 async function removeStrip(id) {
-  try {
-    await api(`/api/strips/${id}`, { method: 'DELETE' });
-  } catch (e) {
-    setStatus(e.message, 'error');
-  }
+  try { await api(`/api/strips/${id}`, { method: 'DELETE' }); }
+  catch (e) { setStatus(e.message, 'error'); }
 }
 
 async function addStrip() {
@@ -442,16 +536,11 @@ async function addStrip() {
   const name = document.getElementById('add-name').value;
   const volume = parseFloat(document.getElementById('add-volume').value) || 100;
   try {
-    await api('/api/strips', {
-      method: 'POST',
-      body: JSON.stringify({ source, name, volume }),
-    });
+    await api('/api/strips', { method: 'POST', body: JSON.stringify({ source, name, volume }) });
     document.getElementById('add-modal').classList.remove('open');
     document.getElementById('add-name').value = '';
     document.getElementById('add-volume').value = '100';
-  } catch (e) {
-    alert('Failed to add strip: ' + e.message);
-  }
+  } catch (e) { alert('Failed to add source: ' + e.message); }
 }
 
 async function refreshEndpoints() {
@@ -465,29 +554,50 @@ async function refreshEndpoints() {
       opt.textContent = `${ep.isRender ? '[Render]' : '[Capture]'} ${ep.name}${ep.isDefault ? ' (default)' : ''}`;
       sel.appendChild(opt);
     }
-  } catch (e) {
-    console.error('Endpoints load failed', e);
+  } catch (e) { console.error('Endpoints load failed', e); }
+}
+
+function drawCables() {
+  const svg = document.getElementById('cable-layer');
+  svg.innerHTML = '';
+  if (!state || !state.strips) return;
+
+  const master = document.getElementById('master-node');
+  if (!master) return;
+  const mRect = master.getBoundingClientRect();
+  const pbRect = document.getElementById('patchbay').getBoundingClientRect();
+  const mx = mRect.left - pbRect.left;
+  const my = mRect.top + mRect.height / 2 - pbRect.top;
+
+  for (const s of state.strips) {
+    const src = document.getElementById('strip-' + s.id);
+    if (!src) continue;
+    const sRect = src.getBoundingClientRect();
+    const sx = sRect.right - pbRect.left;
+    const sy = sRect.top + sRect.height / 2 - pbRect.top;
+
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const dx = (mx - sx) * 0.5;
+    c.setAttribute('d', `M ${sx} ${sy} C ${sx + dx} ${sy}, ${mx - dx} ${my}, ${mx} ${my}`);
+    c.classList.baseVal.add(s.peak > 0.01 ? 'active' : '');
+    svg.appendChild(c);
   }
 }
 
+window.addEventListener('resize', drawCables);
+document.getElementById('sources').addEventListener('scroll', drawCables, { passive: true });
+document.getElementById('outputs').addEventListener('scroll', drawCables, { passive: true });
+
 document.getElementById('master-volume').addEventListener('change', async (e) => {
-  try {
-    await api('/api/master', { method: 'POST', body: JSON.stringify({ volume: parseFloat(e.target.value) }) });
-  } catch (err) {
-    setStatus(err.message, 'error');
-  }
+  try { await api('/api/master', { method: 'POST', body: JSON.stringify({ volume: parseFloat(e.target.value) }) }); }
+  catch (err) { setStatus(err.message, 'error'); }
 });
 
-document.getElementById('btn-add').addEventListener('click', () => {
-  refreshEndpoints();
-  document.getElementById('add-modal').classList.add('open');
-});
+document.getElementById('btn-add').addEventListener('click', () => { refreshEndpoints(); document.getElementById('add-modal').classList.add('open'); });
 document.getElementById('add-cancel').addEventListener('click', () => document.getElementById('add-modal').classList.remove('open'));
 document.getElementById('add-ok').addEventListener('click', addStrip);
 
-document.getElementById('btn-save').addEventListener('click', () => {
-  document.getElementById('save-modal').classList.add('open');
-});
+document.getElementById('btn-save').addEventListener('click', () => document.getElementById('save-modal').classList.add('open'));
 document.getElementById('save-cancel').addEventListener('click', () => document.getElementById('save-modal').classList.remove('open'));
 document.getElementById('save-ok').addEventListener('click', async () => {
   const path = document.getElementById('save-path').value.trim();
@@ -496,9 +606,7 @@ document.getElementById('save-ok').addEventListener('click', async () => {
     await api('/api/presets/save', { method: 'POST', body: JSON.stringify({ path }) });
     document.getElementById('save-modal').classList.remove('open');
     setStatus('Preset saved', 'connected');
-  } catch (e) {
-    alert('Failed to save: ' + e.message);
-  }
+  } catch (e) { alert('Failed to save: ' + e.message); }
 });
 
 connect();

@@ -44,6 +44,8 @@ nlohmann::json toJson(const StripSnapshot& s)
     j["source"] = s.source;
     j["volume"] = s.volume * 100.0f; // API speaks in 0-200 percent, like the preset files
     j["muted"]  = s.muted;
+    j["peak"]   = s.peak;
+    j["rms"]    = s.rms;
     j["knobIndex"] = s.knobIndex.has_value() ? nlohmann::json(*s.knobIndex) : nlohmann::json(nullptr);
     return j;
 }
@@ -62,9 +64,11 @@ nlohmann::json toJson(const EndpointInfo& e)
 nlohmann::json stateJson(AudioMixer& mixer)
 {
     nlohmann::json j;
-    j["output"]  = mixer.outputName();
-    j["master"]  = mixer.masterVolume() * 100.0f;
-    j["running"] = mixer.running();
+    j["output"]    = mixer.outputName();
+    j["master"]    = mixer.masterVolume() * 100.0f;
+    j["masterPeak"] = mixer.masterPeak();
+    j["masterRms"]  = mixer.masterRms();
+    j["running"]   = mixer.running();
     auto strips = nlohmann::json::array();
     for (auto& s : mixer.snapshot()) strips.push_back(toJson(s));
     j["strips"] = std::move(strips);

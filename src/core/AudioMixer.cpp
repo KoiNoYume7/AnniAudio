@@ -88,6 +88,10 @@ struct AudioMixer::Impl {
         std::atomic<float> volume{1.0f};
         std::atomic<bool>  muted{false};
 
+        // Post-fader levels, written by the audio thread and read by the API.
+        std::atomic<float> peak{0.0f};
+        std::atomic<float> rms{0.0f};
+
         // Set once by the audio thread when it Start()s the capture client
         // (either at mixer start, or when applying a live AddStrip command),
         // so teardown knows whether Stop() is meaningful to call.
@@ -130,6 +134,8 @@ struct AudioMixer::Impl {
     HANDLE thread    = nullptr;
     std::atomic<bool> running{false};
     std::atomic<float> masterVolume{1.0f};
+    std::atomic<float> masterPeak{0.0f};
+    std::atomic<float> masterRms{0.0f};
 
     static DWORD WINAPI threadEntry(LPVOID p) { reinterpret_cast<Impl*>(p)->run(); return 0; }
 
@@ -173,6 +179,8 @@ StripSnapshot AudioMixer::Impl::toSnapshot(const Strip& s)
     snap.volume    = s.volume.load();
     snap.muted     = s.muted.load();
     snap.knobIndex = s.knobIndex;
+    snap.peak      = s.peak.load();
+    snap.rms       = s.rms.load();
     return snap;
 }
 
@@ -470,20 +478,47 @@ void AudioMixer::Impl::processRender()
     for (auto& s : strips) {
         float vol = s->muted.load() ? 0.0f : s->volume.load();
         if (s->readBuf.size() < outSamples) s->readBuf.resize(outSamples);
-        if (vol == 0.0f) {
-            // Still consume so the strip doesn't drift/fill up.
-            s->ring.readOrSilence(s->readBuf.data(), outSamples);
-            continue;
-        }
         s->ring.readOrSilence(s->readBuf.data(), outSamples);
         const float* src = s->readBuf.data();
         float* dst = mixBuf.data();
-        for (size_t i = 0; i < outSamples; ++i) dst[i] += src[i] * vol;
+
+        float sumSq = 0.0f;
+        float maxAbs = 0.0f;
+        if (vol == 0.0f) {
+            // Still consume so the strip doesn't drift/fill up, but no audio.
+            for (size_t i = 0; i < outSamples; ++i) {
+                dst[i] += src[i] * vol;
+            }
+            s->peak.store(0.0f);
+            s->rms.store(0.0f);
+        } else {
+            for (size_t i = 0; i < outSamples; ++i) {
+                float sample = src[i] * vol;
+                dst[i] += sample;
+                float a = std::fabs(sample);
+                if (a > maxAbs) maxAbs = a;
+                sumSq += sample * sample;
+            }
+            s->peak.store(maxAbs);
+            s->rms.store(std::sqrt(sumSq / static_cast<float>(outSamples)));
+        }
     }
 
     float master = masterVolume.load();
     if (master != 1.0f) {
         for (size_t i = 0; i < outSamples; ++i) mixBuf[i] *= master;
+    }
+
+    {
+        float sumSq = 0.0f;
+        float maxAbs = 0.0f;
+        for (size_t i = 0; i < outSamples; ++i) {
+            float a = std::fabs(mixBuf[i]);
+            if (a > maxAbs) maxAbs = a;
+            sumSq += mixBuf[i] * mixBuf[i];
+        }
+        masterPeak.store(maxAbs);
+        masterRms.store(std::sqrt(sumSq / static_cast<float>(outSamples)));
     }
 
     if (renderIsFloat) {
@@ -658,6 +693,8 @@ void AudioMixer::setMasterVolume(float v)
 }
 
 float AudioMixer::masterVolume() const { return m_impl->masterVolume.load(); }
+float AudioMixer::masterPeak() const { return m_impl->masterPeak.load(); }
+float AudioMixer::masterRms() const { return m_impl->masterRms.load(); }
 
 size_t AudioMixer::stripCount() const noexcept
 {
