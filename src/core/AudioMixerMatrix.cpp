@@ -18,6 +18,7 @@ using Microsoft::WRL::ComPtr;
 struct AudioMixerMatrix::Impl {
     struct RouteInfo {
         std::string output;
+        std::string source;
         AudioMixer* mixer = nullptr;
         StripId     localId = 0;
     };
@@ -122,13 +123,19 @@ std::optional<AudioMixerMatrix::RouteId> AudioMixerMatrix::addRoute(
     AudioMixer* mixer = m_impl->findOutputMixer(output);
     if (!mixer) return std::nullopt;
 
+    // A source can only be routed once to a given output. Use PATCH on the
+    // existing route to change its volume/mute/name instead.
+    for (const auto& kv : m_impl->routes) {
+        if (kv.second.output == output && kv.second.source == source) return std::nullopt;
+    }
+
     MixerStripConfig c = cfg;
     c.source = source;
     auto local = mixer->addStrip(c);
     if (!local) return std::nullopt;
 
     RouteId id = m_impl->nextRouteId.fetch_add(1);
-    m_impl->routes[id] = { output, mixer, *local };
+    m_impl->routes[id] = { output, source, mixer, *local };
     m_impl->localToGlobal[{ mixer, *local }] = id;
 
     // If the output isn't already running, try to start it now that it has a strip.

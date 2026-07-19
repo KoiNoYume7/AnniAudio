@@ -291,12 +291,25 @@ void MixerControlServer::Impl::registerRoutes()
 
         auto id = matrix.addRoute(source, output, cfg);
         if (!id) {
-            sendError(res, 400, "could not open source (not found, or strip limit reached)");
+            sendError(res, 400, "could not add route (source already routed to this output, endpoint not found, or strip limit reached)");
             return;
         }
         markDirty();
-        auto snap = matrix.routeSnapshot(*id);
-        sendJson(res, toJson(*snap), 201);
+
+        // The route is queued on the audio thread; it may not be reflected in
+        // snapshot() yet.  Return the request-derived fields plus the new id so
+        // the client can update immediately without waiting for SSE.
+        nlohmann::json j;
+        j["id"]     = *id;
+        j["name"]   = cfg.name.empty() ? cfg.source : cfg.name;
+        j["source"] = cfg.source;
+        j["output"] = output;
+        j["volume"] = cfg.volume * 100.0f;
+        j["muted"]  = cfg.muted;
+        j["peak"]   = 0.0f;
+        j["rms"]    = 0.0f;
+        j["knobIndex"] = cfg.knobIndex.has_value() ? nlohmann::json(*cfg.knobIndex) : nlohmann::json(nullptr);
+        sendJson(res, j, 201);
     });
 
     svr.Patch(R"(/api/strips/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
@@ -323,7 +336,19 @@ void MixerControlServer::Impl::registerRoutes()
 
         markDirty();
         auto snap = matrix.routeSnapshot(id);
-        sendJson(res, toJson(*snap));
+        if (snap) {
+            sendJson(res, toJson(*snap));
+        } else {
+            // Route queued but not yet applied by the audio thread; return the
+            // patched fields so the client doesn't have to wait for SSE.
+            nlohmann::json j;
+            j["id"] = id;
+            if (body.contains("name")) j["name"] = body["name"];
+            if (body.contains("volume")) j["volume"] = body["volume"];
+            if (body.contains("muted")) j["muted"] = body["muted"];
+            if (body.contains("knobIndex")) j["knobIndex"] = body["knobIndex"];
+            sendJson(res, j, 202);
+        }
     });
 
     svr.Delete(R"(/api/strips/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {

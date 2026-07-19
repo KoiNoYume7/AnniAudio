@@ -6,178 +6,174 @@
 <title>AnniAudio Mixer</title>
 <style>
   :root {
-    --bg: #0b0d12;
+    --bg: #0b0c10;
     --panel: #14161d;
-    --surface: #1c1f29;
-    --text: #e4e6eb;
-    --muted: #8b92a8;
+    --surface: #1a1d26;
+    --text: #e5e7eb;
+    --muted: #6b7280;
     --accent: #3b82f6;
-    --accent2: #10b981;
+    --accent2: #22c55e;
     --danger: #ef4444;
     --border: #2a2e3a;
     --cable: #6366f1;
     --cable-active: #22d3ee;
-    --input-bg: #0f1118;
   }
   * { box-sizing: border-box; }
-  body {
+  html, body {
+    height: 100%;
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg);
     color: var(--text);
-    line-height: 1.4;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
+    font-size: 14px;
     overflow: hidden;
   }
   header {
-    height: 56px;
-    padding: 0 1rem;
+    height: 48px;
+    padding: 0 12px;
     border-bottom: 1px solid var(--border);
     background: var(--panel);
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-shrink: 0;
-    gap: 1rem;
+    gap: 12px;
   }
-  header h1 { margin: 0; font-size: 1.2rem; letter-spacing: -0.01em; }
-  .toolbar { display: flex; align-items: center; gap: 0.75rem; }
-  .status { font-size: 0.85rem; color: var(--muted); }
+  header h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.25px; }
+  .toolbar { display: flex; align-items: center; gap: 8px; }
+  .status { font-size: 12px; color: var(--muted); }
   .status.connected { color: var(--accent2); }
   .status.error { color: var(--danger); }
   input, select, button {
-    background: var(--input-bg);
+    background: #0f1118;
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 0.375rem;
-    padding: 0.4rem 0.6rem;
-    font-size: 0.85rem;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+    outline: none;
   }
-  button { background: var(--surface); cursor: pointer; }
+  button { background: var(--surface); cursor: pointer; line-height: 1; }
   button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { filter: brightness(1.1); }
-  button.danger { background: var(--danger); border-color: var(--danger); color: white; }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   button.danger:hover { filter: brightness(1.1); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
 
-  #patchbay {
+  main {
     flex: 1;
-    display: grid;
-    grid-template-columns: 280px 1fr 280px;
-    gap: 1rem;
-    padding: 1rem;
+    display: flex;
+    flex-direction: row;
     position: relative;
     overflow: hidden;
   }
   #cables {
     position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
+    inset: 0;
     pointer-events: none;
-    z-index: 5;
+    z-index: 1;
   }
   #cables path {
     fill: none;
     stroke: var(--cable);
-    stroke-width: 3;
+    stroke-width: 2;
     stroke-linecap: round;
-    opacity: 0.7;
-    transition: stroke 0.1s, opacity 0.1s, stroke-width 0.1s;
-    filter: drop-shadow(0 0 2px rgba(99,102,241,0.5));
+    opacity: .75;
+    transition: stroke .15s, opacity .15s, stroke-width .15s;
   }
   #cables path.active {
     stroke: var(--cable-active);
     opacity: 1;
-    stroke-width: 4;
-    filter: drop-shadow(0 0 5px rgba(34,211,238,0.7));
+    stroke-width: 3;
+    filter: drop-shadow(0 0 4px rgba(34,211,238,.6));
   }
 
-  .column {
+  .rail {
+    width: 260px;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 0.75rem;
+    border-top: none;
+    border-bottom: none;
     display: flex;
     flex-direction: column;
+    z-index: 2;
     overflow: hidden;
-    z-index: 10;
-    position: relative;
   }
-  .col-header {
-    padding: 0.75rem 1rem;
-    font-weight: 600;
-    font-size: 0.95rem;
+  #inputs { border-left: none; }
+  #outputs { border-right: none; }
+  .rail-title {
+    padding: 10px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--muted);
+    letter-spacing: .4px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface);
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
+  .rail-title .count { font-weight: 500; color: var(--text); }
   .node-list {
     flex: 1;
     overflow-y: auto;
-    padding: 0.75rem;
+    padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 8px;
   }
 
   .node {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    padding: 0.75rem;
-    position: relative;
+    border-radius: 6px;
+    padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
-    min-height: 110px;
+    gap: 4px;
+    position: relative;
   }
-  .node.output { border-color: var(--accent); }
-  .node.route { border-color: #4f46e5; }
+  .node.output { border-left: 3px solid var(--accent); }
+  .node.route { border-left: 3px solid var(--cable); }
   .node-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
+    gap: 6px;
   }
   .node-title {
     font-weight: 600;
-    font-size: 0.9rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 12px;
     background: transparent;
     border: none;
     color: var(--text);
     padding: 0;
     flex: 1;
+    min-width: 0;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
   }
-  .node-title:focus {
-    outline: 1px solid var(--accent);
-    background: var(--input-bg);
-  }
-  .node-sub {
-    font-size: 0.7rem;
+  .node-title:focus { background: #0f1118; outline: 1px solid var(--accent); border-radius: 2px; padding: 1px 3px; }
+  .node-meta {
+    font-size: 10px;
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .node-body {
-    flex: 1;
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 8px;
+    min-height: 48px;
   }
-
   .meter {
-    width: 12px;
-    height: 80px;
-    background: var(--input-bg);
-    border-radius: 6px;
+    width: 8px;
+    height: 56px;
+    background: #0f1118;
+    border-radius: 4px;
     overflow: hidden;
     position: relative;
     flex-shrink: 0;
@@ -187,91 +183,85 @@
     bottom: 0;
     left: 0;
     width: 100%;
-    background: linear-gradient(to top, var(--accent2) 0%, #facc15 60%, var(--danger) 100%);
-    border-radius: 0 0 6px 6px;
-    transition: height 0.05s linear;
+    background: linear-gradient(to top, #22c55e 0%, #eab308 65%, #ef4444 100%);
+    border-radius: 0 0 4px 4px;
+    transition: height .05s linear;
   }
   .meter-peak {
     position: absolute;
     left: 0;
     width: 100%;
-    height: 3px;
+    height: 2px;
     background: #fff;
-    border-radius: 2px;
-    transition: bottom 0.05s linear;
+    border-radius: 1px;
+    transition: bottom .05s linear;
   }
-
   .controls {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    min-width: 0;
+    gap: 4px;
   }
   .fader-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.8rem;
+    gap: 6px;
   }
   .fader-row input[type=range] {
     flex: 1;
     -webkit-appearance: none;
     appearance: none;
-    height: 6px;
-    background: var(--border);
-    border-radius: 3px;
+    height: 4px;
+    background: #2f333f;
+    border-radius: 2px;
     outline: none;
   }
   .fader-row input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: var(--accent);
     cursor: pointer;
   }
-  .fader-row span { width: 2.5rem; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-
-  .btn-mute {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
+  .fader-val {
+    width: 2.2rem;
+    text-align: right;
+    font-size: 10px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
-  .btn-mute.muted { background: var(--danger); border-color: var(--danger); color: white; }
-  .btn-row { display: flex; gap: 0.4rem; }
+  .btn-row { display: flex; gap: 4px; }
+  .btn-mute { font-size: 10px; padding: 3px 6px; }
+  .btn-mute.muted { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn-icon { font-size: 11px; padding: 2px 5px; }
 
-  .port {
-    width: 14px; height: 14px;
-    border-radius: 50%;
-    background: var(--border);
-    border: 2px solid var(--muted);
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 20;
-    transition: transform 0.15s, border-color 0.15s, background 0.15s;
-  }
-  .port.out { right: -8px; }
-  .port.in { left: -8px; }
-  .port:hover { transform: translateY(-50%) scale(1.3); border-color: var(--cable-active); background: var(--cable-active); }
-
-  .add-btn {
-    margin: 0.75rem;
-    padding: 0.6rem;
+  .empty {
+    color: var(--muted);
+    font-size: 11px;
     text-align: center;
-    border: 2px dashed var(--border);
-    border-radius: 0.5rem;
+    padding: 16px 8px;
+    font-style: italic;
+  }
+  .add-btn {
+    margin: 8px;
+    padding: 8px;
+    text-align: center;
+    border: 1.5px dashed var(--border);
+    border-radius: 5px;
     color: var(--muted);
     cursor: pointer;
-    transition: border-color 0.15s, color 0.15s;
+    font-size: 12px;
+    transition: border-color .15s, color .15s;
   }
   .add-btn:hover { border-color: var(--accent); color: var(--text); }
 
   .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.7);
+    background: rgba(0,0,0,.75);
     display: none;
     align-items: center;
     justify-content: center;
@@ -281,26 +271,18 @@
   .modal {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 0.75rem;
-    padding: 1.25rem;
+    border-radius: 8px;
+    padding: 16px;
     width: 90%;
-    max-width: 440px;
+    max-width: 400px;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 10px;
   }
-  .modal h2 { margin: 0 0 0.25rem 0; font-size: 1.1rem; }
-  .modal-row { display: flex; flex-direction: column; gap: 0.35rem; }
-  .modal-row label { font-size: 0.8rem; color: var(--muted); }
-  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
-
-  .empty {
-    color: var(--muted);
-    font-style: italic;
-    padding: 1rem;
-    text-align: center;
-    font-size: 0.85rem;
-  }
+  .modal h2 { margin: 0 0 4px 0; font-size: 14px; }
+  .modal-row { display: flex; flex-direction: column; gap: 3px; }
+  .modal-row label { font-size: 11px; color: var(--muted); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -308,36 +290,38 @@
   <h1>AnniAudio Mixer</h1>
   <div class="toolbar">
     <span class="status" id="status">Disconnected</span>
-    <input id="port" type="number" value="8850" min="0" max="65535" style="width:80px" title="Control API port">
-    <button id="btn-save">Save preset</button>
+    <input id="port" type="number" value="8850" min="0" max="65535" style="width:70px" title="Control API port">
+    <button id="btn-add-output">+ Output</button>
+    <button id="btn-add-route">+ Route</button>
+    <button id="btn-save">Save</button>
   </div>
 </header>
 
-<div id="patchbay">
+<main>
   <svg id="cables"><g id="cable-layer"></g></svg>
 
-  <div class="column" id="col-routes">
-    <div class="col-header">Routes <span id="route-count" class="status">0</span></div>
-    <div class="node-list" id="routes"></div>
-    <div class="add-btn" id="btn-add-route">+ Add route</div>
-  </div>
+  <aside class="rail" id="inputs">
+    <div class="rail-title">Routes <span class="count" id="route-count">0</span></div>
+    <div class="node-list" id="route-list"></div>
+    <div class="add-btn" id="rail-add-route">+ Add route</div>
+  </aside>
 
-  <div class="column" id="col-workspace" style="background:transparent; border:none; z-index:1;"></div>
+  <section id="canvas" style="flex:1; position:relative; z-index:0;"></section>
 
-  <div class="column" id="col-outputs">
-    <div class="col-header">Outputs <span id="output-count" class="status">0</span></div>
-    <div class="node-list" id="outputs"></div>
-    <div class="add-btn" id="btn-add-output">+ Add output</div>
-  </div>
-</div>
+  <aside class="rail" id="outputs">
+    <div class="rail-title">Outputs <span class="count" id="output-count">0</span></div>
+    <div class="node-list" id="output-list"></div>
+    <div class="add-btn" id="rail-add-output">+ Add output</div>
+  </aside>
+</main>
 
 <div class="modal-overlay" id="route-modal">
   <div class="modal">
     <h2>Add route</h2>
-    <div class="modal-row"><label>Source endpoint</label><select id="route-source"></select></div>
+    <div class="modal-row"><label>Source</label><select id="route-source"></select></div>
     <div class="modal-row"><label>Output</label><select id="route-output"></select></div>
-    <div class="modal-row"><label>Name (optional)</label><input id="route-name" type="text" placeholder="defaults to source name"></div>
-    <div class="modal-row"><label>Initial volume (%)</label><input id="route-volume" type="number" value="100" min="0" max="200"></div>
+    <div class="modal-row"><label>Name (optional)</label><input id="route-name" type="text" placeholder="source name"></div>
+    <div class="modal-row"><label>Volume (%)</label><input id="route-volume" type="number" value="100" min="0" max="200"></div>
     <div class="modal-actions">
       <button id="route-cancel">Cancel</button>
       <button id="route-ok" class="primary">Add</button>
@@ -359,7 +343,7 @@
 <div class="modal-overlay" id="save-modal">
   <div class="modal">
     <h2>Save preset</h2>
-    <div class="modal-row"><label>Path (e.g. config/mixers/my_mix.json)</label><input id="save-path" type="text" value="config/mixers/"></div>
+    <div class="modal-row"><label>Path</label><input id="save-path" type="text" value="config/mixers/"></div>
     <div class="modal-actions">
       <button id="save-cancel">Cancel</button>
       <button id="save-ok" class="primary">Save</button>
@@ -372,16 +356,18 @@ const qs = new URLSearchParams(location.search);
 let port = parseInt(qs.get('port'), 10) || 8850;
 const portInput = document.getElementById('port');
 portInput.value = port;
-
 let base = `http://127.0.0.1:${port}`;
+
 let state = null;
 let endpoints = [];
 let es = null;
+const outputNodes = new Map();
+const routeNodes = new Map();
 
+const statusEl = document.getElementById('status');
 function setStatus(text, cls) {
-  const s = document.getElementById('status');
-  s.textContent = text;
-  s.className = 'status' + (cls ? ' ' + cls : '');
+  statusEl.textContent = text;
+  statusEl.className = 'status' + (cls ? ' ' + cls : '');
 }
 
 function rebuildBase() {
@@ -392,17 +378,13 @@ function rebuildBase() {
 portInput.addEventListener('change', rebuildBase);
 
 async function api(path, opts = {}) {
-  const res = await fetch(base + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  const res = await fetch(base + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json(); if (j.error) msg = j.error; } catch {}
     throw new Error(msg);
   }
-  if (res.status === 204) return null;
-  return res.json();
+  return res.status === 204 ? null : res.json();
 }
 
 function connect() {
@@ -424,50 +406,48 @@ function updateState(newState) {
   render();
 }
 
-function dbFromLinear(v) {
-  if (v <= 0.00001) return -60;
-  return 20 * Math.log10(Math.min(v, 1));
-}
-
-function meterPercent(v) {
-  const db = dbFromLinear(v);
+function meterPct(v) {
+  if (v <= 0.00001) return 0;
+  const db = 20 * Math.log10(Math.min(v, 1));
   return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
 }
 
-function updateMeter(meter, peak, rms) {
+function setMeter(meter, peak, rms) {
   if (!meter) return;
-  const fill = meter.querySelector('.meter-fill');
-  const pk = meter.querySelector('.meter-peak');
-  fill.style.height = meterPercent(rms) + '%';
-  pk.style.bottom = meterPercent(peak) + '%';
+  meter.querySelector('.meter-fill').style.height = meterPct(rms) + '%';
+  meter.querySelector('.meter-peak').style.bottom = meterPct(peak) + '%';
 }
 
-function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
-function outputCard(out) {
+function outputKey(name) { return 'out-' + name; }
+function sanitizeId(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, '_'); }
+
+function createOutputNode(out) {
   const el = document.createElement('div');
   el.className = 'node output';
-  el.id = 'output-' + out.name.replace(/[^a-zA-Z0-9]/g, '_');
   el.dataset.name = out.name;
   el.innerHTML = `
-    <div class="port in"></div>
     <div class="node-header">
-      <input class="node-title output-name" value="${escapeHtml(out.name)}" readonly title="${escapeHtml(out.name)}">
-      <button class="danger output-remove" title="Remove">×</button>
+      <input class="node-title output-name" value="${escapeHtml(out.name)}" readonly>
+      <button class="danger btn-icon output-remove" title="Remove output">×</button>
     </div>
     <div class="node-body">
-      <div class="meter" id="meter-out-${out.name.replace(/[^a-zA-Z0-9]/g, '_')}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
+      <div class="meter" id="meter-out-${sanitizeId(out.name)}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
       <div class="controls">
         <div class="fader-row">
-          <input type="range" min="0" max="200" value="${Math.round(out.master)}" class="output-fader">
-          <span>${Math.round(out.master)}%</span>
+          <input type="range" min="0" max="200" class="output-fader" value="100">
+          <span class="fader-val">100%</span>
         </div>
       </div>
     </div>
   `;
 
   const fader = el.querySelector('.output-fader');
-  fader.addEventListener('input', () => { el.querySelector('.fader-row span').textContent = fader.value + '%'; });
+  const val = el.querySelector('.fader-val');
+  fader.addEventListener('input', () => { val.textContent = Math.round(fader.value) + '%'; });
   fader.addEventListener('change', async () => {
     try { await api('/api/outputs/master', { method: 'POST', body: JSON.stringify({ name: out.name, volume: parseFloat(fader.value) }) }); }
     catch (e) { setStatus(e.message, 'error'); }
@@ -481,27 +461,25 @@ function outputCard(out) {
   return el;
 }
 
-function routeCard(s) {
+function createRouteNode(s) {
   const el = document.createElement('div');
   el.className = 'node route';
-  el.id = 'route-' + s.id;
   el.dataset.id = s.id;
   el.dataset.output = s.output;
   el.innerHTML = `
-    <div class="port out"></div>
     <div class="node-header">
-      <input class="node-title route-name" value="${escapeHtml(s.name)}" title="${escapeHtml(s.name)}">
-      <button class="danger route-remove" title="Remove">×</button>
+      <input class="node-title route-name" value="${escapeHtml(s.name)}" title="Rename">
+      <button class="danger btn-icon route-remove" title="Remove route">×</button>
     </div>
-    <div class="node-sub" title="${escapeHtml(s.source)}">${escapeHtml(s.source)} → ${escapeHtml(s.output)}</div>
+    <div class="node-meta">${escapeHtml(s.source)} → ${escapeHtml(s.output)}</div>
     <div class="node-body">
       <div class="meter" id="meter-route-${s.id}"><div class="meter-fill"></div><div class="meter-peak"></div></div>
       <div class="controls">
         <div class="fader-row">
-          <input type="range" min="0" max="200" value="${Math.round(s.volume)}" class="route-fader">
-          <span>${Math.round(s.volume)}%</span>
+          <input type="range" min="0" max="200" class="route-fader" value="100">
+          <span class="fader-val">100%</span>
         </div>
-        <button class="btn-mute ${s.muted ? 'muted' : ''}">${s.muted ? 'Unmute' : 'Mute'}</button>
+        <button class="btn-mute">Mute</button>
       </div>
     </div>
   `;
@@ -513,7 +491,8 @@ function routeCard(s) {
   });
 
   const fader = el.querySelector('.route-fader');
-  fader.addEventListener('input', () => { el.querySelector('.fader-row span').textContent = fader.value + '%'; });
+  const val = el.querySelector('.fader-val');
+  fader.addEventListener('input', () => { val.textContent = Math.round(fader.value) + '%'; });
   fader.addEventListener('change', async () => {
     try { await api(`/api/strips/${s.id}`, { method: 'PATCH', body: JSON.stringify({ volume: parseFloat(fader.value) }) }); }
     catch (e) { setStatus(e.message, 'error'); }
@@ -521,7 +500,8 @@ function routeCard(s) {
 
   const muteBtn = el.querySelector('.btn-mute');
   muteBtn.addEventListener('click', async () => {
-    try { await api(`/api/strips/${s.id}`, { method: 'PATCH', body: JSON.stringify({ muted: !s.muted }) }); }
+    const muted = !muteBtn.classList.contains('muted');
+    try { await api(`/api/strips/${s.id}`, { method: 'PATCH', body: JSON.stringify({ muted }) }); }
     catch (e) { setStatus(e.message, 'error'); }
   });
 
@@ -533,41 +513,98 @@ function routeCard(s) {
   return el;
 }
 
+function updateOutputNode(el, out) {
+  const fader = el.querySelector('.output-fader');
+  const val = el.querySelector('.fader-val');
+  if (document.activeElement !== fader) {
+    fader.value = Math.round(out.master);
+    val.textContent = Math.round(out.master) + '%';
+  }
+  setMeter(el.querySelector('.meter'), out.masterPeak || 0, out.masterRms || 0);
+}
+
+function updateRouteNode(el, s) {
+  const nameInput = el.querySelector('.route-name');
+  if (document.activeElement !== nameInput) nameInput.value = s.name;
+
+  const meta = el.querySelector('.node-meta');
+  meta.textContent = `${s.source} → ${s.output}`;
+  meta.title = `${s.source} → ${s.output}`;
+
+  const fader = el.querySelector('.route-fader');
+  const val = el.querySelector('.fader-val');
+  if (document.activeElement !== fader) {
+    fader.value = Math.round(s.volume);
+    val.textContent = Math.round(s.volume) + '%';
+  }
+
+  const muteBtn = el.querySelector('.btn-mute');
+  if (s.muted) {
+    muteBtn.classList.add('muted');
+    muteBtn.textContent = 'Unmute';
+  } else {
+    muteBtn.classList.remove('muted');
+    muteBtn.textContent = 'Mute';
+  }
+
+  setMeter(el.querySelector('.meter'), s.peak || 0, s.rms || 0);
+}
+
 function render() {
   if (!state) return;
   const outputs = state.outputs || [];
   const routes = outputs.reduce((acc, o) => acc.concat(o.strips || []), []);
+
   document.getElementById('output-count').textContent = outputs.length;
   document.getElementById('route-count').textContent = routes.length;
 
-  const outList = document.getElementById('outputs');
-  outList.innerHTML = '';
-  if (outputs.length === 0) {
-    outList.innerHTML = '<div class="empty">No outputs. Add one to get started.</div>';
-  } else {
-    for (const out of outputs) {
-      outList.appendChild(outputCard(out));
-      updateMeter(document.getElementById('meter-out-' + out.name.replace(/[^a-zA-Z0-9]/g, '_')), out.masterPeak || 0, out.masterRms || 0);
+  const outList = document.getElementById('output-list');
+  const routeList = document.getElementById('route-list');
+
+  const activeOutKeys = new Set();
+  for (const out of outputs) {
+    const key = outputKey(out.name);
+    activeOutKeys.add(key);
+    let el = outputNodes.get(key);
+    if (!el) {
+      el = createOutputNode(out);
+      outList.appendChild(el);
+      outputNodes.set(key, el);
     }
+    updateOutputNode(el, out);
   }
 
-  const routeList = document.getElementById('routes');
-  routeList.innerHTML = '';
-  if (routes.length === 0) {
-    routeList.innerHTML = '<div class="empty">No routes. Click + Add route to connect a source to an output.</div>';
-  } else {
-    for (const s of routes) {
-      routeList.appendChild(routeCard(s));
-      updateMeter(document.getElementById('meter-route-' + s.id), s.peak || 0, s.rms || 0);
+  const activeRouteIds = new Set();
+  for (const s of routes) {
+    activeRouteIds.add(String(s.id));
+    let el = routeNodes.get(String(s.id));
+    if (!el) {
+      el = createRouteNode(s);
+      routeList.appendChild(el);
+      routeNodes.set(String(s.id), el);
     }
+    updateRouteNode(el, s);
   }
 
-  drawCables();
-  populateEndpointSelects();
+  for (const [key, el] of outputNodes) {
+    if (!activeOutKeys.has(key)) { el.remove(); outputNodes.delete(key); }
+  }
+  for (const [id, el] of routeNodes) {
+    if (!activeRouteIds.has(id)) { el.remove(); routeNodes.delete(id); }
+  }
+
+  if (outputs.length === 0) outList.innerHTML = '<div class="empty">No outputs yet.</div>';
+  else if (outList.querySelector('.empty')) outList.querySelector('.empty').remove();
+
+  if (routes.length === 0) routeList.innerHTML = '<div class="empty">No routes. Add a route to connect a source to an output.</div>';
+  else if (routeList.querySelector('.empty')) routeList.querySelector('.empty').remove();
+
+  requestAnimationFrame(drawCables);
+  populateOutputSelect();
 }
 
-function getOutputEl(name) {
-  return document.querySelector(`.output[data-name="${CSS.escape(name)}"]`);
+function outputNodeByName(name) {
+  return outputNodes.get(outputKey(name));
 }
 
 function drawCables() {
@@ -575,86 +612,92 @@ function drawCables() {
   svg.innerHTML = '';
   if (!state || !state.outputs) return;
 
-  const pbRect = document.getElementById('patchbay').getBoundingClientRect();
-
+  const main = document.querySelector('main').getBoundingClientRect();
   const routes = state.outputs.reduce((acc, o) => acc.concat(o.strips || []), []);
+
   for (const s of routes) {
-    const src = document.getElementById('route-' + s.id);
-    const dst = getOutputEl(s.output);
+    const src = routeNodes.get(String(s.id));
+    const dst = outputNodeByName(s.output);
     if (!src || !dst) continue;
+
     const sRect = src.getBoundingClientRect();
     const dRect = dst.getBoundingClientRect();
-    const sx = sRect.right - pbRect.left;
-    const sy = sRect.top + sRect.height / 2 - pbRect.top;
-    const dx = dRect.left - pbRect.left;
-    const dy = dRect.top + dRect.height / 2 - pbRect.top;
-    const c = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    const ox = (dx - sx) * 0.5;
-    c.setAttribute('d', `M ${sx} ${sy} C ${sx + ox} ${sy}, ${dx - ox} ${dy}, ${dx} ${dy}`);
-    if (s.peak > 0.01) c.classList.baseVal.add('active');
-    svg.appendChild(c);
-  }
-}
+    const sx = sRect.right - main.left;
+    const sy = sRect.top + sRect.height / 2 - main.top;
+    const dx = dRect.left - main.left;
+    const dy = dRect.top + dRect.height / 2 - main.top;
 
-function populateEndpointSelects() {
-  const routeSource = document.getElementById('route-source');
-  const outputSource = document.getElementById('output-source');
-  const routeOutput = document.getElementById('route-output');
-
-  // Only rebuild if empty to avoid clearing user selection.
-  if (routeSource.children.length === 0 && endpoints.length) {
-    for (const ep of endpoints) {
-      const opt = document.createElement('option');
-      opt.value = ep.name;
-      opt.textContent = `${ep.isRender ? '[Render]' : '[Capture]'} ${ep.name}`;
-      routeSource.appendChild(opt);
-    }
-  }
-  if (outputSource.children.length === 0 && endpoints.length) {
-    for (const ep of endpoints) {
-      if (!ep.isRender) continue;
-      const opt = document.createElement('option');
-      opt.value = ep.name;
-      opt.textContent = ep.name;
-      outputSource.appendChild(opt);
-    }
-  }
-
-  routeOutput.innerHTML = '';
-  if (state && state.outputs) {
-    for (const out of state.outputs) {
-      const opt = document.createElement('option');
-      opt.value = out.name;
-      opt.textContent = out.name;
-      routeOutput.appendChild(opt);
-    }
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const cx = (dx - sx) * 0.55;
+    path.setAttribute('d', `M ${sx} ${sy} C ${sx + cx} ${sy}, ${dx - cx} ${dy}, ${dx} ${dy}`);
+    if (s.peak > 0.01) path.setAttribute('class', 'active');
+    svg.appendChild(path);
   }
 }
 
 async function refreshEndpoints() {
   try {
     const data = await api('/api/endpoints');
-    endpoints = data.endpoints;
-    document.getElementById('route-source').innerHTML = '';
-    document.getElementById('output-source').innerHTML = '';
-    populateEndpointSelects();
+    endpoints = data.endpoints || [];
+    populateSourceSelect();
+    populateOutputSourceSelect();
   } catch (e) { console.error('Endpoints load failed', e); }
 }
 
-window.addEventListener('resize', drawCables);
-document.getElementById('routes').addEventListener('scroll', drawCables, { passive: true });
-document.getElementById('outputs').addEventListener('scroll', drawCables, { passive: true });
+function populateSourceSelect() {
+  const sel = document.getElementById('route-source');
+  const cur = sel.value;
+  sel.innerHTML = '';
+  for (const ep of endpoints) {
+    const opt = document.createElement('option');
+    opt.value = ep.name;
+    opt.textContent = `${ep.isRender ? '[R]' : '[C]'} ${ep.name}`;
+    sel.appendChild(opt);
+  }
+  if (cur) sel.value = cur;
+}
 
-document.getElementById('btn-add-route').addEventListener('click', async () => {
-  await refreshEndpoints();
-  document.getElementById('route-modal').classList.add('open');
-});
+function populateOutputSourceSelect() {
+  const sel = document.getElementById('output-source');
+  const cur = sel.value;
+  sel.innerHTML = '';
+  for (const ep of endpoints) {
+    if (!ep.isRender) continue;
+    const opt = document.createElement('option');
+    opt.value = ep.name;
+    opt.textContent = ep.name;
+    sel.appendChild(opt);
+  }
+  if (cur) sel.value = cur;
+}
+
+function populateOutputSelect() {
+  const sel = document.getElementById('route-output');
+  const cur = sel.value;
+  sel.innerHTML = '';
+  if (state && state.outputs) {
+    for (const out of state.outputs) {
+      const opt = document.createElement('option');
+      opt.value = out.name;
+      opt.textContent = out.name;
+      sel.appendChild(opt);
+    }
+  }
+  if (cur && Array.from(sel.options).some(o => o.value === cur)) sel.value = cur;
+}
+
+function openRouteModal() { refreshEndpoints(); document.getElementById('route-modal').classList.add('open'); }
+function openOutputModal() { refreshEndpoints(); document.getElementById('output-modal').classList.add('open'); }
+
+document.getElementById('btn-add-route').addEventListener('click', openRouteModal);
+document.getElementById('rail-add-route').addEventListener('click', openRouteModal);
 document.getElementById('route-cancel').addEventListener('click', () => document.getElementById('route-modal').classList.remove('open'));
 document.getElementById('route-ok').addEventListener('click', async () => {
   const source = document.getElementById('route-source').value;
   const output = document.getElementById('route-output').value;
   const name = document.getElementById('route-name').value;
   const volume = parseFloat(document.getElementById('route-volume').value) || 100;
+  if (!source || !output) { alert('Select a source and output'); return; }
   try {
     await api('/api/strips', { method: 'POST', body: JSON.stringify({ source, output, name, volume }) });
     document.getElementById('route-modal').classList.remove('open');
@@ -662,13 +705,12 @@ document.getElementById('route-ok').addEventListener('click', async () => {
   } catch (e) { alert('Failed to add route: ' + e.message); }
 });
 
-document.getElementById('btn-add-output').addEventListener('click', async () => {
-  await refreshEndpoints();
-  document.getElementById('output-modal').classList.add('open');
-});
+document.getElementById('btn-add-output').addEventListener('click', openOutputModal);
+document.getElementById('rail-add-output').addEventListener('click', openOutputModal);
 document.getElementById('output-cancel').addEventListener('click', () => document.getElementById('output-modal').classList.remove('open'));
 document.getElementById('output-ok').addEventListener('click', async () => {
   const name = document.getElementById('output-source').value;
+  if (!name) { alert('Select a render endpoint'); return; }
   try {
     await api('/api/outputs', { method: 'POST', body: JSON.stringify({ name }) });
     document.getElementById('output-modal').classList.remove('open');
@@ -686,6 +728,10 @@ document.getElementById('save-ok').addEventListener('click', async () => {
     setStatus('Preset saved', 'connected');
   } catch (e) { alert('Failed to save: ' + e.message); }
 });
+
+window.addEventListener('resize', () => requestAnimationFrame(drawCables));
+document.getElementById('inputs').addEventListener('scroll', () => requestAnimationFrame(drawCables), { passive: true });
+document.getElementById('outputs').addEventListener('scroll', () => requestAnimationFrame(drawCables), { passive: true });
 
 connect();
 </script>
