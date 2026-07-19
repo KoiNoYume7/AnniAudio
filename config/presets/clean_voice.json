@@ -1,0 +1,8 @@
+{
+  "description": "Cut rumble and harshness for voice chat / calls.",
+  "bands": [
+    { "type": "highpass", "freq": 100,  "gain_db": 0, "q": 0.707 },
+    { "type": "peak",    "freq": 250,  "gain_db": -3, "q": 1.0 },
+    { "type": "peak",    "freq": 4000, "gain_db": 2, "q": 1.4 }
+  ]
+}

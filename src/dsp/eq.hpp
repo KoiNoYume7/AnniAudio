@@ -43,7 +43,8 @@ public:
     // Process interleaved float samples in-place.
     void process(float* interleaved, uint32_t frames, uint32_t channels) noexcept;
 
-    bool prepared() const noexcept { return prepared_; }
+    size_t bandCount() const noexcept { return bands_.size(); }
+    bool   prepared() const noexcept { return prepared_; }
 
 private:
     double sampleRate_ = 0.0;

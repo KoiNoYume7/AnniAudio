@@ -16,10 +16,14 @@ using namespace anniaudio::dsp;
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 // Undocumented IPolicyConfig used by Windows to switch default endpoints.
 // Method order must match the COM vtable.
@@ -50,8 +54,8 @@ static void printUsage(const char* prog)
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
-    std::printf("  %s process <source> <out> [volume]    Route a RENDER endpoint via loopback capture to a render output\n", prog);
-    std::printf("  %s process-eq <source> <out> [vol]  Same as process, but applies a test EQ chain\n", prog);
+    std::printf("  %s process <source> <out> [vol] [--preset <file>]  Loopback capture + optional EQ preset\n", prog);
+    std::printf("  %s process-eq <source> <out> [vol]                   Same as process, but applies a hardcoded test EQ chain\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
     std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
     std::printf("  %s passthrough <in> <out> [volume]    Same as 'route' (legacy alias)\n", prog);
@@ -59,7 +63,7 @@ static void printUsage(const char* prog)
     std::printf("\nRouting volume commands while running: + or = louder, - quieter, v <0-100> set, q stop.\n");
     std::printf("\nExamples:\n");
     std::printf("  %s list\n", prog);
-    std::printf("  %s process \"Speakers\" \"Headphones\" 80  -- system-wide loopback + effect pass\n", prog);
+    std::printf("  %s process \"Speakers\" \"Headphones\" 80 --preset config/presets/headphones.json\n", prog);
     std::printf("  %s monitor \"Studio Main\"      -- listen to cable 1 on your headphones\n", prog);
     std::printf("  %s monitor \"My Studio Cable\" \"Headphones\" 50\n", prog);
     std::printf("  %s default \"Headphones (Crusher ANC 2)\" -- restore default output\n", prog);
@@ -125,9 +129,77 @@ static void inputThread(AudioEngine* engine, std::atomic<bool>* stop)
     }
 }
 
-static int cmdRoute(const std::string& captureHint, const std::string& renderHint, float startVolume = 1.0f)
+static bool parseFilterType(const std::string& s, FilterType* out)
+{
+    std::string t;
+    t.reserve(s.size());
+    for (char c : s) t.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+
+    if (t == "peak")       { *out = FilterType::Peak;       return true; }
+    if (t == "lowshelf")   { *out = FilterType::LowShelf;   return true; }
+    if (t == "highshelf")  { *out = FilterType::HighShelf;  return true; }
+    if (t == "lowpass")    { *out = FilterType::LowPass;    return true; }
+    if (t == "highpass")   { *out = FilterType::HighPass;   return true; }
+    if (t == "notch")      { *out = FilterType::Notch;      return true; }
+    if (t == "allpass")    { *out = FilterType::Allpass;    return true; }
+    return false;
+}
+
+static bool loadEqPreset(EqChain& eq, const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f) {
+        std::fprintf(stderr, "[route] Could not open EQ preset: %s\n", path.c_str());
+        return false;
+    }
+
+    try {
+        nlohmann::json j;
+        f >> j;
+
+        const auto& bands = j.at("bands");
+        for (const auto& b : bands) {
+            std::string typeStr = b.at("type");
+            FilterType type;
+            if (!parseFilterType(typeStr, &type)) {
+                std::fprintf(stderr, "[route] Unknown filter type: %s\n", typeStr.c_str());
+                return false;
+            }
+
+            double freq    = b.value("freq",    1000.0);
+            double gainDb  = b.value("gain_db", 0.0);
+            double q       = b.value("q",       1.0);
+
+            eq.addBand(type, freq, gainDb, q);
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[route] Failed to parse EQ preset '%s': %s\n", path.c_str(), e.what());
+        return false;
+    }
+
+    return true;
+}
+
+static int cmdRoute(const std::string& captureHint, const std::string& renderHint,
+                    float startVolume = 1.0f, const std::string& eqPresetPath = "")
 {
     AudioEngine engine;
+    std::unique_ptr<EqChain> eq;
+
+    if (!eqPresetPath.empty()) {
+        eq = std::make_unique<EqChain>();
+        if (!loadEqPreset(*eq, eqPresetPath)) {
+            return 1;
+        }
+        std::printf("[route] Loaded EQ preset '%s' (%zu bands)\n", eqPresetPath.c_str(), eq->bandCount());
+        engine.setProcessCallback([&eq, &engine](float* buf, uint32_t frames, uint32_t ch) {
+            if (!eq->prepared()) {
+                eq->prepare(engine.captureSampleRate(), ch);
+            }
+            eq->process(buf, frames, ch);
+        });
+    }
+
     std::printf("[route] Starting:  capture = \"%s\"  →  render = \"%s\"\n",
                 captureHint.c_str(), renderHint.c_str());
 
@@ -278,9 +350,33 @@ int main(int argc, char* argv[])
         return cmdRoute(in, cable, vol);
     }
     else if (cmd == "process") {
-        if (argc < 4) { std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%]\n"); return 1; }
-        float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
-        return cmdRoute(argv[2], argv[3], vol);
+        if (argc < 4) {
+            std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%] [--preset <file.json>]\n");
+            return 1;
+        }
+        float vol = 1.0f;
+        std::string preset;
+        for (int i = 4; i < argc; ) {
+            std::string a = argv[i];
+            std::string al;
+            al.reserve(a.size());
+            for (char ch : a) al.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+
+            if (al == "--preset" || al == "-p") {
+                if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
+                preset = argv[i + 1];
+                i += 2;
+            } else if (al[0] == '-') {
+                std::fprintf(stderr, "Unknown option: %s\n", a.c_str());
+                return 1;
+            } else {
+                vol = std::atoi(a.c_str()) / 100.0f;
+                if (vol < 0.0f) vol = 0.0f;
+                if (vol > 2.0f) vol = 2.0f;
+                i += 1;
+            }
+        }
+        return cmdRoute(argv[2], argv[3], vol, preset);
     }
     else if (cmd == "process-eq") {
         if (argc < 4) { std::fprintf(stderr, "Usage: process-eq <loopback_source> <render_output> [volume%%]\n"); return 1; }

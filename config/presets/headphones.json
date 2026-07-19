@@ -1,0 +1,8 @@
+{
+  "description": "Bright, open headphones with controlled sub-bass and a small presence boost.",
+  "bands": [
+    { "type": "highpass", "freq": 60,   "gain_db": 0, "q": 0.707 },
+    { "type": "peak",    "freq": 3000, "gain_db": 3, "q": 1.2   },
+    { "type": "highshelf","freq": 10000,"gain_db": 2, "q": 0.707 }
+  ]
+}

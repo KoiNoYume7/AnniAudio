@@ -29,7 +29,7 @@ What works today:
 Not yet finished:
 
 - The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing.
-- DSP callbacks (EQ, RNNoise, HRTF) are implemented as standalone POCs but are **not yet connected** to the live audio engine.
+- **EQ is now connected** to the live `process` command and loads from JSON presets. **RNNoise** and **HRTF** are still standalone POCs only.
 - The GUI/TUI are thin prototypes around the CLI, not a polished product UI.
 
 ---
@@ -145,15 +145,17 @@ Attestation signing is a business expense, not a hobby expense. The recommended 
 
 ## Daily use without the driver
 
-The virtual driver is not required to use AnniAudio as a system-wide audio processor. The engine can capture the default output via WASAPI loopback, run it through EQ / RNNoise / HRTF, and render it to headphones.
-
-Right now the `process` command passes audio through. DSP wiring is next on the roadmap.
+The virtual driver is not required to use AnniAudio as a system-wide audio processor. The engine can capture any output via WASAPI loopback, run it through EQ / RNNoise / HRTF, and render it to another device.
 
 ```powershell
+# Passthrough loopback
 .\build\bin\Release\route_cli.exe process "Speakers" "Headphones"
+
+# EQ from a JSON preset
+.\build\bin\Release\route_cli.exe process "Speakers" "Headphones" 80 --preset config/presets/headphones.json
 ```
 
-That command sits between Windows and the selected output, applying processing in real time, with no driver signing required and no impact on games.
+Both commands run in real time, with no driver signing required and no impact on games. Preset files live in `config/presets/` and define a list of biquad bands (`peak`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `notch`, `allpass`).
 
 See `docs/ROADMAP.md` for the full breakdown.
 
