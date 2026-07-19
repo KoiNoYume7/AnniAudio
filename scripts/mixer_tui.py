@@ -94,7 +94,7 @@ def api_call(method, path, body=None):
 # ---------------------------------------------------------------------------
 
 def sse_worker(port):
-    global status_text
+    global status_text, state
     base = BASE.format(port=port)
     session = requests.Session()
     while True:
@@ -118,7 +118,6 @@ def sse_worker(port):
                     try:
                         payload = json.loads(line[6:])
                         with state_lock:
-                            global state
                             state = payload
                     except Exception as e:
                         with state_lock:
