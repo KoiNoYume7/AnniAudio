@@ -55,8 +55,9 @@ static void printUsage(const char* prog)
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
-    std::printf("  %s process <source> <out> [vol] [--preset <file>] [--rnnoise]  Loopback capture + optional EQ / NR\n", prog);
-    std::printf("  %s process-eq <source> <out> [vol]                              Same as process, but applies a hardcoded test EQ chain\n", prog);
+    std::printf("  %s process [<source> <out> [vol]] [--preset <file>] [--rnnoise] [--config <profile>]\n", prog);
+    std::printf("                                                                    Loopback capture + optional EQ / NR / profile\n", prog);
+    std::printf("  %s process-eq <source> <out> [vol]                                Same as process, but applies a hardcoded test EQ chain\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
     std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
     std::printf("  %s passthrough <in> <out> [volume]    Same as 'route' (legacy alias)\n", prog);
@@ -64,6 +65,7 @@ static void printUsage(const char* prog)
     std::printf("\nRouting volume commands while running: + or = louder, - quieter, v <0-100> set, q stop.\n");
     std::printf("\nExamples:\n");
     std::printf("  %s list\n", prog);
+    std::printf("  %s process --config config/profiles/default.json\n", prog);
     std::printf("  %s process \"Speakers\" \"Headphones\" 80 --preset config/presets/headphones.json --rnnoise\n", prog);
     std::printf("  %s monitor \"Studio Main\"      -- listen to cable 1 on your headphones\n", prog);
     std::printf("  %s monitor \"My Studio Cable\" \"Headphones\" 50\n", prog);
@@ -351,6 +353,46 @@ static int cmdDefault(const std::string& hint)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Process profile loading
+// ---------------------------------------------------------------------------
+struct ProcessProfile {
+    std::string source;
+    std::string output;
+    float       volume    = 1.0f;
+    std::string preset;
+    bool        rnnoise   = false;
+};
+
+static bool loadProcessProfile(const std::string& path, ProcessProfile& out)
+{
+    std::ifstream f(path);
+    if (!f) {
+        std::fprintf(stderr, "[route] Could not open profile: %s\n", path.c_str());
+        return false;
+    }
+
+    try {
+        nlohmann::json j;
+        f >> j;
+
+        out.source  = j.value("source", out.source);
+        out.output  = j.value("output", out.output);
+        out.volume  = j.value("volume", out.volume * 100.0f) / 100.0f; // accept 0-100 or 0.0-1.0
+        out.preset  = j.value("preset", out.preset);
+        out.rnnoise = j.value("rnnoise", out.rnnoise);
+
+        // Clamp volume to a sane range.
+        if (out.volume < 0.0f) out.volume = 0.0f;
+        if (out.volume > 2.0f) out.volume = 2.0f;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[route] Failed to parse profile '%s': %s\n", path.c_str(), e.what());
+        return false;
+    }
+
+    return true;
+}
+
 int main(int argc, char* argv[])
 {
     if (argc < 2) { printUsage(argv[0]); return 1; }
@@ -377,37 +419,60 @@ int main(int argc, char* argv[])
         return cmdRoute(in, cable, vol);
     }
     else if (cmd == "process") {
-        if (argc < 4) {
-            std::fprintf(stderr, "Usage: process <loopback_source> <render_output> [volume%%] [--preset <file.json>] [--rnnoise]\n");
-            return 1;
-        }
-        float vol = 1.0f;
-        std::string preset;
-        bool useRnnoise = false;
-        for (int i = 4; i < argc; ) {
+        ProcessProfile profile;
+        bool hasSource = false, hasOutput = false, hasVolume = false, hasPreset = false, hasRnnoise = false;
+
+        for (int i = 2; i < argc; ) {
             std::string a = argv[i];
             std::string al;
             al.reserve(a.size());
             for (char ch : a) al.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
 
-            if (al == "--preset" || al == "-p") {
+            if (al == "--config" || al == "-c") {
                 if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
-                preset = argv[i + 1];
+                if (!loadProcessProfile(argv[i + 1], profile)) return 1;
+                i += 2;
+            } else if (al == "--preset" || al == "-p") {
+                if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
+                profile.preset = argv[i + 1];
+                hasPreset = true;
                 i += 2;
             } else if (al == "--rnnoise" || al == "-n") {
-                useRnnoise = true;
+                profile.rnnoise = true;
+                hasRnnoise = true;
+                i += 1;
+            } else if (al == "--no-rnnoise") {
+                profile.rnnoise = false;
+                hasRnnoise = true;
                 i += 1;
             } else if (al[0] == '-') {
                 std::fprintf(stderr, "Unknown option: %s\n", a.c_str());
                 return 1;
             } else {
-                vol = std::atoi(a.c_str()) / 100.0f;
-                if (vol < 0.0f) vol = 0.0f;
-                if (vol > 2.0f) vol = 2.0f;
+                // Positional arguments in order: source, output, volume
+                if (!hasSource) {
+                    profile.source = a; hasSource = true;
+                } else if (!hasOutput) {
+                    profile.output = a; hasOutput = true;
+                } else if (!hasVolume) {
+                    profile.volume = std::atoi(a.c_str()) / 100.0f;
+                    if (profile.volume < 0.0f) profile.volume = 0.0f;
+                    if (profile.volume > 2.0f) profile.volume = 2.0f;
+                    hasVolume = true;
+                } else {
+                    std::fprintf(stderr, "Usage: process <source> <output> [vol] [--preset <file>] [--rnnoise] [--config <profile>]\n");
+                    return 1;
+                }
                 i += 1;
             }
         }
-        return cmdRoute(argv[2], argv[3], vol, preset, useRnnoise);
+
+        if (profile.source.empty() || profile.output.empty()) {
+            std::fprintf(stderr, "Usage: process <source> <output> [vol] [--preset <file>] [--rnnoise] [--config <profile>]\n");
+            return 1;
+        }
+
+        return cmdRoute(profile.source, profile.output, profile.volume, profile.preset, profile.rnnoise);
     }
     else if (cmd == "process-eq") {
         if (argc < 4) { std::fprintf(stderr, "Usage: process-eq <loopback_source> <render_output> [volume%%]\n"); return 1; }

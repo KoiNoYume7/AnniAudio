@@ -159,9 +159,12 @@ The virtual driver is not required to use AnniAudio as a system-wide audio proce
 
 # EQ + RNNoise combined
 .\build\bin\Release\route_cli.exe process "Microphone" "Headphones" 80 --preset config/presets/clean_voice.json --rnnoise
+
+# Load everything from a profile
+.\build\bin\Release\route_cli.exe process --config config/profiles/voice.json
 ```
 
-All of these run in real time, with no driver signing required and no impact on games. Preset files live in `config/presets/` and define a list of biquad bands (`peak`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `notch`, `allpass`). RNNoise currently requires a 48 kHz source; it will be skipped otherwise.
+All of these run in real time, with no driver signing required and no impact on games. Preset files live in `config/presets/` and define a list of biquad bands (`peak`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `notch`, `allpass`). Profiles live in `config/profiles/` and bundle source, output, volume, preset, and RNNoise toggle. RNNoise currently requires a 48 kHz source; it will be skipped otherwise.
 
 See `docs/ROADMAP.md` for the full breakdown.
 

@@ -1,0 +1,8 @@
+{
+  "description": "Clean up microphone voice chat.",
+  "source": "Microphone",
+  "output": "Headphones",
+  "volume": 100,
+  "preset": "config/presets/clean_voice.json",
+  "rnnoise": true
+}
