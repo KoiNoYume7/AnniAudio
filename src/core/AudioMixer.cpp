@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -19,9 +20,51 @@ using Microsoft::WRL::ComPtr;
 
 constexpr UINT64 kDefaultBuffer100Ns = 2000000; // 200 ms shared buffer
 
+// WaitForMultipleObjects caps out at MAXIMUM_WAIT_OBJECTS (64). Two slots are
+// reserved for stopEvent and renderEvent, leaving this many for strips.
+constexpr size_t kMaxStrips = 62;
+
+// ---------------------------------------------------------------------------
+// Impl
+//
+// Locking model
+// --------------
+// `strips` (the ordered list mixed each render tick) has exactly one writer:
+// the audio thread itself, and only while holding `structureMutex`. It is
+// mutated in two situations:
+//   1. Before start() has ever been called: there is no audio thread yet, so
+//      the calling thread (still under `structureMutex`, for uniformity) can
+//      write directly.
+//   2. While running: any thread wanting to add/remove/rename a strip
+//      prepares the change (which may fail — e.g. device not found — and can
+//      take a little time, e.g. opening a WASAPI client) OFF the audio
+//      thread, then pushes a ready-to-apply `Command` onto a small
+//      mutex-protected queue. The audio thread drains that queue and applies
+//      each command — a `strips` vector insert/erase, nothing that can block
+//      or fail — once per iteration of its own loop, under `structureMutex`.
+//
+// Because the audio thread is the only writer, and it only ever writes while
+// holding the lock, its own *unlocked* reads of `strips` later in the same
+// loop iteration (the actual per-sample WASAPI/ring-buffer work) are safe:
+// nothing else can be concurrently mutating the vector out from under it.
+// Other threads reading `strips` (snapshot(), resolving a StripId to a
+// Strip for a volume/mute write) take `structureMutex` just long enough to
+// copy out a `shared_ptr<Strip>`, then release it — so they never hold the
+// lock while touching a Strip's contents, and never block the audio thread
+// for anything more than a vector insert/erase/scan.
+//
+// Per-strip volume/mute remain plain atomics on the Strip object (unchanged
+// from the original design) — once you have a shared_ptr<Strip>, writing
+// those is lock-free and instantaneous, no queue involved.
+// ---------------------------------------------------------------------------
+
 struct AudioMixer::Impl {
     struct Strip {
+        StripId     id = 0;
         std::string name;
+        std::string source;
+        std::optional<int> knobIndex;
+
         ComPtr<IAudioClient>        captureAC;
         ComPtr<IAudioCaptureClient> captureSvc;
         HANDLE captureEvent = nullptr;
@@ -44,6 +87,19 @@ struct AudioMixer::Impl {
 
         std::atomic<float> volume{1.0f};
         std::atomic<bool>  muted{false};
+
+        // Set once by the audio thread when it Start()s the capture client
+        // (either at mixer start, or when applying a live AddStrip command),
+        // so teardown knows whether Stop() is meaningful to call.
+        bool started = false;
+    };
+
+    struct Command {
+        enum class Kind { Add, Remove, Rename, SetKnobIndex } kind;
+        std::shared_ptr<Strip> strip;   // Add only
+        StripId             targetId = 0; // Remove, Rename, SetKnobIndex
+        std::string          text;        // Rename: new name
+        std::optional<int>   knobIndex;    // SetKnobIndex
     };
 
     ComPtr<IMMDeviceEnumerator> enumerator;
@@ -58,7 +114,15 @@ struct AudioMixer::Impl {
     bool     renderIsFloat = true;
     UINT32   renderBufFrames = 0;
 
-    std::vector<std::unique_ptr<Strip>> strips;
+    // Guards `strips`' shape (see class-level comment). Never held during
+    // blocking WASAPI I/O.
+    mutable std::mutex structureMutex;
+    std::vector<std::shared_ptr<Strip>> strips;
+
+    std::mutex commandMutex;
+    std::vector<Command> pendingCommands;
+    std::atomic<uint32_t> nextStripId{1};
+
     std::string outputName;
     std::vector<float> mixBuf;
 
@@ -71,12 +135,52 @@ struct AudioMixer::Impl {
 
     bool openOutput(const std::string& outputHint);
     bool openStrip(Strip& s, const std::string& sourceHint);
+    void enqueue(Command cmd);
 
     void run();
+    void applyPendingCommands(bool& handlesDirty);
     void processRender();
-    void processStrip(size_t idx);
+    void processStrip(Strip& s);
+    void teardownStrip(Strip& s);
     void cleanup();
+
+    std::shared_ptr<Strip> findStripLocked(StripId id) const; // caller holds structureMutex
+    std::shared_ptr<Strip> findStrip(StripId id) const;        // takes the lock itself
+
+    static StripSnapshot toSnapshot(const Strip& s);
 };
+
+std::shared_ptr<AudioMixer::Impl::Strip> AudioMixer::Impl::findStripLocked(StripId id) const
+{
+    for (auto& s : strips) {
+        if (s->id == id) return s;
+    }
+    return nullptr;
+}
+
+std::shared_ptr<AudioMixer::Impl::Strip> AudioMixer::Impl::findStrip(StripId id) const
+{
+    std::lock_guard<std::mutex> lk(structureMutex);
+    return findStripLocked(id);
+}
+
+StripSnapshot AudioMixer::Impl::toSnapshot(const Strip& s)
+{
+    StripSnapshot snap;
+    snap.id        = s.id;
+    snap.name      = s.name;
+    snap.source    = s.source;
+    snap.volume    = s.volume.load();
+    snap.muted     = s.muted.load();
+    snap.knobIndex = s.knobIndex;
+    return snap;
+}
+
+void AudioMixer::Impl::enqueue(Command cmd)
+{
+    std::lock_guard<std::mutex> lk(commandMutex);
+    pendingCommands.push_back(std::move(cmd));
+}
 
 bool AudioMixer::Impl::openOutput(const std::string& outputHint)
 {
@@ -195,8 +299,7 @@ bool AudioMixer::Impl::openStrip(Strip& s, const std::string& sourceHint)
     s.readBuf.resize((size_t)renderBufFrames * renderCh);
     s.ring.init((size_t)renderBufFrames * renderCh * 4);
 
-    std::fprintf(stderr, "[mixer] Strip %zu : %s%s\n", strips.size(),
-                 s.name.c_str(),
+    std::fprintf(stderr, "[mixer] Strip %u : %s%s\n", s.id, s.name.c_str(),
                  s.captureIsLoopback ? " [loopback]" : "");
     std::fprintf(stderr, "[mixer]  format : %u Hz, %u ch, %s\n",
                  s.captureRate, s.captureCh, s.captureIsFloat ? "float" : "pcm");
@@ -207,6 +310,61 @@ bool AudioMixer::Impl::openStrip(Strip& s, const std::string& sourceHint)
     return true;
 }
 
+void AudioMixer::Impl::teardownStrip(Strip& s)
+{
+    if (s.started && s.captureAC) s.captureAC->Stop();
+    if (s.captureEvent) { CloseHandle(s.captureEvent); s.captureEvent = nullptr; }
+    s.captureSvc.Reset();
+    s.captureAC.Reset();
+}
+
+void AudioMixer::Impl::applyPendingCommands(bool& handlesDirty)
+{
+    std::vector<Command> local;
+    {
+        std::lock_guard<std::mutex> lk(commandMutex);
+        if (pendingCommands.empty()) return;
+        local.swap(pendingCommands);
+    }
+
+    std::lock_guard<std::mutex> lk(structureMutex);
+    for (auto& cmd : local) {
+        switch (cmd.kind) {
+        case Command::Kind::Add: {
+            if (strips.size() >= kMaxStrips) {
+                std::fprintf(stderr, "[mixer] Dropping live AddStrip for '%s': strip limit (%zu) reached\n",
+                             cmd.strip->name.c_str(), kMaxStrips);
+                break;
+            }
+            cmd.strip->captureAC->Start();
+            cmd.strip->started = true;
+            strips.push_back(cmd.strip);
+            handlesDirty = true;
+            std::fprintf(stderr, "[mixer] Added strip %u : %s\n", cmd.strip->id, cmd.strip->name.c_str());
+            break;
+        }
+        case Command::Kind::Remove: {
+            auto it = std::find_if(strips.begin(), strips.end(),
+                [&](const std::shared_ptr<Strip>& s) { return s->id == cmd.targetId; });
+            if (it == strips.end()) break;
+            std::fprintf(stderr, "[mixer] Removed strip %u : %s\n", (*it)->id, (*it)->name.c_str());
+            teardownStrip(**it);
+            strips.erase(it);
+            handlesDirty = true;
+            break;
+        }
+        case Command::Kind::Rename: {
+            if (auto s = findStripLocked(cmd.targetId)) s->name = cmd.text;
+            break;
+        }
+        case Command::Kind::SetKnobIndex: {
+            if (auto s = findStripLocked(cmd.targetId)) s->knobIndex = cmd.knobIndex;
+            break;
+        }
+        }
+    }
+}
+
 void AudioMixer::Impl::run()
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -215,17 +373,27 @@ void AudioMixer::Impl::run()
     HANDLE mmTask = AvSetMmThreadCharacteristics(L"Audio", &taskIdx);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 
-    std::vector<HANDLE> handles;
-    handles.reserve(2 + strips.size());
-    handles.push_back(stopEvent);
-    handles.push_back(renderEvent);
-    for (auto& s : strips) handles.push_back(s->captureEvent);
-
-    for (auto& s : strips) s->captureAC->Start();
+    for (auto& s : strips) { s->captureAC->Start(); s->started = true; }
     renderAC->Start();
     running = true;
 
+    std::vector<HANDLE> handles;
+    bool handlesDirty = true;
+
     while (true) {
+        bool dirty = false;
+        applyPendingCommands(dirty);
+        if (dirty) handlesDirty = true;
+
+        if (handlesDirty) {
+            handles.clear();
+            handles.reserve(2 + strips.size());
+            handles.push_back(stopEvent);
+            handles.push_back(renderEvent);
+            for (auto& s : strips) handles.push_back(s->captureEvent);
+            handlesDirty = false;
+        }
+
         DWORD w = WaitForMultipleObjects((DWORD)handles.size(), handles.data(), FALSE, 200);
         if (w == WAIT_OBJECT_0) break;
 
@@ -233,22 +401,20 @@ void AudioMixer::Impl::run()
         if (idx == 1) {
             processRender();
         } else if (idx >= 2 && idx < handles.size()) {
-            processStrip(idx - 2);
+            size_t stripIdx = idx - 2;
+            if (stripIdx < strips.size()) processStrip(*strips[stripIdx]);
         }
     }
 
-    for (auto& s : strips) if (s->captureAC) s->captureAC->Stop();
+    for (auto& s : strips) teardownStrip(*s);
     if (renderAC) renderAC->Stop();
     if (mmTask) AvRevertMmThreadCharacteristics(mmTask);
     CoUninitialize();
     running = false;
 }
 
-void AudioMixer::Impl::processStrip(size_t idx)
+void AudioMixer::Impl::processStrip(Strip& s)
 {
-    if (idx >= strips.size()) return;
-    Strip& s = *strips[idx];
-
     UINT32 pktSize = 0;
     while (SUCCEEDED(s.captureSvc->GetNextPacketSize(&pktSize)) && pktSize > 0) {
         BYTE* data = nullptr;
@@ -298,12 +464,12 @@ void AudioMixer::Impl::processRender()
 
     const size_t outSamples = (size_t)toWrite * renderCh;
 
-    // Clear mix buffer
     if (mixBuf.size() < outSamples) mixBuf.resize(outSamples);
     std::fill_n(mixBuf.data(), outSamples, 0.0f);
 
     for (auto& s : strips) {
         float vol = s->muted.load() ? 0.0f : s->volume.load();
+        if (s->readBuf.size() < outSamples) s->readBuf.resize(outSamples);
         if (vol == 0.0f) {
             // Still consume so the strip doesn't drift/fill up.
             s->ring.readOrSilence(s->readBuf.data(), outSamples);
@@ -341,17 +507,14 @@ void AudioMixer::Impl::cleanup()
     if (stopEvent) { CloseHandle(stopEvent); stopEvent = nullptr; }
     if (renderEvent) { CloseHandle(renderEvent); renderEvent = nullptr; }
     if (thread) { CloseHandle(thread); thread = nullptr; }
-    for (auto& s : strips) {
-        if (s->captureEvent) { CloseHandle(s->captureEvent); s->captureEvent = nullptr; }
-    }
+
+    std::lock_guard<std::mutex> lk(structureMutex);
+    for (auto& s : strips) teardownStrip(*s);
+    strips.clear();
+
     renderSvc.Reset();
     renderAC.Reset();
     renderDev.Reset();
-    for (auto& s : strips) {
-        s->captureSvc.Reset();
-        s->captureAC.Reset();
-    }
-    strips.clear();
     running = false;
 }
 
@@ -369,29 +532,88 @@ bool AudioMixer::init(const std::string& outputHint)
     return m_impl->openOutput(outputHint);
 }
 
-int AudioMixer::addStrip(const MixerStripConfig& cfg)
+std::optional<StripId> AudioMixer::addStrip(const MixerStripConfig& cfg)
 {
-    if (!m_impl->renderAC) return -1;
-    if (m_impl->strips.size() >= 62) {
-        std::fprintf(stderr, "[mixer] Too many strips (max 62)\n");
-        return -1;
+    if (!m_impl->renderAC) return std::nullopt; // init() must run first
+
+    {
+        std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+        if (m_impl->strips.size() >= kMaxStrips) {
+            std::fprintf(stderr, "[mixer] Too many strips (max %zu)\n", kMaxStrips);
+            return std::nullopt;
+        }
     }
 
-    auto s = std::make_unique<Impl::Strip>();
-    s->name   = cfg.name.empty() ? cfg.source : cfg.name;
-    s->volume.store(cfg.volume);
-    s->muted.store(cfg.muted);
+    auto strip = std::make_shared<Impl::Strip>();
+    strip->id        = m_impl->nextStripId.fetch_add(1);
+    strip->name      = cfg.name.empty() ? cfg.source : cfg.name;
+    strip->source    = cfg.source;
+    strip->knobIndex = cfg.knobIndex;
+    strip->volume.store(std::clamp(cfg.volume, 0.0f, 2.0f));
+    strip->muted.store(cfg.muted);
 
-    if (!m_impl->openStrip(*s, cfg.source)) return -1;
+    if (!m_impl->openStrip(*strip, cfg.source)) return std::nullopt;
 
-    int idx = static_cast<int>(m_impl->strips.size());
-    m_impl->strips.push_back(std::move(s));
-    return idx;
+    if (m_impl->running.load()) {
+        m_impl->enqueue(Impl::Command{ Impl::Command::Kind::Add, strip, 0, {}, {} });
+    } else {
+        std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+        m_impl->strips.push_back(strip);
+    }
+    return strip->id;
+}
+
+bool AudioMixer::removeStrip(StripId id)
+{
+    if (m_impl->running.load()) {
+        // Existence isn't verified synchronously in the running case — the
+        // command is a no-op if the id doesn't exist by the time it's applied.
+        m_impl->enqueue(Impl::Command{ Impl::Command::Kind::Remove, nullptr, id, {}, {} });
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+    auto it = std::find_if(m_impl->strips.begin(), m_impl->strips.end(),
+        [&](const std::shared_ptr<Impl::Strip>& s) { return s->id == id; });
+    if (it == m_impl->strips.end()) return false;
+    m_impl->teardownStrip(**it);
+    m_impl->strips.erase(it);
+    return true;
+}
+
+bool AudioMixer::renameStrip(StripId id, const std::string& name)
+{
+    if (m_impl->running.load()) {
+        m_impl->enqueue(Impl::Command{ Impl::Command::Kind::Rename, nullptr, id, name, {} });
+        return true;
+    }
+    std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+    auto s = m_impl->findStripLocked(id);
+    if (!s) return false;
+    s->name = name;
+    return true;
+}
+
+bool AudioMixer::setStripKnobIndex(StripId id, std::optional<int> knobIndex)
+{
+    if (m_impl->running.load()) {
+        m_impl->enqueue(Impl::Command{ Impl::Command::Kind::SetKnobIndex, nullptr, id, {}, knobIndex });
+        return true;
+    }
+    std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+    auto s = m_impl->findStripLocked(id);
+    if (!s) return false;
+    s->knobIndex = knobIndex;
+    return true;
 }
 
 bool AudioMixer::start()
 {
-    if (!m_impl->renderAC || m_impl->strips.empty()) return false;
+    if (!m_impl->renderAC) return false;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+        if (m_impl->strips.empty()) return false;
+    }
     m_impl->thread = CreateThread(nullptr, 0, Impl::threadEntry, m_impl.get(), 0, nullptr);
     if (!m_impl->thread) return false;
 
@@ -414,50 +636,57 @@ void AudioMixer::stop()
 
 bool AudioMixer::running() const noexcept { return m_impl->running.load(); }
 
-size_t AudioMixer::stripCount() const noexcept { return m_impl->strips.size(); }
-
-void AudioMixer::setStripVolume(size_t idx, float vol)
+bool AudioMixer::setStripVolume(StripId id, float vol)
 {
-    if (idx >= m_impl->strips.size()) return;
-    if (vol < 0.0f) vol = 0.0f;
-    if (vol > 2.0f) vol = 2.0f;
-    m_impl->strips[idx]->volume.store(vol);
+    auto s = m_impl->findStrip(id);
+    if (!s) return false;
+    s->volume.store(std::clamp(vol, 0.0f, 2.0f));
+    return true;
 }
 
-float AudioMixer::stripVolume(size_t idx) const
+bool AudioMixer::setStripMuted(StripId id, bool muted)
 {
-    if (idx >= m_impl->strips.size()) return 0.0f;
-    return m_impl->strips[idx]->volume.load();
-}
-
-void AudioMixer::setStripMuted(size_t idx, bool mute)
-{
-    if (idx >= m_impl->strips.size()) return;
-    m_impl->strips[idx]->muted.store(mute);
-}
-
-bool AudioMixer::stripMuted(size_t idx) const
-{
-    if (idx >= m_impl->strips.size()) return true;
-    return m_impl->strips[idx]->muted.load();
+    auto s = m_impl->findStrip(id);
+    if (!s) return false;
+    s->muted.store(muted);
+    return true;
 }
 
 void AudioMixer::setMasterVolume(float v)
 {
-    if (v < 0.0f) v = 0.0f;
-    if (v > 2.0f) v = 2.0f;
-    m_impl->masterVolume.store(v);
+    m_impl->masterVolume.store(std::clamp(v, 0.0f, 2.0f));
 }
 
 float AudioMixer::masterVolume() const { return m_impl->masterVolume.load(); }
 
-const std::string& AudioMixer::outputName() const { return m_impl->outputName; }
-
-const std::string& AudioMixer::stripName(size_t idx) const
+size_t AudioMixer::stripCount() const noexcept
 {
-    static const std::string empty;
-    if (idx >= m_impl->strips.size()) return empty;
-    return m_impl->strips[idx]->name;
+    std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+    return m_impl->strips.size();
 }
+
+std::vector<StripSnapshot> AudioMixer::snapshot() const
+{
+    std::vector<StripSnapshot> out;
+    std::lock_guard<std::mutex> lk(m_impl->structureMutex);
+    out.reserve(m_impl->strips.size());
+    for (auto& s : m_impl->strips) out.push_back(Impl::toSnapshot(*s));
+    return out;
+}
+
+std::optional<StripSnapshot> AudioMixer::stripSnapshot(StripId id) const
+{
+    auto s = m_impl->findStrip(id);
+    if (!s) return std::nullopt;
+    return Impl::toSnapshot(*s);
+}
+
+std::vector<EndpointInfo> AudioMixer::listEndpoints() const
+{
+    if (!m_impl->enumerator) return {};
+    return enumEndpoints(m_impl->enumerator.Get());
+}
+
+const std::string& AudioMixer::outputName() const { return m_impl->outputName; }
 
 } // namespace anniaudio::core

@@ -161,6 +161,46 @@ ComPtr<IMMDevice> findAnyDevice(IMMDeviceEnumerator* enumerator,
     return nullptr;
 }
 
+std::vector<EndpointInfo> enumEndpoints(IMMDeviceEnumerator* enumerator)
+{
+    std::vector<EndpointInfo> out;
+    if (!enumerator) return out;
+
+    // Determine defaults
+    ComPtr<IMMDevice> defRender, defCapture;
+    enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defRender);
+    enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &defCapture);
+
+    wchar_t* defRenderId = nullptr; wchar_t* defCaptureId = nullptr;
+    if (defRender) defRender->GetId(&defRenderId);
+    if (defCapture) defCapture->GetId(&defCaptureId);
+    std::string defRenderStr = defRenderId ? wideToUtf8(defRenderId) : "";
+    std::string defCaptureStr = defCaptureId ? wideToUtf8(defCaptureId) : "";
+    if (defRenderId) CoTaskMemFree(defRenderId);
+    if (defCaptureId) CoTaskMemFree(defCaptureId);
+
+    for (int pass = 0; pass < 2; ++pass) {
+        EDataFlow flow = (pass == 0) ? eRender : eCapture;
+        ComPtr<IMMDeviceCollection> col;
+        if (FAILED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &col))) continue;
+        UINT count = 0; col->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            ComPtr<IMMDevice> dev;
+            if (FAILED(col->Item(i, &dev))) continue;
+            wchar_t* id = nullptr; dev->GetId(&id);
+            std::string idStr = id ? wideToUtf8(id) : "";
+            if (id) CoTaskMemFree(id);
+            std::string name = friendlyName(dev.Get());
+            bool isDefault = (flow == eRender)
+                ? (idStr == defRenderStr)
+                : (idStr == defCaptureStr);
+            out.push_back({ idStr, name, flow == eRender,
+                            nameContains(name, "AnniAudio"), isDefault });
+        }
+    }
+    return out;
+}
+
 uint32_t convertBuffer(
     const float* src, uint32_t srcFrames, uint32_t srcCh,
     float*       dst, uint32_t dstMaxFrames, uint32_t dstCh,

@@ -1,5 +1,6 @@
 #include "AudioEngine.hpp"
 #include "AudioMixer.hpp"
+#include "MixerControlServer.hpp"
 #include "eq.hpp"
 #include "midi_input.hpp"
 #include "noise_suppressor.hpp"
@@ -22,6 +23,7 @@ using namespace anniaudio::dsp;
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -60,7 +62,7 @@ static void printUsage(const char* prog)
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
     std::printf("  %s process [<source> <out> [vol]] [--preset <file>] [--rnnoise] [--config <profile>]\n", prog);
     std::printf("                                                                    Loopback capture + optional EQ / NR / profile\n", prog);
-    std::printf("  %s mixer <config.json>                                            Multi-source mixer with per-strip volume/mute\n", prog);
+    std::printf("  %s mixer <config.json> [--port <n>]                               Multi-source mixer with per-strip volume/mute (control API on 127.0.0.1:8850)\n", prog);
     std::printf("  %s midi [list|<device-hint>]                                      List MIDI inputs or monitor messages\n", prog);
     std::printf("  %s process-eq <source> <out> [vol]                                Same as process, but applies a hardcoded test EQ chain\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
@@ -430,26 +432,33 @@ static int cmdMidi(const std::string& arg)
     return 0;
 }
 
-static void printMixerHelp(const anniaudio::core::AudioMixer& mixer)
+// Interactive commands (v/m) address strips by their 1-based position in the
+// most recent listing, for convenience at a terminal. That position is
+// resolved to the strip's real StripId right here, at the moment the command
+// is typed -- it is not held onto, so it can't go stale like a GUI holding a
+// raw index across multiple actions would.
+static std::vector<anniaudio::core::StripSnapshot> printMixerHelp(const anniaudio::core::AudioMixer& mixer)
 {
+    auto strips = mixer.snapshot();
     std::printf("\n[mixer] Controls:\n");
-    std::printf("  <1-%zu>+<Enter>  select strip (not yet used in text mode)\n", mixer.stripCount());
-    std::printf("  v <strip> <0-200>   set strip volume (strips are 1-%zu)\n", mixer.stripCount());
+    std::printf("  <1-%zu>+<Enter>  select strip (not yet used in text mode)\n", strips.size());
+    std::printf("  v <strip> <0-200>   set strip volume (strips are 1-%zu)\n", strips.size());
     std::printf("  m <strip>           toggle mute\n");
     std::printf("  + / -               master volume +/- 5%%\n");
     std::printf("  ?                   print this help\n");
     std::printf("  q                   quit\n\n");
     std::printf("[mixer] Current state:\n");
     std::printf("  Output : %s (master %.0f%%)\n", mixer.outputName().c_str(), mixer.masterVolume() * 100.0f);
-    for (size_t i = 0; i < mixer.stripCount(); ++i) {
+    for (size_t i = 0; i < strips.size(); ++i) {
         std::printf("  [%zu] %-20s  %3.0f%%  %s\n",
-                    i + 1, mixer.stripName(i).c_str(),
-                    mixer.stripVolume(i) * 100.0f,
-                    mixer.stripMuted(i) ? "MUTED" : "");
+                    i + 1, strips[i].name.c_str(),
+                    strips[i].volume * 100.0f,
+                    strips[i].muted ? "MUTED" : "");
     }
+    return strips;
 }
 
-static int cmdMixer(const std::string& configPath)
+static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portOverride = std::nullopt)
 {
     nlohmann::json j;
     try {
@@ -476,6 +485,9 @@ static int cmdMixer(const std::string& configPath)
             cfg.source = item.value("source", std::string{});
             cfg.volume = item.value("volume", 100.0f) / 100.0f;
             cfg.muted  = item.value("muted", false);
+            if (item.contains("knobIndex") && !item["knobIndex"].is_null()) {
+                cfg.knobIndex = item["knobIndex"].get<int>();
+            }
             if (cfg.source.empty()) { std::fprintf(stderr, "[mixer] Strip missing 'source'\n"); return 1; }
             if (cfg.name.empty()) cfg.name = cfg.source;
             if (cfg.volume < 0.0f) cfg.volume = 0.0f;
@@ -484,6 +496,9 @@ static int cmdMixer(const std::string& configPath)
         }
     }
     if (strips.empty()) { std::fprintf(stderr, "[mixer] Config missing 'strips' array\n"); return 1; }
+
+    // 0 disables the control API entirely. CLI --port overrides the config file.
+    uint16_t controlPort = portOverride.value_or(static_cast<uint16_t>(j.value("controlPort", 8850)));
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -500,7 +515,7 @@ static int cmdMixer(const std::string& configPath)
     mixer.setMasterVolume(master);
 
     for (const auto& cfg : strips) {
-        if (mixer.addStrip(cfg) < 0) {
+        if (!mixer.addStrip(cfg).has_value()) {
             std::fprintf(stderr, "[mixer] Failed to add strip '%s'\n", cfg.name.c_str());
             CoUninitialize();
             return 1;
@@ -511,6 +526,15 @@ static int cmdMixer(const std::string& configPath)
         std::fprintf(stderr, "[mixer] Failed to start mixer\n");
         CoUninitialize();
         return 1;
+    }
+
+    std::unique_ptr<anniaudio::core::MixerControlServer> controlServer;
+    if (controlPort != 0) {
+        controlServer = std::make_unique<anniaudio::core::MixerControlServer>(mixer);
+        if (!controlServer->start(controlPort)) {
+            std::fprintf(stderr, "[mixer] Warning: control API could not bind port %u; continuing without it\n", controlPort);
+            controlServer.reset();
+        }
     }
 
     std::printf("[mixer] Running. Commands: v <strip> <vol>, m <strip>, +/=, -, ?, q\n");
@@ -550,24 +574,25 @@ static int cmdMixer(const std::string& configPath)
         if (cmdChar == 'm' || cmdChar == 'v') {
             // format: m <1-based strip>
             // format: v <1-based strip> <0-200>
+            auto strips = mixer.snapshot();
             std::stringstream ss(a.substr(1));
             int idx = 0; ss >> idx;
-            if (idx < 1 || (size_t)idx > mixer.stripCount()) {
-                std::fprintf(stderr, "[mixer] Strip index must be between 1 and %zu\n", mixer.stripCount());
+            if (idx < 1 || (size_t)idx > strips.size()) {
+                std::fprintf(stderr, "[mixer] Strip index must be between 1 and %zu\n", strips.size());
                 continue;
             }
-            size_t sidx = idx - 1;
+            const auto& target = strips[idx - 1];
 
             if (cmdChar == 'm') {
-                bool mute = !mixer.stripMuted(sidx);
-                mixer.setStripMuted(sidx, mute);
+                bool mute = !target.muted;
+                mixer.setStripMuted(target.id, mute);
                 std::printf("[mixer] [%d] %s\n", idx, mute ? "MUTED" : "unmuted");
             } else {
                 int volInt = 0; ss >> volInt;
                 float vol = volInt / 100.0f;
                 if (vol < 0.0f) vol = 0.0f;
                 if (vol > 2.0f) vol = 2.0f;
-                mixer.setStripVolume(sidx, vol);
+                mixer.setStripVolume(target.id, vol);
                 std::printf("[mixer] [%d] volume %.0f%%\n", idx, vol * 100.0f);
             }
             continue;
@@ -577,6 +602,7 @@ static int cmdMixer(const std::string& configPath)
     }
 
     std::printf("[mixer] Stopping...\n");
+    if (controlServer) controlServer->stop();
     mixer.stop();
     CoUninitialize();
     std::printf("[mixer] Stopped.\n");
@@ -662,8 +688,30 @@ int main(int argc, char* argv[])
         return cmdRoute(profile.source, profile.output, profile.volume, profile.preset, profile.rnnoise);
     }
     else if (cmd == "mixer") {
-        if (argc < 3) { std::fprintf(stderr, "Usage: mixer <config.json>\n"); return 1; }
-        return cmdMixer(argv[2]);
+        if (argc < 3) { std::fprintf(stderr, "Usage: mixer <config.json> [--port <n>]\n"); return 1; }
+        std::string configPath;
+        std::optional<uint16_t> portOverride;
+        for (int i = 2; i < argc; ++i) {
+            std::string a = argv[i];
+            std::string al;
+            al.reserve(a.size());
+            for (char ch : a) al.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            if (al == "--port" || al == "-p") {
+                if (i + 1 >= argc) { std::fprintf(stderr, "Expected port number after %s\n", a.c_str()); return 1; }
+                int p = std::atoi(argv[i + 1]);
+                if (p < 0 || p > 65535) { std::fprintf(stderr, "Port must be 0-65535\n"); return 1; }
+                portOverride = static_cast<uint16_t>(p);
+                ++i;
+            } else if (al[0] == '-') {
+                std::fprintf(stderr, "Unknown option: %s\n", a.c_str());
+                return 1;
+            } else {
+                if (!configPath.empty()) { std::fprintf(stderr, "Usage: mixer <config.json> [--port <n>]\n"); return 1; }
+                configPath = a;
+            }
+        }
+        if (configPath.empty()) { std::fprintf(stderr, "Usage: mixer <config.json> [--port <n>]\n"); return 1; }
+        return cmdMixer(configPath, portOverride);
     }
     else if (cmd == "midi") {
         std::string arg = (argc >= 3) ? argv[2] : "list";

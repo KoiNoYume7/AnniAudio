@@ -161,9 +161,10 @@ typing sequential commands even though it wouldn't be for a GUI holding onto a s
 ## Control API surface
 
 Embedded HTTP server inside the `route_cli mixer` process, bound to `127.0.0.1:<port>` (default
-port TBD at implementation time, configurable via a `--port` flag or the mixer JSON). Built on
-**cpp-httplib** (single-header, MIT-licensed) — vendored under `third_party/httplib/`, same trust
-tier as the already-vendored `nlohmann/json`.
+port **8850**, configurable via a `--port`/`-p` CLI flag or a `controlPort` field in the mixer
+JSON). A `controlPort` value of `0` disables the control API entirely. Built on **cpp-httplib**
+(single-header, MIT-licensed) — vendored under `third_party/httplib/`, same trust tier as the
+already-vendored `nlohmann/json`.
 
 All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4xx/5xx status.
 
@@ -172,8 +173,8 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 | `GET`    | `/api/state`            | —                                        | Full snapshot: `{ output, master, strips: [...] }` |
 | `GET`    | `/api/endpoints`        | —                                        | Live WASAPI endpoints, for the source picker |
 | `GET`    | `/api/events`           | —                                        | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
-| `POST`   | `/api/strips`           | `{ name?, source, volume?, muted? }`     | Add a strip. Returns the new `StripSnapshot` (with `id`) or a 4xx error |
-| `PATCH`  | `/api/strips/{id}`      | `{ name?, volume?, muted? }`             | Partial update of an existing strip |
+| `POST`   | `/api/strips`           | `{ name?, source, volume?, muted?, knobIndex? }` | Add a strip. Returns the new `StripSnapshot` (with `id`) or a 4xx error |
+| `PATCH`  | `/api/strips/{id}`      | `{ name?, volume?, muted?, knobIndex? }` | Partial update of an existing strip |
 | `DELETE` | `/api/strips/{id}`      | —                                        | Remove a strip |
 | `POST`   | `/api/master`           | `{ volume }`                             | Set master volume |
 | `POST`   | `/api/presets/save`     | `{ path }`                               | Write current live state to a `config/mixers/*.json` preset file |
@@ -244,6 +245,6 @@ Once the control API exists, the plugin (C# via the Logi Actions SDK, scaffolded
   (`route_cli.cpp`). Mixer JSON files are now pure presets: `output`, `master`, `strips`.
 - Kept: `route_cli midi list` / `route_cli midi <device-hint>` as a standalone diagnostic with no
   relationship to the mixer.
-- `AudioMixer`'s current `size_t`-indexed strip API will be replaced by the `StripId`-based one
-  described above as part of implementing this design — existing callers (`route_cli mixer`'s
-  interactive commands) will be updated to resolve position → `StripId` at the point of use.
+- `AudioMixer`'s `size_t`-indexed strip API has been replaced by the `StripId`-based one
+  described above, and `route_cli mixer`'s interactive commands resolve position → `StripId` at the
+  point of use.

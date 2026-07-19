@@ -5,19 +5,17 @@
 #include <string>
 #include <vector>
 
+#include "audio_utils.hpp"
+
 // Called on the real-time audio thread per captured buffer.
 // buf:      interleaved float samples — may be modified in-place (copy is made before calling)
 // frames:   sample frames in this buffer (1 frame = channels samples)
 // channels: channel count (matches the negotiated mix format)
 using ProcessFn = std::function<void(float* buf, uint32_t frames, uint32_t channels)>;
 
-struct EndpointInfo {
-    std::string id;          // WASAPI device ID (e.g. \\{...}.#{...})
-    std::string name;        // Friendly name (e.g. "AnniAudio Cable 1")
-    bool        isRender;    // true = render (playback), false = capture (recording)
-    bool        isAnniAudio; // true if name contains "AnniAudio" or matches a cable config name
-    bool        isDefault;   // true if this is the Windows default for its direction
-};
+// EndpointInfo lives in anniaudio::core (shared with AudioMixer); re-exported here
+// unqualified since most of the existing codebase refers to it that way.
+using anniaudio::core::EndpointInfo;
 
 // Routes audio from one WASAPI endpoint to another with optional DSP processing.
 //

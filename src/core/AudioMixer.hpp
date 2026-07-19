@@ -2,23 +2,57 @@
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "audio_utils.hpp"
+
 namespace anniaudio::core {
 
+// Opaque, stable strip identifier. Assigned once at addStrip() time and never
+// reused or renumbered — safe to hold onto across other strips being added or
+// removed, unlike a vector index.
+using StripId = uint32_t;
+
 struct MixerStripConfig {
-    std::string name;      // shown in UI / logs (optional)
-    std::string source;    // endpoint name hint
+    std::string name;      // shown in UI / logs; defaults to `source` if empty
+    std::string source;    // endpoint name hint (render endpoint = loopback capture)
     float       volume = 1.0f;
     bool        muted  = false;
+    // Optional binding to a physical controller's Nth control (e.g. a Loupedeck
+    // Live knob). Purely informational to AudioMixer itself — it's read back via
+    // snapshot() so a control-API client can act on it. 0-based, no fixed range
+    // enforced here.
+    std::optional<int> knobIndex;
+};
+
+struct StripSnapshot {
+    StripId             id = 0;
+    std::string         name;
+    std::string         source;
+    float               volume = 1.0f;
+    bool                muted  = false;
+    std::optional<int>  knobIndex;
 };
 
 // Multi-source WASAPI mixer.
-// Captures any number of render or capture endpoints and mixes them into a
-// single render endpoint with per-strip volume/mute and a master volume.
+//
+// Captures any number of render (loopback) or capture endpoints and mixes them
+// into a single render endpoint with per-strip volume/mute and a master volume.
+//
+// Thread safety:
+//   - init() / start() / stop() are not safe to call concurrently with each
+//     other or with anything else; call them from one thread, in order.
+//   - Once running, addStrip/removeStrip/renameStrip/setStripKnobIndex and
+//     setStripVolume/setStripMuted/snapshot/stripSnapshot/listEndpoints are
+//     all safe to call from any thread (e.g. HTTP request handlers), including
+//     concurrently with each other and with the mixer's own audio thread.
+//     See AudioMixer.cpp for the locking model and why it can't glitch audio.
+//   - Any thread calling into AudioMixer that also talks to WASAPI/MMDevice
+//     APIs directly (addStrip resolves a device by name) must have called
+//     CoInitializeEx(nullptr, COINIT_MULTITHREADED) on itself first.
 class AudioMixer {
 public:
     AudioMixer();
@@ -27,33 +61,46 @@ public:
     AudioMixer(const AudioMixer&) = delete;
     AudioMixer& operator=(const AudioMixer&) = delete;
 
-    // Open the output endpoint. Must be called before addStrip().
+    // Open the output endpoint. Must be called before addStrip()/start().
     bool init(const std::string& outputHint);
 
-    // Add a capture/loopback input strip. Returns strip index or -1 on failure.
-    int  addStrip(const MixerStripConfig& cfg);
-
-    // Start the mixer thread. Returns false if no output or no strips.
+    // Start the mixer thread. Returns false if init() wasn't called or there
+    // are no strips yet (a mixer with nothing to mix is a no-op that would
+    // just look like it silently failed).
     bool start();
 
-    // Stop and close everything.
+    // Stop and close everything. Safe to call multiple times.
     void stop();
 
     bool running() const noexcept;
 
-    size_t stripCount() const noexcept;
+    // --- Structural changes: safe to call before or after start() ---
 
-    void setStripVolume(size_t idx, float vol);
-    float stripVolume(size_t idx) const;
-    void setStripMuted(size_t idx, bool mute);
-    bool stripMuted(size_t idx) const;
+    // Resolves `cfg.source` and opens it. Returns the new strip's id, or
+    // nullopt if the source couldn't be found/opened or the strip limit (62,
+    // bounded by WaitForMultipleObjects) was reached.
+    std::optional<StripId> addStrip(const MixerStripConfig& cfg);
+    bool removeStrip(StripId id);
+    bool renameStrip(StripId id, const std::string& name);
+    bool setStripKnobIndex(StripId id, std::optional<int> knobIndex);
+
+    // --- Per-strip control: safe to call before or after start() ---
+
+    bool  setStripVolume(StripId id, float vol);
+    bool  setStripMuted(StripId id, bool muted);
 
     void  setMasterVolume(float v);
     float masterVolume() const;
 
-    // Helpers for device naming
+    size_t stripCount() const noexcept;
+    std::vector<StripSnapshot>   snapshot() const;
+    std::optional<StripSnapshot> stripSnapshot(StripId id) const;
+
+    // Live WASAPI endpoints, for a source picker. Requires the calling
+    // thread to be COM-initialized (see class comment above).
+    std::vector<EndpointInfo> listEndpoints() const;
+
     const std::string& outputName() const;
-    const std::string& stripName(size_t idx) const;
 
 private:
     class Impl;

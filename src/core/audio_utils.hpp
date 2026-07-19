@@ -17,6 +17,18 @@ namespace anniaudio::core {
 
 using Microsoft::WRL::ComPtr;
 
+struct EndpointInfo {
+    std::string id;          // WASAPI device ID (e.g. \\{...}.#{...})
+    std::string name;        // Friendly name (e.g. "AnniAudio Cable 1")
+    bool        isRender;    // true = render (playback), false = capture (recording)
+    bool        isAnniAudio; // true if name contains "AnniAudio" or matches a cable config name
+    bool        isDefault;   // true if this is the Windows default for its direction
+};
+
+// Enumerate all active endpoints (render + capture) into EndpointInfo structs.
+// Caller must have called CoInitializeEx on the current thread.
+std::vector<EndpointInfo> enumEndpoints(IMMDeviceEnumerator* enumerator);
+
 // Local definitions for KS audio format subtypes; avoids linking against
 // ksuser/ksguid for the standard KSDATAFORMAT_SUBTYPE_* GUIDs.
 extern const GUID KSCONST_SUBTYPE_IEEE_FLOAT;

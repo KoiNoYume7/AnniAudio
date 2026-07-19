@@ -75,10 +75,22 @@ add_executable(poc_wasapi src/core/poc_wasapi.cpp)
 target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
 
 # Routing CLI — lists endpoints and routes audio between cables / physical devices
-add_executable(route_cli src/core/route_cli.cpp)
+#
+# MixerControlServer.cpp (the mixer's local HTTP+SSE control API, built on the
+# vendored cpp-httplib) is compiled directly into this executable rather than
+# into audio_core: it's route_cli-specific plumbing, and audio_core should stay
+# a clean engine library with no networking dependency baked into it.
+add_executable(route_cli src/core/route_cli.cpp src/core/MixerControlServer.cpp)
 target_include_directories(route_cli PRIVATE src/core include src/dsp)
-target_link_libraries(route_cli PRIVATE audio_core audio_dsp ole32 avrt)
+target_link_libraries(route_cli PRIVATE audio_core audio_dsp ole32 avrt ws2_32)
 # add_executable(poc_nvidia src/noise/poc_nvidia.cpp)
+
+# Manual verification tool for AudioMixer's live add/remove/rename path (not
+# part of the default test suite; run by hand against live devices).
+add_executable(test_mixer_live_edit src/core/test_mixer_live_edit.cpp)
+target_link_libraries(test_mixer_live_edit PRIVATE audio_core)
+
+
 
 message(STATUS "AnniAudio ${PROJECT_VERSION} — Phase 0 (Research)")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
