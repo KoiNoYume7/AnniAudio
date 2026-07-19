@@ -1,0 +1,19 @@
+{
+  "description": "Loupedeck Live mixer: 6 VAC sources mixed to Logitech G560, knobs 1-6 control strip volumes, knob press toggles mute.",
+  "output": "Logitech G560 Gaming Speaker",
+  "master": 80,
+  "strips": [
+    { "name": "Game",  "source": "Game (Virtual Audio Cable)",  "volume": 100 },
+    { "name": "Music", "source": "Music (Virtual Audio Cable)", "volume": 80 },
+    { "name": "Chat",  "source": "Chat (Virtual Audio Cable)",  "volume": 80 },
+    { "name": "Ext",   "source": "Ext (Virtual Audio Cable)",   "volume": 60 },
+    { "name": "System","source": "System (Virtual Audio Cable)","volume": 70 },
+    { "name": "Mic",   "source": "Mic (Virtual Audio Cable)",   "volume": 0, "muted": true }
+  ],
+  "midi": {
+    "device": "Loupedeck",
+    "ccVolume": [1, 2, 3, 4, 5, 6],
+    "noteMute": [60, 61, 62, 63, 64, 65],
+    "maxVolume": 1.0
+  }
+}

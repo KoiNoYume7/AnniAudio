@@ -29,8 +29,8 @@ What works today:
 Not yet finished:
 
 - The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing.
-- **EQ and RNNoise are now connected** to the live `process` command. **HRTF** is still a standalone POC only.
-- The GUI/TUI are thin prototypes around the CLI, not a polished product UI.
+- **EQ, RNNoise and a multi-source mixer** are now connected to the CLI. **HRTF** is still a standalone POC only.
+- Loupedeck integration works over MIDI; the on-device screen feedback and a polished mixer GUI are still on the roadmap.
 
 ---
 
@@ -165,6 +165,39 @@ The virtual driver is not required to use AnniAudio as a system-wide audio proce
 ```
 
 All of these run in real time, with no driver signing required and no impact on games. Preset files live in `config/presets/` and define a list of biquad bands (`peak`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `notch`, `allpass`). Profiles live in `config/profiles/` and bundle source, output, volume, preset, and RNNoise toggle. RNNoise currently requires a 48 kHz source; it will be skipped otherwise.
+
+### Mixer (MIXLINE replacement)
+
+The `mixer` command mixes any number of WASAPI sources into one output with per-strip volume and mute. It is designed to replace the Logitech MIXLINE-style workflow.
+
+```powershell
+# Run the example mixer
+.\build\bin\Release\route_cli.exe mixer config/mixers/default.json
+
+# Loupedeck Live 6-knob layout (Game / Music / Chat / Ext / System / Mic)
+.\build\bin\Release\route_cli.exe mixer config/mixers/loupedeck.json
+```
+
+Mixer config files live in `config/mixers/`. The optional `midi` section binds CC messages to strip volumes and note messages to mute toggles:
+
+```json
+{
+  "output": "Logitech G560 Gaming Speaker",
+  "master": 80,
+  "strips": [
+    { "name": "Game", "source": "Game (Virtual Audio Cable)", "volume": 100 },
+    { "name": "Chat", "source": "Chat (Virtual Audio Cable)", "volume": 80 }
+  ],
+  "midi": {
+    "device": "Loupedeck",
+    "ccVolume": [1, 2],
+    "noteMute": [60, 61],
+    "maxVolume": 1.0
+  }
+}
+```
+
+Use `route_cli midi list` and `route_cli midi Loupedeck` to discover CC/note messages while turning knobs, then edit `config/mixers/*.json` to match.
 
 See `docs/ROADMAP.md` for the full breakdown.
 

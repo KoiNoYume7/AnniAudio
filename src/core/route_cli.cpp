@@ -1,5 +1,7 @@
 #include "AudioEngine.hpp"
+#include "AudioMixer.hpp"
 #include "eq.hpp"
+#include "midi_input.hpp"
 #include "noise_suppressor.hpp"
 
 #include <windows.h>
@@ -20,6 +22,7 @@ using namespace anniaudio::dsp;
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -57,6 +60,8 @@ static void printUsage(const char* prog)
     std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
     std::printf("  %s process [<source> <out> [vol]] [--preset <file>] [--rnnoise] [--config <profile>]\n", prog);
     std::printf("                                                                    Loopback capture + optional EQ / NR / profile\n", prog);
+    std::printf("  %s mixer <config.json>                                            Multi-source mixer with per-strip volume/mute\n", prog);
+    std::printf("  %s midi [list|<device-hint>]                                      List MIDI inputs or monitor messages\n", prog);
     std::printf("  %s process-eq <source> <out> [vol]                                Same as process, but applies a hardcoded test EQ chain\n", prog);
     std::printf("  %s monitor <cable> [out] [volume]     Route cable CAPTURE to physical RENDER (default: default output)\n", prog);
     std::printf("  %s inject  <in>   <cable> [volume]    Route physical CAPTURE to cable RENDER\n", prog);
@@ -67,6 +72,10 @@ static void printUsage(const char* prog)
     std::printf("  %s list\n", prog);
     std::printf("  %s process --config config/profiles/default.json\n", prog);
     std::printf("  %s process \"Speakers\" \"Headphones\" 80 --preset config/presets/headphones.json --rnnoise\n", prog);
+    std::printf("  %s mixer config/mixers/default.json\n", prog);
+    std::printf("  %s mixer config/mixers/loupedeck.json\n", prog);
+    std::printf("  %s midi list\n", prog);
+    std::printf("  %s midi Loupedeck\n", prog);
     std::printf("  %s monitor \"Studio Main\"      -- listen to cable 1 on your headphones\n", prog);
     std::printf("  %s monitor \"My Studio Cable\" \"Headphones\" 50\n", prog);
     std::printf("  %s default \"Headphones (Crusher ANC 2)\" -- restore default output\n", prog);
@@ -393,6 +402,230 @@ static bool loadProcessProfile(const std::string& path, ProcessProfile& out)
     return true;
 }
 
+static int cmdMidi(const std::string& arg)
+{
+    if (arg == "list" || arg.empty()) {
+        std::printf("MIDI input devices:\n");
+        auto devs = anniaudio::midi::MidiInput::listDevices();
+        for (size_t i = 0; i < devs.size(); ++i) {
+            std::printf("  %zu: %s\n", i, devs[i].c_str());
+        }
+        if (arg == "list") return 0;
+    }
+
+    std::string hint = arg.empty() ? "Loupedeck" : arg;
+    std::printf("[midi] Listening on first device matching '%s'. Press q + Enter to stop.\n", hint.c_str());
+
+    anniaudio::midi::MidiInput midi;
+    bool opened = midi.open(hint, [](const anniaudio::midi::MidiMessage& msg) {
+        std::printf("[midi] status=0x%02X data1=%3u data2=%3u\n", msg.status, msg.data1, msg.data2);
+    });
+    if (!opened) return 1;
+
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        size_t pos = line.find_first_not_of(" \t\r\n");
+        if (pos != std::string::npos && std::tolower(static_cast<unsigned char>(line[pos])) == 'q') break;
+    }
+    return 0;
+}
+
+static void printMixerHelp(const anniaudio::core::AudioMixer& mixer)
+{
+    std::printf("\n[mixer] Controls:\n");
+    std::printf("  <1-%zu>+<Enter>  select strip (not yet used in text mode)\n", mixer.stripCount());
+    std::printf("  v <strip> <0-200>   set strip volume (strips are 1-%zu)\n", mixer.stripCount());
+    std::printf("  m <strip>           toggle mute\n");
+    std::printf("  + / -               master volume +/- 5%%\n");
+    std::printf("  ?                   print this help\n");
+    std::printf("  q                   quit\n\n");
+    std::printf("[mixer] Current state:\n");
+    std::printf("  Output : %s (master %.0f%%)\n", mixer.outputName().c_str(), mixer.masterVolume() * 100.0f);
+    for (size_t i = 0; i < mixer.stripCount(); ++i) {
+        std::printf("  [%zu] %-20s  %3.0f%%  %s\n",
+                    i + 1, mixer.stripName(i).c_str(),
+                    mixer.stripVolume(i) * 100.0f,
+                    mixer.stripMuted(i) ? "MUTED" : "");
+    }
+}
+
+static int cmdMixer(const std::string& configPath)
+{
+    nlohmann::json j;
+    try {
+        std::ifstream f(configPath);
+        if (!f) { std::fprintf(stderr, "[mixer] Cannot open config '%s'\n", configPath.c_str()); return 1; }
+        f >> j;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[mixer] Failed to parse config: %s\n", e.what());
+        return 1;
+    }
+
+    std::string output = j.value("output", std::string{});
+    if (output.empty()) { std::fprintf(stderr, "[mixer] Config missing 'output'\n"); return 1; }
+
+    float master = j.value("master", 100.0f) / 100.0f;
+    if (master < 0.0f) master = 0.0f;
+    if (master > 2.0f) master = 2.0f;
+
+    std::vector<anniaudio::core::MixerStripConfig> strips;
+    if (j.contains("strips") && j["strips"].is_array()) {
+        for (const auto& item : j["strips"]) {
+            anniaudio::core::MixerStripConfig cfg;
+            cfg.name   = item.value("name", std::string{});
+            cfg.source = item.value("source", std::string{});
+            cfg.volume = item.value("volume", 100.0f) / 100.0f;
+            cfg.muted  = item.value("muted", false);
+            if (cfg.source.empty()) { std::fprintf(stderr, "[mixer] Strip missing 'source'\n"); return 1; }
+            if (cfg.name.empty()) cfg.name = cfg.source;
+            if (cfg.volume < 0.0f) cfg.volume = 0.0f;
+            if (cfg.volume > 2.0f) cfg.volume = 2.0f;
+            strips.push_back(cfg);
+        }
+    }
+    if (strips.empty()) { std::fprintf(stderr, "[mixer] Config missing 'strips' array\n"); return 1; }
+
+    std::string midiDeviceHint;
+    std::vector<int> midiCcVolumes;
+    std::vector<int> midiNoteMutes;
+    float midiMaxVolume = 1.0f;
+    if (j.contains("midi") && j["midi"].is_object()) {
+        const auto& m = j["midi"];
+        midiDeviceHint = m.value("device", std::string{});
+        midiMaxVolume  = m.value("maxVolume", 1.0f);
+        if (m.contains("ccVolume") && m["ccVolume"].is_array()) {
+            for (const auto& item : m["ccVolume"]) midiCcVolumes.push_back(item.get<int>());
+        }
+        if (m.contains("noteMute") && m["noteMute"].is_array()) {
+            for (const auto& item : m["noteMute"]) midiNoteMutes.push_back(item.get<int>());
+        }
+    }
+
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+        std::fprintf(stderr, "[mixer] CoInitializeEx failed 0x%08X\n", (unsigned)hr);
+        return 1;
+    }
+
+    anniaudio::core::AudioMixer mixer;
+    if (!mixer.init(output)) {
+        std::fprintf(stderr, "[mixer] Failed to init output '%s'\n", output.c_str());
+        CoUninitialize();
+        return 1;
+    }
+    mixer.setMasterVolume(master);
+
+    for (const auto& cfg : strips) {
+        if (mixer.addStrip(cfg) < 0) {
+            std::fprintf(stderr, "[mixer] Failed to add strip '%s'\n", cfg.name.c_str());
+            CoUninitialize();
+            return 1;
+        }
+    }
+
+    if (!mixer.start()) {
+        std::fprintf(stderr, "[mixer] Failed to start mixer\n");
+        CoUninitialize();
+        return 1;
+    }
+
+    std::printf("[mixer] Running. Commands: v <strip> <vol>, m <strip>, +/=, -, ?, q\n");
+    printMixerHelp(mixer);
+
+    anniaudio::midi::MidiInput midi;
+    if (!midiDeviceHint.empty()) {
+        auto cb = [&](const anniaudio::midi::MidiMessage& msg) {
+            uint8_t type = msg.status & 0xF0;
+            if (type == 0xB0) {
+                for (size_t i = 0; i < midiCcVolumes.size(); ++i) {
+                    if ((int)msg.data1 == midiCcVolumes[i] && i < mixer.stripCount()) {
+                        float vol = (msg.data2 / 127.0f) * midiMaxVolume;
+                        if (vol < 0.0f) vol = 0.0f;
+                        if (vol > 2.0f) vol = 2.0f;
+                        mixer.setStripVolume(i, vol);
+                    }
+                }
+            } else if (type == 0x90 && msg.data2 > 0) {
+                for (size_t i = 0; i < midiNoteMutes.size(); ++i) {
+                    if ((int)msg.data1 == midiNoteMutes[i] && i < mixer.stripCount()) {
+                        mixer.setStripMuted(i, !mixer.stripMuted(i));
+                    }
+                }
+            }
+        };
+        if (!midi.open(midiDeviceHint, cb)) {
+            std::fprintf(stderr, "[mixer] Could not open MIDI device '%s'. Continuing without MIDI.\n",
+                         midiDeviceHint.c_str());
+        }
+    }
+
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        // trim leading whitespace
+        size_t pos = line.find_first_not_of(" \t\r\n");
+        if (pos == std::string::npos) continue;
+        std::string a = line.substr(pos);
+        if (a.empty()) continue;
+
+        char cmdChar = static_cast<char>(std::tolower(static_cast<unsigned char>(a[0])));
+        if (cmdChar == 'q') break;
+
+        if (cmdChar == '?') {
+            printMixerHelp(mixer);
+            continue;
+        }
+
+        if (cmdChar == '+' || cmdChar == '=') {
+            float v = mixer.masterVolume() + 0.05f;
+            if (v > 2.0f) v = 2.0f;
+            mixer.setMasterVolume(v);
+            std::printf("[mixer] Master volume: %.0f%%\n", v * 100.0f);
+            continue;
+        }
+        if (cmdChar == '-') {
+            float v = mixer.masterVolume() - 0.05f;
+            if (v < 0.0f) v = 0.0f;
+            mixer.setMasterVolume(v);
+            std::printf("[mixer] Master volume: %.0f%%\n", v * 100.0f);
+            continue;
+        }
+
+        if (cmdChar == 'm' || cmdChar == 'v') {
+            // format: m <1-based strip>
+            // format: v <1-based strip> <0-200>
+            std::stringstream ss(a.substr(1));
+            int idx = 0; ss >> idx;
+            if (idx < 1 || (size_t)idx > mixer.stripCount()) {
+                std::fprintf(stderr, "[mixer] Strip index must be between 1 and %zu\n", mixer.stripCount());
+                continue;
+            }
+            size_t sidx = idx - 1;
+
+            if (cmdChar == 'm') {
+                bool mute = !mixer.stripMuted(sidx);
+                mixer.setStripMuted(sidx, mute);
+                std::printf("[mixer] [%d] %s\n", idx, mute ? "MUTED" : "unmuted");
+            } else {
+                int volInt = 0; ss >> volInt;
+                float vol = volInt / 100.0f;
+                if (vol < 0.0f) vol = 0.0f;
+                if (vol > 2.0f) vol = 2.0f;
+                mixer.setStripVolume(sidx, vol);
+                std::printf("[mixer] [%d] volume %.0f%%\n", idx, vol * 100.0f);
+            }
+            continue;
+        }
+
+        std::fprintf(stderr, "[mixer] Unknown command: %s (try ?)\n", a.c_str());
+    }
+
+    std::printf("[mixer] Stopping...\n");
+    mixer.stop();
+    CoUninitialize();
+    std::printf("[mixer] Stopped.\n");
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     if (argc < 2) { printUsage(argv[0]); return 1; }
@@ -473,6 +706,14 @@ int main(int argc, char* argv[])
         }
 
         return cmdRoute(profile.source, profile.output, profile.volume, profile.preset, profile.rnnoise);
+    }
+    else if (cmd == "mixer") {
+        if (argc < 3) { std::fprintf(stderr, "Usage: mixer <config.json>\n"); return 1; }
+        return cmdMixer(argv[2]);
+    }
+    else if (cmd == "midi") {
+        std::string arg = (argc >= 3) ? argv[2] : "list";
+        return cmdMidi(arg);
     }
     else if (cmd == "process-eq") {
         if (argc < 4) { std::fprintf(stderr, "Usage: process-eq <loopback_source> <render_output> [volume%%]\n"); return 1; }

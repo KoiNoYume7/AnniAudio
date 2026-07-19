@@ -1,0 +1,16 @@
+{
+  "description": "Example mixer: route apps to the Virtual Audio Cable endpoints, then mix them to your main speakers.",
+  "output": "Logitech G560 Gaming Speaker",
+  "master": 80,
+  "strips": [
+    { "name": "Game",  "source": "Game (Virtual Audio Cable)",  "volume": 100 },
+    { "name": "Chat",  "source": "Chat (Virtual Audio Cable)",  "volume": 80 },
+    { "name": "Music", "source": "Music (Virtual Audio Cable)", "volume": 60 }
+  ],
+  "midi": {
+    "device": "Loupedeck",
+    "ccVolume": [1, 2, 3],
+    "noteMute": [60, 61, 62],
+    "maxVolume": 1.0
+  }
+}
