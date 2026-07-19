@@ -341,13 +341,17 @@ struct AudioEngine::Impl {
     bool captureIsLoopback{false};
     // SRC phase accumulator (persists between audio thread calls)
     double srcPhase{0.0};
-    // Temp buffer for format conversion output (render format)
+    // Pre-allocated audio-thread buffers (no heap allocations on the hot path)
+    std::vector<float> captureTmp;
     std::vector<float> convertBuf;
+    std::vector<float> renderTmp;
 
     HANDLE stopEvent{nullptr}, captureEvent{nullptr}, renderEvent{nullptr};
     HANDLE thread{nullptr};
 
     UINT32 renderBufFrames{0};
+    UINT32 captureBufFrames{0};
+    UINT32 cvtMax{0};          // max render frames for one capture buffer
 
     RingBuffer ring;
     ProcessFn  processFn;
@@ -374,12 +378,6 @@ void AudioEngine::Impl::runThread()
     const bool     rFloat = renderIsFloat;
     const bool     cFloat = captureIsFloat;
     const double   ratio  = (double)renderRate / (double)captureRate; // dstRate/srcRate
-    // worst-case output frames for one capture packet (allow 3x for upsampling)
-    const size_t   cvtMax = (size_t)(renderBufFrames * 3);
-    std::vector<float> captureTmp;  // holds raw capture packet in float
-    captureTmp.reserve(renderBufFrames * cCh * 2);
-    std::vector<float> renderTmp;   // temp float buffer when render is PCM16
-    renderTmp.reserve(renderBufFrames * rCh);
 
     captureAC->Start();
     renderAC->Start();
@@ -401,7 +399,7 @@ void AudioEngine::Impl::runThread()
                     if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
                         // Push equivalent silence in render format
                         auto dstFrames = static_cast<uint32_t>(std::ceil(frames * ratio));
-                        convertBuf.assign((size_t)dstFrames * rCh, 0.0f);
+                        std::fill_n(convertBuf.data(), (size_t)dstFrames * rCh, 0.0f);
                         ring.write(convertBuf.data(), (size_t)dstFrames * rCh);
                     } else {
                         captureTmp.resize(sampleCount);
@@ -415,10 +413,9 @@ void AudioEngine::Impl::runThread()
                         if (processFn) processFn(captureTmp.data(), frames, cCh);
 
                         if (needsConvert) {
-                            convertBuf.resize(cvtMax * rCh);
                             uint32_t dstFrames = convertBuffer(
                                 captureTmp.data(), frames, cCh,
-                                convertBuf.data(), static_cast<uint32_t>(cvtMax), rCh,
+                                convertBuf.data(), cvtMax, rCh,
                                 ratio, srcPhase);
                             ring.write(convertBuf.data(), (size_t)dstFrames * rCh);
                         } else {
@@ -604,10 +601,23 @@ bool AudioEngine::start(const std::string& captureHint, const std::string& rende
                                         kBuf, 0, m_impl->captureFmt.get(), nullptr);
     if (FAILED(hr)) { std::fprintf(stderr, "[Engine] captureAC->Initialize failed 0x%08X\n", (unsigned)hr); m_impl->cleanup(); return false; }
     m_impl->captureAC->SetEventHandle(m_impl->captureEvent);
+    m_impl->captureAC->GetBufferSize(&m_impl->captureBufFrames);
     hr = m_impl->captureAC->GetService(IID_PPV_ARGS(&m_impl->captureSvc));
     if (FAILED(hr)) { m_impl->cleanup(); return false; }
 
     m_impl->srcPhase = 0.0;
+
+    // Pre-allocate audio-thread buffers so the hot path never hits the heap.
+    {
+        const double ratio = (double)m_impl->renderRate / (double)m_impl->captureRate;
+        const double upRatio = std::max(ratio, 1.0);
+        m_impl->cvtMax = (uint32_t)std::ceil((double)m_impl->captureBufFrames * upRatio) + m_impl->renderCh;
+
+        m_impl->captureTmp.resize((size_t)m_impl->captureBufFrames * m_impl->captureCh);
+        m_impl->convertBuf.resize((size_t)m_impl->cvtMax * m_impl->renderCh);
+        m_impl->renderTmp.resize((size_t)m_impl->renderBufFrames * m_impl->renderCh);
+    }
+
     // Ring in render format: several buffer durations of headroom
     m_impl->ring.init((size_t)m_impl->renderBufFrames * 4 * m_impl->renderCh);
     m_impl->framesProcessed = 0;
