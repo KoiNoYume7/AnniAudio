@@ -384,6 +384,9 @@ def selected_input(rows, sel_idx):
 
 def main(stdscr, port):
     global last_error, last_success, state, endpoints, applications, status_text
+    curses.noecho()
+    curses.cbreak()
+    stdscr.keypad(True)
     curses.curs_set(0)
     stdscr.timeout(50)
     stdscr.clear()
