@@ -1,7 +1,8 @@
 {
   "description": "Example mixer: route apps to the Virtual Audio Cable endpoints, then mix them to your main speakers.",
-  "output": "Logitech G560 Gaming Speaker",
+  "output": "Speakers (MIXLINE)",
   "master": 80,
+  "controlPort": 8850,
   "strips": [
     { "name": "Game",  "source": "Game (Virtual Audio Cable)",  "volume": 100 },
     { "name": "Chat",  "source": "Chat (Virtual Audio Cable)",  "volume": 80 },

@@ -1,7 +1,8 @@
 {
-  "description": "6-strip mixer for Loupedeck Live control: VAC sources mixed to the Logitech G560. Knob binding is done by the Loupedeck plugin via the mixer control API, not in this file.",
-  "output": "Logitech G560 Gaming Speaker",
+  "description": "6-strip mixer for Loupedeck Live control: VAC sources mixed to the main speakers. Knob binding is done by the Loupedeck plugin via the mixer control API, not in this file.",
+  "output": "Speakers (MIXLINE)",
   "master": 80,
+  "controlPort": 8850,
   "strips": [
     { "name": "Game",  "source": "Game (Virtual Audio Cable)",  "volume": 100 },
     { "name": "Music", "source": "Music (Virtual Audio Cable)", "volume": 80 },
