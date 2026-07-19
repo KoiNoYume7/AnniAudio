@@ -1,0 +1,80 @@
+{
+  "controlPort": 8853,
+  "groups": [
+    {
+      "color": "#ff4444",
+      "id": 10,
+      "inputIds": [
+        1
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Mic renamed",
+      "outputIds": [
+        "System (Virtual Audio Cable)"
+      ],
+      "peak": 7.323645689893965e-09,
+      "rms": 2.0467778583110885e-09,
+      "volume": 50.0
+    },
+    {
+      "color": "#3b82f6",
+      "id": 11,
+      "inputIds": [
+        2
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Music",
+      "outputIds": [
+        "System (Virtual Audio Cable)"
+      ],
+      "peak": 0.0,
+      "rms": 0.0,
+      "volume": 80.0
+    },
+    {
+      "color": "#00ff00",
+      "id": 12,
+      "inputIds": [],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Empty",
+      "outputIds": [],
+      "peak": 0.0,
+      "rms": 0.0,
+      "volume": 100.0
+    }
+  ],
+  "inputs": [
+    {
+      "id": 1,
+      "name": "HyperX",
+      "peak": 7.323645689893965e-09,
+      "rms": 2.0467778583110885e-09,
+      "source": "Microphone (2- HyperX QuadCast S)",
+      "type": "device"
+    },
+    {
+      "id": 2,
+      "name": "Music",
+      "peak": 0.0,
+      "rms": 0.0,
+      "source": "Music (Virtual Audio Cable)",
+      "type": "device"
+    }
+  ],
+  "outputs": [
+    {
+      "groupIds": [
+        10,
+        11
+      ],
+      "master": 80.0,
+      "masterPeak": 5.85891646309733e-09,
+      "masterRms": 1.6374218647641214e-09,
+      "name": "System (Virtual Audio Cable)"
+    }
+  ],
+  "running": true
+}

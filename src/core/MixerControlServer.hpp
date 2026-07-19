@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace anniaudio::core {
 
@@ -30,6 +31,8 @@ public:
 
     bool     running() const noexcept { return m_running.load(); }
     uint16_t port() const noexcept { return m_port; }
+
+    void setAutosavePath(const std::string& path);
 
 private:
     class Impl;

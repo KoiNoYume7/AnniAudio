@@ -1,11 +1,17 @@
 {
-  "description": "Example mixer: route apps to the Virtual Audio Cable endpoints, then mix them to your main speakers.",
-  "output": "Speakers (MIXLINE)",
-  "master": 80,
+  "description": "Example mixer: route Virtual Audio Cable capture endpoints into groups and mix them to a single output.",
   "controlPort": 8850,
-  "strips": [
-    { "name": "Game",  "source": "Game (Virtual Audio Cable)",  "volume": 100 },
-    { "name": "Chat",  "source": "Chat (Virtual Audio Cable)",  "volume": 80 },
-    { "name": "Music", "source": "Music (Virtual Audio Cable)", "volume": 60 }
+  "inputs": [
+    { "id": 1, "name": "Game",  "type": "device", "source": "Game (Virtual Audio Cable)" },
+    { "id": 2, "name": "Chat",  "type": "device", "source": "Chat (Virtual Audio Cable)" },
+    { "id": 3, "name": "Music", "type": "device", "source": "Music (Virtual Audio Cable)" }
+  ],
+  "groups": [
+    { "id": 10, "name": "Game",  "color": "#ef4444", "inputIds": [1], "outputIds": ["System (Virtual Audio Cable)"], "volume": 100 },
+    { "id": 11, "name": "Chat",  "color": "#22c55e", "inputIds": [2], "outputIds": ["System (Virtual Audio Cable)"], "volume": 80 },
+    { "id": 12, "name": "Music", "color": "#3b82f6", "inputIds": [3], "outputIds": ["System (Virtual Audio Cable)"], "volume": 60 }
+  ],
+  "outputs": [
+    { "name": "System (Virtual Audio Cable)", "master": 80 }
   ]
 }

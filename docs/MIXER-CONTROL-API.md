@@ -120,41 +120,49 @@ iteration (≤ tens of milliseconds).
 renumbered under a caller's feet. They will be replaced with an opaque `StripId`:
 
 ```cpp
-using StripId = uint32_t;
+using InputId = uint32_t;
+using GroupId = uint32_t;
 
-struct StripSnapshot {
-    StripId     id;
-    std::string name;
-    std::string source;
-    float       volume;
-    bool        muted;
+struct InputConfig  { std::string name, type, source; };
+struct GroupConfig  { std::string name, color; std::vector<InputId> inputIds; std::vector<std::string> outputIds; float volume; bool muted; std::optional<int> knobIndex; };
+
+struct MixerStateSnapshot {
+    bool running;
+    uint16_t controlPort;
+    std::vector<InputSnapshot>  inputs;
+    std::vector<GroupSnapshot>  groups;
+    std::vector<OutputSnapshot> outputs;
 };
 
-class AudioMixer {
+class AudioMixerMatrix {
 public:
-    // ... init/start/stop as today ...
+    bool addOutput(const std::string& outputHint);
+    bool removeOutput(const std::string& outputName);
+    void setOutputMasterVolume(const std::string& outputName, float v); // v in percent
 
-    // Structural changes — safe to call while running.
-    std::optional<StripId> addStrip(const MixerStripConfig& cfg); // nullopt + logs on failure
-    bool removeStrip(StripId id);
-    bool renameStrip(StripId id, const std::string& name);
+    std::optional<InputId> addInput(const InputConfig& cfg);
+    bool removeInput(InputId id);
+    bool updateInput(InputId id, const InputConfig& cfg);
 
-    // Per-strip control — safe to call while running (already lock-free today).
-    bool setStripVolume(StripId id, float vol);
-    bool setStripMuted(StripId id, bool muted);
+    std::optional<GroupId> addGroup(const GroupConfig& cfg);
+    bool removeGroup(GroupId id);
+    bool setGroupName(GroupId id, const std::string& name);
+    bool setGroupColor(GroupId id, const std::string& color);
+    bool setGroupVolume(GroupId id, float v); // v in percent
+    bool setGroupMuted(GroupId id, bool muted);
+    bool setGroupInputIds(GroupId id, std::vector<InputId> ids);
+    bool setGroupOutputIds(GroupId id, std::vector<std::string> ids);
 
-    void setMasterVolume(float v);
-    float masterVolume() const;
+    MixerStateSnapshot snapshot() const;
+    std::vector<EndpointInfo> listEndpoints() const;
 
-    std::vector<StripSnapshot> snapshot() const; // full current state, for GET /api/state
-    std::vector<EndpointInfo>  listEndpoints() const; // for the "add strip" source picker
+    bool save(const std::string& path) const;
+    bool load(const std::string& path);
+    void setAutosavePath(const std::string& path);
 };
 ```
 
-`route_cli mixer`'s interactive text commands (`v <n> <vol>`, `m <n>`) still address strips by
-their **1-based position in the current listing** for human convenience at a terminal — that
-mapping is resolved to a `StripId` at the moment the command is typed, so it's fine for a human
-typing sequential commands even though it wouldn't be for a GUI holding onto a stale reference.
+`route_cli mixer`'s interactive text commands (`v <n> <vol>`, `m <n>`, `o <n>`, `+`, `-`) still address groups and outputs by their **1-based position in the current listing** for human convenience at a terminal.
 
 ---
 
@@ -170,24 +178,30 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 
 | Method   | Path                    | Body                                           | Description |
 |----------|-------------------------|-------------------------------------------------|-------------|
-| `GET`    | `/api/state`            | —                                               | Full snapshot: `{ running, outputs: [{ name, master, masterPeak, masterRms, strips: [...] }] }` |
+| `GET`    | `/api/state`            | —                                               | Full snapshot: `{ running, controlPort, inputs, groups, outputs }` |
 | `GET`    | `/api/endpoints`        | —                                               | Live WASAPI endpoints, for the source picker |
+| `GET`    | `/api/applications`     | —                                               | Placeholder: running audio sessions (process loopback capture is not wired yet) |
 | `GET`    | `/api/events`           | —                                               | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
+| `POST`   | `/api/inputs`           | `{ name, type, source }`                        | Add an input source (type = `device` or `application`) |
+| `PATCH`  | `/api/inputs/{id}`      | `{ name?, type?, source? }`                     | Update an input; re-creates routes for any groups that use it |
+| `DELETE` | `/api/inputs/{id}`      | —                                               | Remove an input and remove it from all groups |
+| `POST`   | `/api/groups`           | `{ name, color?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Add a group (mix bus) |
+| `PATCH`  | `/api/groups/{id}`      | `{ name?, color?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Partial update of a group |
+| `DELETE` | `/api/groups/{id}`      | —                                               | Remove a group |
 | `POST`   | `/api/outputs`          | `{ name }`                                      | Add a render output by endpoint name |
-| `DELETE` | `/api/outputs`          | `{ name }`                                      | Remove an output and all routes feeding it |
+| `DELETE` | `/api/outputs`          | `{ name }`                                      | Remove an output and disconnect every group from it |
 | `POST`   | `/api/outputs/master`   | `{ name, volume }`                              | Set an output's master volume |
-| `POST`   | `/api/strips`           | `{ source, output, name?, volume?, muted?, knobIndex? }` | Add a route from a source to an output |
-| `PATCH`  | `/api/strips/{id}`      | `{ name?, volume?, muted?, knobIndex? }`        | Partial update of an existing route |
-| `DELETE` | `/api/strips/{id}`      | —                                               | Remove a route |
-| `POST`   | `/api/presets/save`     | `{ path }`                                      | Write current live state to a `config/mixers/*.json` preset file |
+| `POST`   | `/api/presets/save`     | `{ path? }`                                     | Write current live state to a `config/mixers/*.json` preset file; empty `path` uses the configured autosave path |
 
-Note: `source` is **not** patchable on an existing route in v1 — changing a source is modeled as
-remove + add.
+**State model: inputs → groups → outputs.**
+- An *input* is a source (`device` = WASAPI endpoint, `application` reserved for future process loopback).
+- A *group* is a mix bus: one fader/mute, a color, a list of input IDs, and a list of output names it feeds.
+- An *output* is a render endpoint with a master fader.
 
-**Optional `knobIndex` field.** Each route may carry an optional `knobIndex: 0..5 | null` in its
+**Optional `knobIndex` field.** Each group may carry an optional `knobIndex: 0..5 | null` in its
 config/state, settable from the GUI ("assign to knob N"). This gives the Loupedeck plugin (or any
-future physical controller) a stable mapping from a physical control to a specific route that
-survives routes being reordered, added, or removed.
+future physical controller) a stable mapping from a physical control to a specific group that
+survives groups being reordered, added, or removed.
 
 **SSE, not polling.** `/api/events` is the source of truth for "did anything change" for both the
 GUI and the future plugin. Every structural or volume/mute change broadcasts a `state` event to
@@ -201,23 +215,23 @@ worker threads are plain OS threads with no COM initialization by default.
 
 ---
 
-## GUI
+## TUI
 
-`scripts/mixer.html` is a MIXLINE-style patchbay page:
+`scripts/mixer_tui.py` is a curses terminal interface:
 
-- **Routes** on the left: one node per source-to-output connection, showing source name,
-  destination output, a live level meter, a volume fader, mute, rename and remove.
-- **Outputs** on the right: one node per render output, with a master fader and live meter.
-- **Cables**: SVG Bezier curves connecting each route node to its output node; cables glow
-  when signal is present.
-- **Add route** opens a picker backed by `GET /api/endpoints` and lets you choose source and
-  output.
-- **Add output** adds a new render endpoint to the matrix.
-- **Save as preset** writes the current state to a file under `config/mixers/`.
-- Connects to `/api/events` (SSE) on load and keeps the patchbay in sync with any other
-  connected client live.
+- **Groups pane** on the left: one header row per group, color-coded, with its fader, meter, mute
+  indicator and connected outputs. Expand each group to see its inputs.
+- **Outputs pane** on the right: one row per render output, with a master fader, meter, and the
+  list of groups feeding it.
+- Keyboard controls: `Tab` switches panes, `j`/`k` navigate, `+`/`-`/`v` adjust volume, `m` mutes a
+  group, `i` adds an input to the selected group, `g` adds a group, `o` adds an output, `c`
+  connects/disconnects the selected group to/from the selected output, `r` renames a group,
+  `d` deletes the selected group/input/output, `s` saves the preset, `R` refreshes endpoints.
+- Connects to `/api/events` (SSE) and stays in sync with any other client.
 
-Talks directly to the control API over `fetch`/`EventSource`.
+Run `start-mixer.bat` to launch `route_cli mixer`, then `mixer-tui.bat` to start the TUI.
+
+(The web GUI at `scripts/mixer.html` is currently outdated and reflects the older strips/routes API.)
 
 ---
 
@@ -226,26 +240,25 @@ Talks directly to the control API over `fetch`/`EventSource`.
 Once the control API exists, the plugin (C# via the Logi Actions SDK, scaffolded under
 `AnniAudioMixerPlugin/`) is a pure HTTP client:
 
-- On load, `GET /api/state` to find strips with a `knobIndex`, and subscribes to `/api/events`
-  to stay in sync (e.g. if a strip is removed from the GUI while the plugin is running).
-- On knob rotation, `PATCH /api/strips/{id}` with the new volume for whichever strip has that
+- On load, `GET /api/state` to find groups with a `knobIndex`, and subscribes to `/api/events`
+  to stay in sync (e.g. if a group is removed from the GUI while the plugin is running).
+- On knob rotation, `PATCH /api/groups/{id}` with the new volume for whichever group has that
   `knobIndex`.
-- On knob press, `PATCH /api/strips/{id}` with `{ "muted": !current }`, using its locally
+- On knob press, `PATCH /api/groups/{id}` with `{ "muted": !current }`, using its locally
   cached state (updated via SSE) rather than a `GET` round-trip per press.
-- Displays the strip name/level on the Loupedeck's own screen via the SDK's
-  `PluginDynamicAdjustment`/`GetAdjustmentValue` — the actual reason to build a real plugin
-  instead of raw MIDI, since MIDI has no path back to the device's screen.
+- Displays the group name/level on the Loupedeck's own screen via the SDK's
+  `PluginDynamicAdjustment`/`GetAdjustmentValue`.
 
 ---
 
 ## Migration notes
 
 - Removed: the `"midi"` block in `config/mixers/*.json` and its handling in `cmdMixer`.
-  Mixer JSON files are now pure presets. The new preferred shape is `outputs` (array of endpoint
-  names/objects) and `routes` (source-to-output connections), but the legacy single-output shape
-  (`output`, `master`, `strips`) is still accepted for backward compatibility.
+  Mixer JSON files are now pure presets. The new preferred shape is `inputs`, `groups`, and `outputs`.
+  Legacy shapes (`output` + `strips`, or `outputs` + `routes`) are still accepted and converted
+  automatically on load.
 - Kept: `route_cli midi list` / `route_cli midi <device-hint>` as a standalone diagnostic with no
   relationship to the mixer.
 - `AudioMixer`'s `size_t`-indexed strip API has been replaced by a `StripId`-based one, and
-  `route_cli mixer` now drives an `AudioMixerMatrix` that owns one `AudioMixer` per output.  The
-  interactive text commands resolve position → route `id` at the point of use.
+  `route_cli mixer` now drives an `AudioMixerMatrix` that owns one `AudioMixer` per output.
+  The interactive text commands resolve position → group/output at the point of use.

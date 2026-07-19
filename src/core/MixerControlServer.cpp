@@ -13,21 +13,13 @@
 
 #include <windows.h>
 
-// httplib pulls in winsock2.h and links ws2_32 itself (via #pragma comment
-// under MSVC) -- nothing extra needed in CMakeLists beyond the include path.
 #include <httplib/httplib.h>
-
 #include <nlohmann/json.hpp>
 
 namespace anniaudio::core {
 
 namespace {
 
-// httplib's thread-pool worker threads are long-lived (reused across many
-// requests) and never explicitly torn down by us, so CoInitializeEx is
-// called at most once per worker thread and deliberately never paired with
-// CoUninitialize -- the thread pool outlives the server, and the process
-// exiting cleans up COM regardless.
 void EnsureComInitializedOnThisThread()
 {
     thread_local bool initialized = false;
@@ -36,18 +28,42 @@ void EnsureComInitializedOnThisThread()
     initialized = true;
 }
 
-nlohmann::json toJson(const StripSnapshot& s)
+nlohmann::json toJson(const InputSnapshot& in)
 {
     nlohmann::json j;
-    j["id"]     = s.id;
-    j["name"]   = s.name;
-    j["source"] = s.source;
-    j["output"] = s.output;
-    j["volume"] = s.volume * 100.0f; // API speaks in 0-200 percent
-    j["muted"]  = s.muted;
-    j["peak"]   = s.peak;
-    j["rms"]    = s.rms;
-    j["knobIndex"] = s.knobIndex.has_value() ? nlohmann::json(*s.knobIndex) : nlohmann::json(nullptr);
+    j["id"]     = in.id;
+    j["name"]   = in.name;
+    j["type"]   = in.type;
+    j["source"] = in.source;
+    j["peak"]   = in.peak;
+    j["rms"]    = in.rms;
+    return j;
+}
+
+nlohmann::json toJson(const GroupSnapshot& g)
+{
+    nlohmann::json j;
+    j["id"]        = g.id;
+    j["name"]      = g.name;
+    j["color"]     = g.color;
+    j["inputIds"]  = g.inputIds;
+    j["outputIds"] = g.outputIds;
+    j["volume"]    = g.volume;
+    j["muted"]     = g.muted;
+    j["peak"]      = g.peak;
+    j["rms"]       = g.rms;
+    j["knobIndex"] = g.knobIndex.has_value() ? nlohmann::json(*g.knobIndex) : nlohmann::json(nullptr);
+    return j;
+}
+
+nlohmann::json toJson(const OutputSnapshot& o)
+{
+    nlohmann::json j;
+    j["name"]        = o.name;
+    j["master"]      = o.master;
+    j["groupIds"]    = o.groupIds;
+    j["masterPeak"]  = o.masterPeak;
+    j["masterRms"]   = o.masterRms;
     return j;
 }
 
@@ -64,24 +80,15 @@ nlohmann::json toJson(const EndpointInfo& e)
 
 nlohmann::json stateJson(AudioMixerMatrix& matrix)
 {
+    auto snap = matrix.snapshot();
     nlohmann::json j;
-    j["running"] = matrix.running();
-
-    auto outputs = nlohmann::json::array();
-    for (const auto& name : matrix.outputs()) {
-        nlohmann::json out;
-        out["name"]       = name;
-        out["master"]     = matrix.outputMasterVolume(name) * 100.0f;
-        out["masterPeak"] = matrix.outputMasterPeak(name);
-        out["masterRms"]  = matrix.outputMasterRms(name);
-        out["strips"]     = nlohmann::json::array();
-
-        for (auto& s : matrix.snapshot()) {
-            if (s.output == name) out["strips"].push_back(toJson(s));
-        }
-        outputs.push_back(std::move(out));
-    }
-    j["outputs"] = std::move(outputs);
+    j["running"] = snap.running;
+    j["inputs"]  = nlohmann::json::array();
+    j["groups"]  = nlohmann::json::array();
+    j["outputs"] = nlohmann::json::array();
+    for (const auto& in : snap.inputs) j["inputs"].push_back(toJson(in));
+    for (const auto& g  : snap.groups) j["groups"].push_back(toJson(g));
+    for (const auto& o  : snap.outputs) j["outputs"].push_back(toJson(o));
     return j;
 }
 
@@ -96,26 +103,27 @@ void sendError(httplib::Response& res, int status, const std::string& message)
     sendJson(res, nlohmann::json{ { "error", message } }, status);
 }
 
-// Only used for POST /api/presets/save -- keep writes confined to the repo's
-// config tree rather than letting a client (even a local one) write anywhere
-// on disk.
 bool isSafePresetPath(const std::string& path)
 {
     if (path.empty()) return false;
     if (path.find("..") != std::string::npos) return false;
     if (path.size() > 1 && (path[0] == '/' || path[0] == '\\')) return false;
-    if (path.size() > 2 && path[1] == ':') return false; // e.g. "C:\..."
+    if (path.size() > 2 && path[1] == ':') return false;
     return true;
+}
+
+std::optional<int> parseOptionalInt(const nlohmann::json& j, const std::string& key)
+{
+    if (!j.contains(key)) return std::nullopt;
+    if (j[key].is_null()) return std::nullopt;
+    return j[key].get<int>();
 }
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Impl
-// ---------------------------------------------------------------------------
-
 struct MixerControlServer::Impl {
     AudioMixerMatrix& matrix;
+    std::string autosavePath;
 
     httplib::Server svr;
     std::thread listenThread;
@@ -137,6 +145,11 @@ struct MixerControlServer::Impl {
     std::string lastBroadcastState;
 
     explicit Impl(AudioMixerMatrix& m) : matrix(m) {}
+
+    void setAutosavePath(const std::string& path) {
+        autosavePath = path;
+        matrix.setAutosavePath(path);
+    }
 
     void markDirty()
     {
@@ -175,6 +188,43 @@ struct MixerControlServer::Impl {
     void registerRoutes();
 };
 
+MixerControlServer::MixerControlServer(AudioMixerMatrix& matrix)
+    : m_impl(std::make_unique<Impl>(matrix)) {}
+
+MixerControlServer::~MixerControlServer() { stop(); }
+
+bool MixerControlServer::start(uint16_t port)
+{
+    m_impl->registerRoutes();
+
+    m_impl->svr.new_task_queue = [] { return new httplib::ThreadPool(8); };
+
+    if (!m_impl->svr.bind_to_port("127.0.0.1", port)) {
+        std::fprintf(stderr, "[mixer-api] Could not bind 127.0.0.1:%u\n", port);
+        return false;
+    }
+
+    m_port = port;
+    m_running = true;
+    m_impl->listenThread = std::thread([this] { m_impl->svr.listen_after_bind(); });
+    m_impl->broadcastThread = std::thread([this] { m_impl->broadcastLoop(); });
+    return true;
+}
+
+void MixerControlServer::stop()
+{
+    m_impl->svr.stop();
+    m_impl->dirtyCv.notify_all();
+    if (m_impl->listenThread.joinable()) m_impl->listenThread.join();
+    if (m_impl->broadcastThread.joinable()) m_impl->broadcastThread.join();
+    m_running = false;
+}
+
+void MixerControlServer::setAutosavePath(const std::string& path)
+{
+    m_impl->setAutosavePath(path);
+}
+
 void MixerControlServer::Impl::registerRoutes()
 {
     svr.set_default_headers({
@@ -198,6 +248,197 @@ void MixerControlServer::Impl::registerRoutes()
         sendJson(res, nlohmann::json{ { "endpoints", arr } });
     });
 
+    svr.Get("/api/applications", [this](const httplib::Request&, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
+        // Placeholder: per-process audio session enumeration will come when
+        // process loopback capture is wired in.
+        sendJson(res, nlohmann::json{ { "applications", nlohmann::json::array() } });
+    });
+
+    svr.Get("/api/events", [this](const httplib::Request& req, httplib::Response& res) {
+        uint64_t clientId = nextClientId.fetch_add(1);
+        auto client = std::make_shared<SseClient>();
+        {
+            std::lock_guard<std::mutex> lk(clientsMutex);
+            clients[clientId] = client;
+        }
+
+        res.set_chunked_content_provider("text/event-stream",
+            [this, client, clientId](size_t, httplib::DataSink& sink) {
+                std::unique_lock<std::mutex> lk(client->mutex);
+                client->cv.wait(lk, [&] { return !client->queue.empty() || client->closed; });
+                if (client->closed) return false;
+                auto chunk = std::move(client->queue.front());
+                client->queue.pop_front();
+                lk.unlock();
+                return sink.write(chunk.data(), chunk.size());
+            },
+            [this, client, clientId](bool) {
+                std::lock_guard<std::mutex> lk(client->mutex);
+                client->closed = true;
+                std::lock_guard<std::mutex> clk(clientsMutex);
+                clients.erase(clientId);
+            }
+        );
+
+        // Send initial state immediately.
+        std::lock_guard<std::mutex> clk(client->mutex);
+        client->queue.push_back("data: " + stateJson(matrix).dump() + "\n\n");
+        client->cv.notify_all();
+    });
+
+    // -----------------------------------------------------------------------
+    // Inputs
+    // -----------------------------------------------------------------------
+    svr.Post("/api/inputs", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+
+        InputConfig cfg;
+        cfg.name   = body.value("name", std::string{});
+        cfg.type   = body.value("type", std::string{"device"});
+        cfg.source = body.value("source", std::string{});
+        if (cfg.name.empty() || cfg.source.empty()) {
+            sendError(res, 400, "missing required fields 'name' and 'source'"); return;
+        }
+
+        auto id = matrix.addInput(cfg);
+        if (!id) { sendError(res, 400, "could not add input"); return; }
+
+        markDirty();
+        auto snap = matrix.snapshot();
+        for (const auto& in : snap.inputs) {
+            if (in.id == *id) { sendJson(res, toJson(in), 201); return; }
+        }
+        sendJson(res, nlohmann::json{{"id", *id}}, 201);
+    });
+
+    svr.Patch(R"(/api/inputs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
+        InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
+
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+
+        InputConfig cfg;
+        cfg.name   = body.value("name", std::string{});
+        cfg.type   = body.value("type", std::string{"device"});
+        cfg.source = body.value("source", std::string{});
+        if (cfg.name.empty() || cfg.source.empty()) {
+            sendError(res, 400, "'name' and 'source' cannot be empty"); return;
+        }
+
+        if (!matrix.updateInput(id, cfg)) { sendError(res, 404, "input not found"); return; }
+        markDirty();
+
+        auto snap = matrix.snapshot();
+        for (const auto& in : snap.inputs) {
+            if (in.id == id) { sendJson(res, toJson(in)); return; }
+        }
+        sendJson(res, nlohmann::json{{"id", id}}, 202);
+    });
+
+    svr.Delete(R"(/api/inputs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
+        if (!matrix.removeInput(id)) { sendError(res, 404, "input not found"); return; }
+        markDirty();
+        res.status = 204;
+    });
+
+    // -----------------------------------------------------------------------
+    // Groups
+    // -----------------------------------------------------------------------
+    svr.Post("/api/groups", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+
+        GroupConfig cfg;
+        cfg.name   = body.value("name", std::string{});
+        cfg.color  = body.value("color", std::string{"#3b82f6"});
+        cfg.volume = body.value("volume", 100.0f) / 100.0f;
+        cfg.muted  = body.value("muted", false);
+        if (body.contains("inputIds")) cfg.inputIds = body["inputIds"].get<std::vector<InputId>>();
+        if (body.contains("outputIds")) cfg.outputIds = body["outputIds"].get<std::vector<std::string>>();
+        cfg.knobIndex = parseOptionalInt(body, "knobIndex");
+
+        if (cfg.name.empty()) { sendError(res, 400, "missing required field 'name'"); return; }
+
+        auto id = matrix.addGroup(cfg);
+        if (!id) { sendError(res, 400, "could not create group"); return; }
+
+        markDirty();
+        auto snap = matrix.snapshot();
+        for (const auto& g : snap.groups) {
+            if (g.id == *id) { sendJson(res, toJson(g), 201); return; }
+        }
+        sendJson(res, nlohmann::json{{"id", *id}}, 201);
+    });
+
+    svr.Patch(R"(/api/groups/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
+        GroupId id = static_cast<GroupId>(std::stoull(req.matches[1]));
+
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+
+        auto snap0 = matrix.snapshot();
+        const GroupSnapshot* existing = nullptr;
+        for (const auto& g : snap0.groups) if (g.id == id) { existing = &g; break; }
+        if (!existing) { sendError(res, 404, "group not found"); return; }
+
+        bool changed = false;
+        if (body.contains("name") && body["name"].is_string()) {
+            if (matrix.setGroupName(id, body["name"].get<std::string>())) changed = true;
+        }
+        if (body.contains("color") && body["color"].is_string()) {
+            if (matrix.setGroupColor(id, body["color"].get<std::string>())) changed = true;
+        }
+        if (body.contains("volume")) {
+            if (matrix.setGroupVolume(id, body["volume"].get<float>())) changed = true;
+        }
+        if (body.contains("muted")) {
+            if (matrix.setGroupMuted(id, body["muted"].get<bool>())) changed = true;
+        }
+        if (body.contains("inputIds")) {
+            auto ids = body["inputIds"].get<std::vector<InputId>>();
+            if (matrix.setGroupInputIds(id, ids)) changed = true;
+        }
+        if (body.contains("outputIds")) {
+            auto ids = body["outputIds"].get<std::vector<std::string>>();
+            if (matrix.setGroupOutputIds(id, ids)) changed = true;
+        }
+        if (body.contains("knobIndex")) {
+            std::optional<int> k;
+            if (!body["knobIndex"].is_null()) k = body["knobIndex"].get<int>();
+            if (matrix.setGroupKnobIndex(id, k)) changed = true;
+        }
+
+        if (!changed) { sendError(res, 400, "no valid fields to update"); return; }
+        markDirty();
+
+        auto snap = matrix.snapshot();
+        for (const auto& g : snap.groups) {
+            if (g.id == id) { sendJson(res, toJson(g)); return; }
+        }
+        sendJson(res, toJson(*existing)); // fallback
+    });
+
+    svr.Delete(R"(/api/groups/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        GroupId id = static_cast<GroupId>(std::stoull(req.matches[1]));
+        if (!matrix.removeGroup(id)) { sendError(res, 404, "group not found"); return; }
+        markDirty();
+        res.status = 204;
+    });
+
+    // -----------------------------------------------------------------------
+    // Outputs
+    // -----------------------------------------------------------------------
     svr.Post("/api/outputs", [this](const httplib::Request& req, httplib::Response& res) {
         EnsureComInitializedOnThisThread();
         nlohmann::json body;
@@ -206,31 +447,27 @@ void MixerControlServer::Impl::registerRoutes()
 
         if (!body.contains("name") || !body["name"].is_string() ||
             body["name"].get<std::string>().empty()) {
-            sendError(res, 400, "missing required field 'name'");
-            return;
+            sendError(res, 400, "missing required field 'name'"); return;
         }
 
         std::string name = body["name"].get<std::string>();
-        for (const auto& existing : matrix.outputs()) {
-            if (existing == name) {
-                sendError(res, 409, "output already exists");
-                return;
-            }
+        for (const auto& existing : matrix.outputNames()) {
+            if (existing == name) { sendError(res, 409, "output already exists"); return; }
         }
 
         if (!matrix.addOutput(name)) {
-            sendError(res, 400, "could not open output endpoint");
-            return;
+            sendError(res, 400, "could not open output endpoint"); return;
         }
 
         markDirty();
         nlohmann::json j;
         j["name"]   = name;
-        j["master"] = matrix.outputMasterVolume(name) * 100.0f;
+        j["master"] = matrix.outputMasterVolume(name);
         sendJson(res, j, 201);
     });
 
     svr.Delete("/api/outputs", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }
         catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
@@ -252,255 +489,43 @@ void MixerControlServer::Impl::registerRoutes()
             sendError(res, 400, "missing required fields 'name' and 'volume'"); return;
         }
         std::string name = body["name"].get<std::string>();
-        if (std::find(matrix.outputs().begin(), matrix.outputs().end(), name) == matrix.outputs().end()) {
+        if (std::find(matrix.outputNames().begin(), matrix.outputNames().end(), name) == matrix.outputNames().end()) {
             sendError(res, 404, "output not found"); return;
         }
-        matrix.setOutputMasterVolume(name, body["volume"].get<float>() / 100.0f);
+        matrix.setOutputMasterVolume(name, body["volume"].get<float>());
         markDirty();
-        sendJson(res, nlohmann::json{ { "name", name }, { "master", matrix.outputMasterVolume(name) * 100.0f } });
-    });
-
-    svr.Post("/api/strips", [this](const httplib::Request& req, httplib::Response& res) {
-        EnsureComInitializedOnThisThread();
-        nlohmann::json body;
-        try { body = nlohmann::json::parse(req.body); }
-        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
-
-        if (!body.contains("source") || !body["source"].is_string() || body["source"].get<std::string>().empty() ||
-            !body.contains("output") || !body["output"].is_string() || body["output"].get<std::string>().empty()) {
-            sendError(res, 400, "missing required fields 'source' and 'output'");
-            return;
-        }
-
-        std::string source = body["source"].get<std::string>();
-        std::string output = body["output"].get<std::string>();
-
-        auto existing = matrix.outputs();
-        if (std::find(existing.begin(), existing.end(), output) == existing.end()) {
-            sendError(res, 404, "output not found"); return;
-        }
-
-        MixerStripConfig cfg;
-        cfg.source = source;
-        cfg.name   = body.value("name", std::string{});
-        cfg.volume = body.value("volume", 100.0f) / 100.0f;
-        cfg.muted  = body.value("muted", false);
-        if (body.contains("knobIndex") && !body["knobIndex"].is_null()) {
-            cfg.knobIndex = body["knobIndex"].get<int>();
-        }
-
-        auto id = matrix.addRoute(source, output, cfg);
-        if (!id) {
-            sendError(res, 400, "could not add route (source already routed to this output, endpoint not found, or strip limit reached)");
-            return;
-        }
-        markDirty();
-
-        // The route is queued on the audio thread; it may not be reflected in
-        // snapshot() yet.  Return the request-derived fields plus the new id so
-        // the client can update immediately without waiting for SSE.
         nlohmann::json j;
-        j["id"]     = *id;
-        j["name"]   = cfg.name.empty() ? cfg.source : cfg.name;
-        j["source"] = cfg.source;
-        j["output"] = output;
-        j["volume"] = cfg.volume * 100.0f;
-        j["muted"]  = cfg.muted;
-        j["peak"]   = 0.0f;
-        j["rms"]    = 0.0f;
-        j["knobIndex"] = cfg.knobIndex.has_value() ? nlohmann::json(*cfg.knobIndex) : nlohmann::json(nullptr);
-        sendJson(res, j, 201);
+        j["name"]   = name;
+        j["master"] = matrix.outputMasterVolume(name);
+        sendJson(res, j);
     });
 
-    svr.Patch(R"(/api/strips/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        AudioMixerMatrix::RouteId id = std::stoull(req.matches[1]);
-        if (!matrix.routeSnapshot(id)) { sendError(res, 404, "unknown strip id"); return; }
-
-        nlohmann::json body;
-        try { body = nlohmann::json::parse(req.body); }
-        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
-
-        if (body.contains("name") && body["name"].is_string()) {
-            matrix.renameRoute(id, body["name"].get<std::string>());
-        }
-        if (body.contains("volume")) {
-            matrix.setRouteVolume(id, body["volume"].get<float>() / 100.0f);
-        }
-        if (body.contains("muted")) {
-            matrix.setRouteMuted(id, body["muted"].get<bool>());
-        }
-        if (body.contains("knobIndex")) {
-            if (body["knobIndex"].is_null()) matrix.setRouteKnobIndex(id, std::nullopt);
-            else matrix.setRouteKnobIndex(id, body["knobIndex"].get<int>());
-        }
-
-        markDirty();
-        auto snap = matrix.routeSnapshot(id);
-        if (snap) {
-            sendJson(res, toJson(*snap));
-        } else {
-            // Route queued but not yet applied by the audio thread; return the
-            // patched fields so the client doesn't have to wait for SSE.
-            nlohmann::json j;
-            j["id"] = id;
-            if (body.contains("name")) j["name"] = body["name"];
-            if (body.contains("volume")) j["volume"] = body["volume"];
-            if (body.contains("muted")) j["muted"] = body["muted"];
-            if (body.contains("knobIndex")) j["knobIndex"] = body["knobIndex"];
-            sendJson(res, j, 202);
-        }
-    });
-
-    svr.Delete(R"(/api/strips/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        AudioMixerMatrix::RouteId id = std::stoull(req.matches[1]);
-        if (!matrix.routeSnapshot(id)) { sendError(res, 404, "unknown strip id"); return; }
-        matrix.removeRoute(id);
-        markDirty();
-        res.status = 204;
-    });
-
+    // -----------------------------------------------------------------------
+    // Presets
+    // -----------------------------------------------------------------------
     svr.Post("/api/presets/save", [this](const httplib::Request& req, httplib::Response& res) {
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }
         catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
-        if (!body.contains("path") || !body["path"].is_string()) {
-            sendError(res, 400, "missing required field 'path'"); return;
-        }
-        std::string path = body["path"].get<std::string>();
+
+        std::string path = body.value("path", std::string{});
+        if (path.empty()) path = autosavePath;
+        if (path.empty()) { sendError(res, 400, "missing 'path' and no autosave path configured"); return; }
+
         if (!isSafePresetPath(path)) {
             sendError(res, 400, "path must be a relative path with no '..' segments"); return;
         }
 
-        nlohmann::json out;
-        out["outputs"] = nlohmann::json::array();
-        out["routes"]  = nlohmann::json::array();
-
-        for (const auto& name : matrix.outputs()) {
-            nlohmann::json oj;
-            oj["name"]   = name;
-            oj["master"] = matrix.outputMasterVolume(name) * 100.0f;
-            out["outputs"].push_back(oj);
+        if (!matrix.save(path)) {
+            sendError(res, 500, "failed to save preset"); return;
         }
 
-        for (auto& s : matrix.snapshot()) {
-            nlohmann::json sj;
-            sj["source"] = s.source;
-            sj["output"] = s.output;
-            sj["name"]   = s.name;
-            sj["volume"] = s.volume * 100.0f;
-            sj["muted"]  = s.muted;
-            if (s.knobIndex) sj["knobIndex"] = *s.knobIndex;
-            out["routes"].push_back(sj);
+        // If a path was supplied, also make it the autosave target.
+        if (!autosavePath.empty() || body.contains("path")) {
+            setAutosavePath(path);
         }
-
-        std::ofstream f(path);
-        if (!f) { sendError(res, 500, "failed to open file for writing"); return; }
-        f << out.dump(2) << "\n";
         sendJson(res, nlohmann::json{ { "saved", path } });
     });
-
-    svr.Get("/api/events", [this](const httplib::Request&, httplib::Response& res) {
-        auto client = std::make_shared<SseClient>();
-        uint64_t id = nextClientId.fetch_add(1);
-        {
-            std::lock_guard<std::mutex> lk(clientsMutex);
-            clients[id] = client;
-        }
-        {
-            std::lock_guard<std::mutex> lk(client->mutex);
-            client->queue.push_back("data: " + stateJson(matrix).dump() + "\n\n");
-        }
-
-        res.set_header("Cache-Control", "no-cache");
-        res.set_header("Connection", "keep-alive");
-        res.set_chunked_content_provider(
-            "text/event-stream",
-            [this, client](size_t /*offset*/, httplib::DataSink& sink) {
-                std::string chunk;
-                {
-                    std::unique_lock<std::mutex> lk(client->mutex);
-                    if (client->queue.empty() && !client->closed) {
-                        client->cv.wait_for(lk, std::chrono::seconds(15),
-                            [&] { return !client->queue.empty() || client->closed; });
-                    }
-                    if (client->closed) return false;
-                    if (client->queue.empty()) {
-                        chunk = ": heartbeat\n\n";
-                    } else {
-                        chunk = std::move(client->queue.front());
-                        client->queue.pop_front();
-                    }
-                }
-                return sink.write(chunk.data(), chunk.size());
-            },
-            [this, id](bool /*success*/) {
-                std::lock_guard<std::mutex> lk(clientsMutex);
-                clients.erase(id);
-            });
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-MixerControlServer::MixerControlServer(AudioMixerMatrix& matrix)
-    : m_impl(std::make_unique<Impl>(matrix))
-{
-}
-
-MixerControlServer::~MixerControlServer() { stop(); }
-
-bool MixerControlServer::start(uint16_t port)
-{
-    if (m_running.load()) return false;
-    m_port = port;
-
-    m_impl->registerRoutes();
-    // Bind to the IPv4 loopback only; AF_UNSPEC can resolve ::1 first on some
-    // Windows configurations and end up on a different address than clients
-    // expecting 127.0.0.1.
-    m_impl->svr.set_address_family(AF_INET);
-    m_impl->listenThread = std::thread([this] {
-        if (!m_impl->svr.listen("127.0.0.1", m_port)) {
-            std::fprintf(stderr, "[mixer-api] Failed to bind 127.0.0.1:%u\n", m_port);
-        }
-    });
-
-    for (int i = 0; i < 50 && !m_impl->svr.is_running(); ++i) Sleep(10);
-    if (!m_impl->svr.is_running()) {
-        if (m_impl->listenThread.joinable()) m_impl->listenThread.join();
-        return false;
-    }
-
-    m_impl->broadcastThread = std::thread([this] { m_impl->broadcastLoop(); });
-    m_running = true;
-    std::fprintf(stderr, "[mixer-api] Listening on http://127.0.0.1:%u\n", m_port);
-    return true;
-}
-
-void MixerControlServer::stop()
-{
-    if (!m_running.exchange(false)) return;
-
-    m_impl->svr.stop();
-    {
-        std::lock_guard<std::mutex> lk(m_impl->dirtyMutex);
-        m_impl->dirty = true;
-    }
-    m_impl->dirtyCv.notify_all();
-
-    {
-        std::lock_guard<std::mutex> lk(m_impl->clientsMutex);
-        for (auto& [id, client] : m_impl->clients) {
-            std::lock_guard<std::mutex> clk(client->mutex);
-            client->closed = true;
-            client->cv.notify_all();
-        }
-    }
-
-    if (m_impl->listenThread.joinable()) m_impl->listenThread.join();
-    if (m_impl->broadcastThread.joinable()) m_impl->broadcastThread.join();
 }
 
 } // namespace anniaudio::core

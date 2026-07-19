@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-AnniAudio mixer TUI.
+AnniAudio mixer TUI (inputs -> groups -> outputs).
 
 Connects to the mixer control API on 127.0.0.1 and gives a compact, live-updating
-terminal interface for outputs, routes, levels, volume, mute, and preset save.
+terminal interface for groups, inputs, outputs, levels, volume, mute, and color-coded
+cables.
 
 Usage:
     python scripts/mixer_tui.py [--port 8850]
@@ -19,7 +20,6 @@ import sys
 import threading
 import time
 import traceback
-import urllib.parse
 
 import requests
 
@@ -34,13 +34,22 @@ BASE = "http://127.0.0.1:{port}"
 
 # Shared state protected by lock
 state_lock = threading.Lock()
-state = {"running": False, "outputs": []}
+state = {"running": False, "inputs": [], "groups": [], "outputs": []}
 endpoints = []
+applications = []
 status_text = "Connecting..."
 last_error = ""
 last_success = ""
 
 api_queue = queue.Queue()
+
+SELECTED_PAIR = 1
+METER_PAIR = 2
+MUTED_PAIR = 3
+HEADER_PAIR = 4
+SUCCESS_PAIR = 5
+ERROR_PAIR = 6
+GROUP_PAIR_START = 10
 
 # ---------------------------------------------------------------------------
 # API worker
@@ -77,6 +86,7 @@ def api_worker(port):
 
 def api_call(method, path, body=None):
     api_queue.put((method, path, body))
+
 
 # ---------------------------------------------------------------------------
 # SSE / polling worker
@@ -129,6 +139,19 @@ def fetch_endpoints(port):
         with state_lock:
             endpoints = []
 
+
+def fetch_applications(port):
+    global applications
+    try:
+        r = requests.get(BASE.format(port=port) + "/api/applications", timeout=5)
+        if r.ok:
+            with state_lock:
+                applications = r.json().get("applications", [])
+    except Exception:
+        with state_lock:
+            applications = []
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -145,7 +168,7 @@ def meter_bar(pct, width=10):
     return "█" * filled + "░" * (width - filled)
 
 
-def vol_bar(vol, width=20):
+def vol_bar(vol, width=16):
     filled = int(round(vol / 200 * width))
     return "█" * filled + "░" * (width - filled)
 
@@ -153,15 +176,84 @@ def vol_bar(vol, width=20):
 def clamp_vol(v):
     return max(0, min(200, v))
 
+
+def hex_to_curses_color(hexstr):
+    hexstr = hexstr.lstrip("#")
+    if len(hexstr) != 6:
+        return curses.COLOR_WHITE
+    try:
+        r = int(hexstr[0:2], 16)
+        g = int(hexstr[2:4], 16)
+        b = int(hexstr[4:6], 16)
+    except Exception:
+        return curses.COLOR_WHITE
+    candidates = [
+        (curses.COLOR_BLACK, 0, 0, 0),
+        (curses.COLOR_RED, 255, 0, 0),
+        (curses.COLOR_GREEN, 0, 255, 0),
+        (curses.COLOR_YELLOW, 255, 255, 0),
+        (curses.COLOR_BLUE, 0, 0, 255),
+        (curses.COLOR_MAGENTA, 255, 0, 255),
+        (curses.COLOR_CYAN, 0, 255, 255),
+        (curses.COLOR_WHITE, 255, 255, 255),
+    ]
+    best = curses.COLOR_WHITE
+    best_d = 1e9
+    for cid, cr, cg, cb in candidates:
+        d = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+        if d < best_d:
+            best_d = d
+            best = cid
+    return best
+
+
+def group_color_attr(color, pair_cache, selected=False):
+    if not curses.has_colors():
+        return curses.A_REVERSE if selected else curses.A_NORMAL
+    pair_id = pair_cache.get(color)
+    if pair_id is None:
+        pair_id = GROUP_PAIR_START + len(pair_cache)
+        fg = hex_to_curses_color(color)
+        try:
+            curses.init_pair(pair_id, fg, -1)
+        except Exception:
+            pass
+        pair_cache[color] = pair_id
+    attr = curses.color_pair(pair_id)
+    if selected:
+        attr |= curses.A_REVERSE
+    return attr
+
+
+def input_for_id(iid, local_state):
+    for inp in local_state.get("inputs", []):
+        if inp.get("id") == iid:
+            return inp
+    return None
+
+
+def group_for_id(gid, local_state):
+    for g in local_state.get("groups", []):
+        if g.get("id") == gid:
+            return g
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Dialogs
 # ---------------------------------------------------------------------------
 
 def draw_box(win, title=""):
     h, w = win.getmaxyx()
-    win.box()
+    try:
+        win.box()
+    except curses.error:
+        pass
     if title:
-        win.addstr(0, 2, f" {title} ", curses.A_BOLD)
+        try:
+            win.addstr(0, 2, f" {title} ", curses.A_BOLD)
+        except curses.error:
+            pass
 
 
 def list_dialog(stdscr, title, items, start_idx=0):
@@ -186,9 +278,15 @@ def list_dialog(stdscr, title, items, start_idx=0):
                 break
             attr = curses.A_NORMAL
             if line == idx:
-                attr = curses.color_pair(2) | curses.A_BOLD
-            win.addstr(2 + i, 2, str(items[line])[:max_w - 4], attr)
-        win.refresh()
+                attr = curses.color_pair(SELECTED_PAIR) | curses.A_BOLD
+            try:
+                win.addstr(2 + i, 2, str(items[line])[:max_w - 4], attr)
+            except curses.error:
+                pass
+        try:
+            win.refresh()
+        except curses.error:
+            pass
         ch = win.getch()
         if ch in (curses.KEY_UP, ord('k')):
             idx = (idx - 1) % len(items)
@@ -212,8 +310,11 @@ def input_dialog(stdscr, title, default=""):
     while True:
         win.erase()
         draw_box(win, title)
-        win.addstr(2, 2, text[:width - 4])
-        win.refresh()
+        try:
+            win.addstr(2, 2, text[:width - 4])
+            win.refresh()
+        except curses.error:
+            pass
         ch = win.getch()
         if ch in (curses.KEY_ENTER, 10, 13):
             return text
@@ -224,34 +325,89 @@ def input_dialog(stdscr, title, default=""):
         elif 32 <= ch <= 126:
             text += chr(ch)
 
+
+def confirm_dialog(stdscr, text):
+    h, w = stdscr.getmaxyx()
+    height = 5
+    width = min(w - 4, max(40, len(text) + 10))
+    y = (h - height) // 2
+    x = (w - width) // 2
+    win = curses.newwin(height, width, y, x)
+    win.keypad(True)
+    while True:
+        win.erase()
+        draw_box(win, "Confirm")
+        try:
+            win.addstr(2, 2, text[:width - 4])
+            win.refresh()
+        except curses.error:
+            pass
+        ch = win.getch()
+        if ch in (ord('y'), ord('Y'), 10, 13):
+            return True
+        elif ch in (ord('n'), ord('N'), 27):
+            return False
+
+
 # ---------------------------------------------------------------------------
 # Main TUI
 # ---------------------------------------------------------------------------
 
+def build_group_rows(local_state):
+    rows = []
+    for g in local_state.get("groups", []):
+        rows.append(("group", g))
+        for iid in g.get("inputIds", []):
+            inp = input_for_id(iid, local_state)
+            if inp:
+                rows.append(("input", g, inp))
+    return rows
+
+
+def selected_group(rows, sel_idx):
+    if not rows or sel_idx < 0 or sel_idx >= len(rows):
+        return None
+    item = rows[sel_idx]
+    return item[1]
+
+
+def selected_input(rows, sel_idx):
+    if not rows or sel_idx < 0 or sel_idx >= len(rows):
+        return None
+    item = rows[sel_idx]
+    if item[0] == "input":
+        return item[2]
+    return None
+
+
 def main(stdscr, port):
-    global last_error, last_success, state, endpoints, status_text
+    global last_error, last_success, state, endpoints, applications, status_text
     curses.curs_set(0)
     stdscr.timeout(50)
     stdscr.clear()
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_CYAN, -1)      # header
-        curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)  # selected
-        curses.init_pair(3, curses.COLOR_YELLOW, -1)    # meter
-        curses.init_pair(4, curses.COLOR_RED, -1)       # muted/error
-        curses.init_pair(5, curses.COLOR_GREEN, -1)      # success
+        curses.init_pair(SELECTED_PAIR, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        curses.init_pair(METER_PAIR, curses.COLOR_YELLOW, -1)
+        curses.init_pair(MUTED_PAIR, curses.COLOR_RED, -1)
+        curses.init_pair(HEADER_PAIR, curses.COLOR_CYAN, -1)
+        curses.init_pair(SUCCESS_PAIR, curses.COLOR_GREEN, -1)
+        curses.init_pair(ERROR_PAIR, curses.COLOR_RED, -1)
 
-    pane = 0  # 0 = outputs, 1 = routes
-    sel_out = 0
-    sel_route = 0
+    pair_cache = {}
+    pane = 0  # 0 = groups, 1 = outputs
+    sel_group_idx = 0
+    sel_output_idx = 0
+    group_offset = 0
+    output_offset = 0
 
-    # start workers
     t_api = threading.Thread(target=api_worker, args=(port,), daemon=True)
     t_api.start()
     t_sse = threading.Thread(target=sse_worker, args=(port,), daemon=True)
     t_sse.start()
     fetch_endpoints(port)
+    fetch_applications(port)
 
     while True:
         with state_lock:
@@ -261,19 +417,24 @@ def main(stdscr, port):
             local_ok = last_success
             local_eps = endpoints
 
-        # Clear and resize handling
         stdscr.clear()
         h, w = stdscr.getmaxyx()
 
         # Header
         header = f" AnniAudio Mixer TUI  |  port {port}  |  {local_status} "
-        stdscr.addstr(0, 0, header.ljust(w), curses.color_pair(1) | curses.A_BOLD)
+        try:
+            stdscr.addstr(0, 0, header.ljust(w), curses.color_pair(HEADER_PAIR) | curses.A_BOLD)
+        except curses.error:
+            pass
 
-        # Error / success line
+        # Info line
         info = local_err or local_ok
         if info:
-            color = curses.color_pair(4) if local_err else curses.color_pair(5)
-            stdscr.addstr(1, 0, info[:w - 1], color)
+            color = curses.color_pair(ERROR_PAIR) if local_err else curses.color_pair(SUCCESS_PAIR)
+            try:
+                stdscr.addstr(1, 0, info[:w - 1], color)
+            except curses.error:
+                pass
             if local_err or local_ok:
                 with state_lock:
                     if local_err:
@@ -281,60 +442,127 @@ def main(stdscr, port):
                     if local_ok:
                         last_success = ""
 
+        groups = local_state.get("groups", [])
         outputs = local_state.get("outputs", [])
-        routes = []
-        for out in outputs:
-            for r in out.get("strips", []):
-                routes.append(r)
+        group_rows = build_group_rows(local_state)
 
-        # Panel dimensions
+        if sel_group_idx >= len(group_rows):
+            sel_group_idx = max(0, len(group_rows) - 1)
+        if sel_output_idx >= len(outputs):
+            sel_output_idx = max(0, len(outputs) - 1)
+
         top = 2
-        mid = w // 2
         bottom = h - 2
-        panel_h = bottom - top
+        panel_h = max(1, bottom - top)
+        mid = w // 2
 
-        # Outputs panel
-        stdscr.addstr(top, 1, "Outputs", curses.A_BOLD | curses.color_pair(1))
-        stdscr.hline(top + 1, 1, curses.ACS_HLINE, max(1, mid - 2))
-        out_count = max(0, panel_h - 3)
-        for i, out in enumerate(outputs[:out_count]):
+        # --- Groups pane ---
+        try:
+            stdscr.addstr(top, 1, "Groups", curses.A_BOLD | curses.color_pair(HEADER_PAIR))
+            stdscr.hline(top + 1, 1, curses.ACS_HLINE, max(1, mid - 2))
+        except curses.error:
+            pass
+
+        visible_group = max(0, panel_h - 4)
+        if sel_group_idx < group_offset:
+            group_offset = sel_group_idx
+        if sel_group_idx >= group_offset + visible_group:
+            group_offset = sel_group_idx - visible_group + 1
+
+        for i in range(visible_group):
+            line = group_offset + i
+            if line >= len(group_rows):
+                break
             y = top + 2 + i
-            is_sel = pane == 0 and i == sel_out
-            attr = curses.color_pair(2) if is_sel else curses.A_NORMAL
-            name = out.get("name", "?")[:mid - 18]
+            item = group_rows[line]
+            is_group = item[0] == "group"
+            if is_group:
+                g = item[1]
+                is_sel = pane == 0 and line == sel_group_idx
+                name = g.get("name", "?")[:18]
+                vol = g.get("volume", 100)
+                muted = g.get("muted", False)
+                peak = max(g.get("peak", 0.0), g.get("rms", 0.0))
+                pct = dbm_percent(peak)
+                bar = meter_bar(pct, 8)
+                vbar = vol_bar(vol, 10)
+                out_list = ", ".join(g.get("outputIds", []))[:mid - 48]
+                color = g.get("color", "#3b82f6")
+                attr = group_color_attr(color, pair_cache, selected=is_sel)
+                try:
+                    stdscr.addstr(y, 1, " ", attr)
+                    stdscr.addstr(y, 2, f"{name:<18} {vbar} {vol:>3.0f}% {bar} {'M' if muted else ' '}", attr)
+                    if out_list:
+                        stdscr.addstr(y, mid - 2 - len(out_list), f"→ {out_list}", attr | curses.A_DIM)
+                except curses.error:
+                    pass
+            else:
+                g = item[1]
+                inp = item[2]
+                is_sel = pane == 0 and line == sel_group_idx
+                name = inp.get("name", "?")[:16]
+                itype = inp.get("type", "device")[:4]
+                peak = max(inp.get("peak", 0.0), inp.get("rms", 0.0))
+                pct = dbm_percent(peak)
+                bar = meter_bar(pct, 8)
+                attr = curses.color_pair(SELECTED_PAIR) if is_sel else curses.A_NORMAL
+                try:
+                    stdscr.addstr(y, 4, f"  • {name:<16} [{itype}] {bar}", attr)
+                except curses.error:
+                    pass
+
+        # --- Outputs pane ---
+        try:
+            stdscr.addstr(top, mid + 1, "Outputs", curses.A_BOLD | curses.color_pair(HEADER_PAIR))
+            stdscr.hline(top + 1, mid + 1, curses.ACS_HLINE, max(1, w - mid - 2))
+        except curses.error:
+            pass
+
+        visible_out = max(0, panel_h - 4)
+        if sel_output_idx < output_offset:
+            output_offset = sel_output_idx
+        if sel_output_idx >= output_offset + visible_out:
+            output_offset = sel_output_idx - visible_out + 1
+
+        for i in range(visible_out):
+            line = output_offset + i
+            if line >= len(outputs):
+                break
+            y = top + 2 + i
+            out = outputs[line]
+            is_sel = pane == 1 and line == sel_output_idx
+            name = out.get("name", "?")[:22]
             vol = out.get("master", 100)
-            peak = out.get("masterPeak", 0)
-            rms = out.get("masterRms", 0)
-            pct = dbm_percent(max(peak, rms))
+            peak = max(out.get("masterPeak", 0.0), out.get("masterRms", 0.0))
+            pct = dbm_percent(peak)
             bar = meter_bar(pct, 8)
-            line = f"{name[:mid-18]:<{mid-18}} {bar} {vol:>3.0f}%"
-            stdscr.addstr(y, 1, line[:mid - 2], attr)
+            vbar = vol_bar(vol, 12)
+            attr = curses.color_pair(SELECTED_PAIR) if is_sel else curses.A_NORMAL
+            try:
+                stdscr.addstr(y, mid + 1, f"{name:<22} {vbar} {vol:>3.0f}% {bar}", attr)
+            except curses.error:
+                pass
+            # connected groups
+            gnames = []
+            for gid in out.get("groupIds", []):
+                g = group_for_id(gid, local_state)
+                if g:
+                    gnames.append(g.get("name", "?"))
+            if gnames:
+                try:
+                    stdscr.addstr(y + 1, mid + 3, "<- " + ", ".join(gnames)[:w - mid - 6], curses.A_DIM)
+                except curses.error:
+                    pass
 
-        # Routes panel
-        stdscr.addstr(top, mid + 1, "Routes", curses.A_BOLD | curses.color_pair(1))
-        stdscr.hline(top + 1, mid + 1, curses.ACS_HLINE, max(1, mid - 2))
-        route_count = max(0, panel_h - 3)
-        for i, r in enumerate(routes[:route_count]):
-            y = top + 2 + i
-            is_sel = pane == 1 and i == sel_route
-            attr = curses.color_pair(2) if is_sel else curses.A_NORMAL
-            name = r.get("name", r.get("source", "?"))[:20]
-            outname = r.get("output", "?")[:14]
-            vol = r.get("volume", 100)
-            muted = r.get("muted", False)
-            peak = r.get("peak", 0)
-            rms = r.get("rms", 0)
-            pct = dbm_percent(max(peak, rms))
-            bar = meter_bar(pct, 8)
-            text = f"{name:<20} -> {outname:<14} {bar} {vol:>3.0f}% {'M' if muted else ''}"
-            stdscr.addstr(y, mid + 1, text[:mid - 2], attr)
-
-        # Footer help
+        # Footer
         footer = (
-            "Tab/Arrows:nav  +/-|v:vol  m:mute  r:rename  d:delete  "
-            "a:add route  o:add output  s:save  R:refresh  q:quit"
+            "Tab:panes  j/k:nav  +/-|v:vol  m:mute  i:add input  g:add group  "
+            "o:add output  c:connect  r:rename  d:delete  s:save  q:quit"
         )
-        stdscr.addstr(h - 1, 0, footer[:w - 1])
+        try:
+            stdscr.addstr(h - 1, 0, footer[:w - 1], curses.A_DIM)
+        except curses.error:
+            pass
 
         stdscr.refresh()
 
@@ -345,44 +573,62 @@ def main(stdscr, port):
             pane = 1 - pane
         elif ch in (curses.KEY_DOWN, ord('j')):
             if pane == 0:
-                sel_out = (sel_out + 1) % max(1, len(outputs))
+                sel_group_idx = (sel_group_idx + 1) % max(1, len(group_rows))
             else:
-                sel_route = (sel_route + 1) % max(1, len(routes))
+                sel_output_idx = (sel_output_idx + 1) % max(1, len(outputs))
         elif ch in (curses.KEY_UP, ord('k')):
             if pane == 0:
-                sel_out = (sel_out - 1) % max(1, len(outputs))
+                sel_group_idx = (sel_group_idx - 1) % max(1, len(group_rows))
             else:
-                sel_route = (sel_route - 1) % max(1, len(routes))
+                sel_output_idx = (sel_output_idx - 1) % max(1, len(outputs))
+        elif ch == curses.KEY_PPAGE:
+            if pane == 0:
+                sel_group_idx = max(0, sel_group_idx - visible_group)
+            else:
+                sel_output_idx = max(0, sel_output_idx - visible_out)
+        elif ch == curses.KEY_NPAGE:
+            if pane == 0:
+                sel_group_idx = min(len(group_rows) - 1, sel_group_idx + visible_group)
+            else:
+                sel_output_idx = min(len(outputs) - 1, sel_output_idx + visible_out)
+
+        # Volume / mute
         elif ch in (ord('+'), ord('=')):
-            if pane == 0 and outputs:
-                out = outputs[sel_out]
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    new_vol = clamp_vol(g.get("volume", 100) + 5)
+                    api_call("PATCH", f"/api/groups/{g['id']}", {"volume": new_vol})
+            elif pane == 1 and outputs:
+                out = outputs[sel_output_idx]
                 new_vol = clamp_vol(out.get("master", 100) + 5)
                 api_call("POST", "/api/outputs/master", {"name": out["name"], "volume": new_vol})
-            elif pane == 1 and routes:
-                r = routes[sel_route]
-                new_vol = clamp_vol(r.get("volume", 100) + 5)
-                api_call("PATCH", f"/api/strips/{r['id']}", {"volume": new_vol})
         elif ch == ord('-'):
-            if pane == 0 and outputs:
-                out = outputs[sel_out]
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    new_vol = clamp_vol(g.get("volume", 100) - 5)
+                    api_call("PATCH", f"/api/groups/{g['id']}", {"volume": new_vol})
+            elif pane == 1 and outputs:
+                out = outputs[sel_output_idx]
                 new_vol = clamp_vol(out.get("master", 100) - 5)
                 api_call("POST", "/api/outputs/master", {"name": out["name"], "volume": new_vol})
-            elif pane == 1 and routes:
-                r = routes[sel_route]
-                new_vol = clamp_vol(r.get("volume", 100) - 5)
-                api_call("PATCH", f"/api/strips/{r['id']}", {"volume": new_vol})
         elif ch == ord('v'):
-            if pane == 1 and routes:
-                r = routes[sel_route]
-                val = input_dialog(stdscr, "Volume 0-200", str(int(r.get("volume", 100))))
-                if val:
-                    try:
-                        new_vol = clamp_vol(float(val))
-                        api_call("PATCH", f"/api/strips/{r['id']}", {"volume": new_vol})
-                    except Exception:
-                        pass
-            elif pane == 0 and outputs:
-                out = outputs[sel_out]
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    val = input_dialog(stdscr, "Volume 0-200", str(int(g.get("volume", 100))))
+                    if val:
+                        try:
+                            new_vol = clamp_vol(float(val))
+                            api_call("PATCH", f"/api/groups/{g['id']}", {"volume": new_vol})
+                        except Exception:
+                            pass
+            elif pane == 1 and outputs:
+                out = outputs[sel_output_idx]
                 val = input_dialog(stdscr, "Master volume 0-200", str(int(out.get("master", 100))))
                 if val:
                     try:
@@ -391,65 +637,105 @@ def main(stdscr, port):
                     except Exception:
                         pass
         elif ch == ord('m'):
-            if pane == 1 and routes:
-                r = routes[sel_route]
-                api_call("PATCH", f"/api/strips/{r['id']}", {"muted": not r.get("muted", False)})
-        elif ch == ord('r'):
-            if pane == 1 and routes:
-                r = routes[sel_route]
-                val = input_dialog(stdscr, "Rename", r.get("name", ""))
-                if val is not None:
-                    api_call("PATCH", f"/api/strips/{r['id']}", {"name": val})
-        elif ch == ord('d'):
-            if pane == 0 and outputs:
-                out = outputs[sel_out]
-                api_call("DELETE", "/api/outputs", {"name": out["name"]})
-            elif pane == 1 and routes:
-                r = routes[sel_route]
-                api_call("DELETE", f"/api/strips/{r['id']}")
-        elif ch == ord('a'):
-            sources = [e["name"] for e in local_eps]
-            out_names = [o["name"] for o in outputs]
-            if not sources or not out_names:
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    api_call("PATCH", f"/api/groups/{g['id']}", {"muted": not g.get("muted", False)})
+
+        # Add / connect / rename / delete / save
+        elif ch == ord('i'):
+            if not group_rows:
                 with state_lock:
-                    last_error = "Need at least one endpoint and one output"
+                    last_error = "No group selected"
                 continue
-            src_idx = list_dialog(stdscr, "Select source", sources)
-            if src_idx is None:
+            item = group_rows[sel_group_idx]
+            g = item[1]
+            names = [e.get("name", "") for e in local_eps]
+            idx = list_dialog(stdscr, "Select device input", names)
+            if idx is None:
                 continue
-            out_idx = list_dialog(stdscr, "Select output", out_names)
-            if out_idx is None:
+            source = names[idx]
+            val = input_dialog(stdscr, "Input name (optional)", source)
+            if val is None:
                 continue
-            name = input_dialog(stdscr, "Name (optional)", sources[src_idx])
-            if name is None:
-                continue
-            vol = input_dialog(stdscr, "Volume 0-200", "100")
-            try:
-                vol = clamp_vol(float(vol))
-            except Exception:
-                vol = 100
-            api_call("POST", "/api/strips", {
-                "source": sources[src_idx],
-                "output": out_names[out_idx],
-                "name": name,
-                "volume": vol
-            })
+            name = val or source
+            # add input, then add to group
+            r = requests.post(BASE.format(port=port) + "/api/inputs",
+                              json={"name": name, "type": "device", "source": source}, timeout=5)
+            if r.ok:
+                inp = r.json()
+                iid = inp.get("id")
+                if iid is not None:
+                    ids = list(g.get("inputIds", []))
+                    if iid not in ids:
+                        ids.append(iid)
+                        api_call("PATCH", f"/api/groups/{g['id']}", {"inputIds": ids})
+            else:
+                with state_lock:
+                    try:
+                        last_error = r.json().get("error", str(r.status_code))
+                    except Exception:
+                        last_error = str(r.status_code)
+        elif ch == ord('g'):
+            val = input_dialog(stdscr, "New group name")
+            if val:
+                api_call("POST", "/api/groups", {"name": val, "color": "#3b82f6"})
         elif ch == ord('o'):
-            renders = [e["name"] for e in local_eps if e.get("isRender")]
-            if not renders:
-                with state_lock:
-                    last_error = "No render endpoints available"
-                continue
+            renders = [e.get("name", "") for e in local_eps if e.get("isRender")]
             idx = list_dialog(stdscr, "Select output endpoint", renders)
             if idx is None:
                 continue
             api_call("POST", "/api/outputs", {"name": renders[idx]})
+        elif ch == ord('c'):
+            if not group_rows or not outputs:
+                with state_lock:
+                    last_error = "Need a group and an output"
+                continue
+            g_item = group_rows[sel_group_idx]
+            if g_item[0] != "group":
+                with state_lock:
+                    last_error = "Select a group header"
+                continue
+            g = g_item[1]
+            out = outputs[sel_output_idx]
+            outs = list(g.get("outputIds", []))
+            if out["name"] in outs:
+                outs.remove(out["name"])
+            else:
+                outs.append(out["name"])
+            api_call("PATCH", f"/api/groups/{g['id']}", {"outputIds": outs})
+        elif ch == ord('r'):
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    val = input_dialog(stdscr, "Rename group", g.get("name", ""))
+                    if val:
+                        api_call("PATCH", f"/api/groups/{g['id']}", {"name": val})
+        elif ch == ord('d'):
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] == "group":
+                    g = item[1]
+                    if confirm_dialog(stdscr, f"Delete group '{g.get('name')}'?"):
+                        api_call("DELETE", f"/api/groups/{g['id']}")
+                else:
+                    g = item[1]
+                    inp = item[2]
+                    ids = [x for x in g.get("inputIds", []) if x != inp["id"]]
+                    api_call("PATCH", f"/api/groups/{g['id']}", {"inputIds": ids})
+            elif pane == 1 and outputs:
+                out = outputs[sel_output_idx]
+                if confirm_dialog(stdscr, f"Delete output '{out.get('name')}'?"):
+                    api_call("DELETE", "/api/outputs", {"name": out["name"]})
         elif ch == ord('s'):
-            path = input_dialog(stdscr, "Save path", "config/mixers/")
-            if path:
-                api_call("POST", "/api/presets/save", {"path": path})
+            val = input_dialog(stdscr, "Save path (empty = autosave)", "")
+            if val is not None:
+                api_call("POST", "/api/presets/save", {"path": val})
         elif ch == ord('R'):
             fetch_endpoints(port)
+            fetch_applications(port)
         elif ch in (ord('q'), ord('Q'), 27):
             break
 
