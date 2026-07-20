@@ -124,7 +124,7 @@ using InputId = uint32_t;
 using GroupId = uint32_t;
 
 struct InputConfig  { std::string name, type, source; };
-struct GroupConfig  { std::string name, color; std::vector<InputId> inputIds; std::vector<std::string> outputIds; float volume; bool muted; std::optional<int> knobIndex; };
+struct GroupConfig  { std::string name, color, cable; std::vector<InputId> inputIds; std::vector<std::string> outputIds; float volume; bool muted; std::optional<int> knobIndex; };
 
 struct MixerStateSnapshot {
     bool running;
@@ -180,13 +180,13 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 |----------|-------------------------|-------------------------------------------------|-------------|
 | `GET`    | `/api/state`            | —                                               | Full snapshot: `{ running, controlPort, inputs, groups, outputs }` |
 | `GET`    | `/api/endpoints`        | —                                               | Live WASAPI endpoints, for the source picker |
-| `GET`    | `/api/applications`     | —                                               | Placeholder: running audio sessions (process loopback capture is not wired yet) |
+| `GET`    | `/api/applications`     | —                                               | Running audio sessions (process id, name, endpoint, mute, volume, `isActive`). One entry per process; the reported endpoint is the session actually playing (active preferred over inactive, render over capture) |
 | `GET`    | `/api/events`           | —                                               | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
 | `POST`   | `/api/inputs`           | `{ name, type, source }`                        | Add an input source (type = `device` or `application`) |
 | `PATCH`  | `/api/inputs/{id}`      | `{ name?, type?, source? }`                     | Update an input; re-creates routes for any groups that use it |
 | `DELETE` | `/api/inputs/{id}`      | —                                               | Remove an input and remove it from all groups |
-| `POST`   | `/api/groups`           | `{ name, color?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Add a group (mix bus) |
-| `PATCH`  | `/api/groups/{id}`      | `{ name?, color?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Partial update of a group |
+| `POST`   | `/api/groups`           | `{ name, color?, cable?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Add a group (mix bus) |
+| `PATCH`  | `/api/groups/{id}`      | `{ name?, color?, cable?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Partial update of a group |
 | `DELETE` | `/api/groups/{id}`      | —                                               | Remove a group |
 | `POST`   | `/api/outputs`          | `{ name }`                                      | Add a render output by endpoint name |
 | `DELETE` | `/api/outputs`          | `{ name }`                                      | Remove an output and disconnect every group from it |
@@ -194,9 +194,13 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 | `POST`   | `/api/presets/save`     | `{ path? }`                                     | Write current live state to a `config/mixers/*.json` preset file; empty `path` uses the configured autosave path |
 
 **State model: inputs → groups → outputs.**
-- An *input* is a source (`device` = WASAPI endpoint, `application` reserved for future process loopback).
-- A *group* is a mix bus: one fader/mute, a color, a list of input IDs, and a list of output names it feeds.
+- An *input* is a source (`device` = WASAPI endpoint, `application` = process ID captured via process loopback).
+- A *group* is a mix bus: one fader/mute, a color, an optional `cable` (a render endpoint used for per-app routing), a list of input IDs, and a list of output names it feeds.
 - An *output* is a render endpoint with a master fader.
+
+The optional `cable` field is the VAC/render endpoint the TUI routes an application to when the user adds an `application` input to the group. The mixer then captures that same-named capture endpoint as a `device` input, which avoids double audio because the application's original output is redirected into the cable.
+
+If a group has no `cable`, adding an `application` input falls back to process loopback capture. That works without a VAC but the application will still play on its original device, causing double audio.
 
 **Optional `knobIndex` field.** Each group may carry an optional `knobIndex: 0..5 | null` in its
 config/state, settable from the GUI ("assign to knob N"). This gives the Loupedeck plugin (or any
@@ -219,15 +223,20 @@ worker threads are plain OS threads with no COM initialization by default.
 
 `scripts/mixer_tui.py` is a curses terminal interface:
 
-- **Groups pane** on the left: one header row per group, color-coded, with its fader, meter, mute
-  indicator and connected outputs. Expand each group to see its inputs.
+- **Virtual Cables pane** on the left: one header row per virtual cable, color-coded, with its fader,
+  meter, mute indicator and connected outputs. Virtual cables are collapsed by default; expand one
+  to see its applications/sources.
 - **Outputs pane** on the right: one row per render output, with a master fader, meter, and the
-  list of groups feeding it.
+  list of virtual cables feeding it.
 - Keyboard controls: `Tab` switches panes, `j`/`k` navigate, `+`/`-`/`v` adjust volume, `m` mutes a
-  group, `i` adds an input to the selected group, `g` adds a group, `o` adds an output, `c`
-  connects/disconnects the selected group to/from the selected output, `r` renames a group,
-  `d` deletes the selected group/input/output, `s` saves the preset, `R` refreshes endpoints.
-- Connects to `/api/events` (SSE) and stays in sync with any other client.
+  virtual cable, `Enter`/`e` expands/collapses a virtual cable's application list, `i` adds a
+  device source to the selected virtual cable, `a` adds a running application to the selected virtual
+  cable, `g` adds a virtual cable, `o` adds an output, `c` connects/disconnects the selected virtual
+  cable to/from the selected output, `r` renames a virtual cable, `d` deletes the selected virtual
+  cable/application/output, `s` saves the preset, `R` refreshes the endpoint and application lists.
+- Runs three threads: the curses render loop, a worker that drains queued PATCH/POST/DELETE
+  calls so slow requests never freeze the UI, and one holding the `/api/events` SSE connection
+  (with reconnect-on-drop) so the view stays in sync with any other client.
 
 Run `start-mixer.bat` to launch `route_cli mixer`, then `mixer-tui.bat` to start the TUI.
 

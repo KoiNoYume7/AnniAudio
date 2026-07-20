@@ -48,6 +48,7 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
         gj["id"] = g.id;
         gj["name"] = g.name;
         gj["color"] = g.color;
+        gj["cable"] = g.cable;
         gj["inputIds"] = g.inputIds;
         gj["outputIds"] = g.outputIds;
         gj["volume"] = g.volume;
@@ -74,6 +75,7 @@ MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g) {
     MixerStripConfig cfg;
     cfg.name = g.name;
     cfg.source = in.source;
+    cfg.sourceType = (in.type == "application") ? StripSourceType::Application : StripSourceType::Device;
     cfg.volume = g.volume;
     cfg.muted = g.muted;
     cfg.knobIndex = g.knobIndex;
@@ -329,6 +331,16 @@ bool AudioMixerMatrix::setGroupColor(GroupId id, const std::string& color)
     return true;
 }
 
+bool AudioMixerMatrix::setGroupCable(GroupId id, const std::string& cable)
+{
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    auto it = m_impl->groups.find(id);
+    if (it == m_impl->groups.end()) return false;
+    it->second.cable = cable;
+    maybeAutosave();
+    return true;
+}
+
 bool AudioMixerMatrix::setGroupVolume(GroupId id, float vol)
 {
     vol = pctToLin(vol);
@@ -516,6 +528,7 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         g.id = kv.first;
         g.name = kv.second.name;
         g.color = kv.second.color;
+        g.cable = kv.second.cable;
         g.inputIds = kv.second.inputIds;
         g.outputIds = kv.second.outputIds;
         g.volume = linToPct(kv.second.volume);
@@ -601,6 +614,13 @@ std::vector<EndpointInfo> AudioMixerMatrix::listEndpoints() const
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     if (!m_impl->ensureEnumerator()) return {};
     return enumEndpoints(m_impl->enumerator.Get());
+}
+
+std::vector<ApplicationInfo> AudioMixerMatrix::listApplications() const
+{
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    if (!m_impl->ensureEnumerator()) return {};
+    return enumAudioSessions(m_impl->enumerator.Get());
 }
 
 bool AudioMixerMatrix::saveSnapshot(const std::string& path, const MixerStateSnapshot& s) const
@@ -756,6 +776,7 @@ bool AudioMixerMatrix::load(const std::string& path)
                 GroupConfig gc;
                 gc.name = g.value("name", std::string{});
                 gc.color = g.value("color", std::string{"#3b82f6"});
+                gc.cable = g.value("cable", std::string{});
                 gc.volume = g.value("volume", 100.0f) / 100.0f;
                 gc.muted = g.value("muted", false);
                 if (g.contains("inputIds")) gc.inputIds = g["inputIds"].get<std::vector<InputId>>();

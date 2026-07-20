@@ -25,9 +25,27 @@ struct EndpointInfo {
     bool        isDefault;   // true if this is the Windows default for its direction
 };
 
+// A running audio application session. Process loopback capture can target
+// the process ID; render/capture sessions for the same process are deduplicated.
+struct ApplicationInfo {
+    uint32_t    processId = 0;
+    std::string name;        // executable name (e.g. "chrome.exe")
+    std::string displayName; // session display name (may be empty)
+    std::string endpoint;    // friendly name of the device the session lives on
+    bool        isInput = false; // true = capture, false = render
+    bool        isActive = false; // true if the reported session is currently playing
+    bool        isMuted = false;
+    float       volume = 1.0f;
+    bool        isSystem = false; // true if process id is 0 (system sounds session)
+};
+
 // Enumerate all active endpoints (render + capture) into EndpointInfo structs.
 // Caller must have called CoInitializeEx on the current thread.
 std::vector<EndpointInfo> enumEndpoints(IMMDeviceEnumerator* enumerator);
+
+// Enumerate active audio sessions across all active endpoints and return one
+// ApplicationInfo per distinct process ID. Caller must have COM initialized.
+std::vector<ApplicationInfo> enumAudioSessions(IMMDeviceEnumerator* enumerator);
 
 // Local definitions for KS audio format subtypes; avoids linking against
 // ksuser/ksguid for the standard KSDATAFORMAT_SUBTYPE_* GUIDs.

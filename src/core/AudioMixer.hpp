@@ -16,9 +16,12 @@ namespace anniaudio::core {
 // removed, unlike a vector index.
 using StripId = uint32_t;
 
+enum class StripSourceType { Device, Application };
+
 struct MixerStripConfig {
     std::string name;      // shown in UI / logs; defaults to `source` if empty
-    std::string source;    // endpoint name hint (render endpoint = loopback capture)
+    std::string source;    // endpoint name hint, or "pid" string for application sources
+    StripSourceType sourceType = StripSourceType::Device;
     float       volume = 1.0f;
     bool        muted  = false;
     // Optional binding to a physical controller's Nth control (e.g. a Loupedeck

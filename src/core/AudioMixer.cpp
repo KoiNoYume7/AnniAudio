@@ -13,6 +13,10 @@
 
 #include <windows.h>
 #include <avrt.h>
+#include <audioclientactivationparams.h>
+#include <objidl.h>
+
+#pragma comment(lib, "mmdevapi.lib")
 
 namespace anniaudio::core {
 
@@ -140,7 +144,10 @@ struct AudioMixer::Impl {
     static DWORD WINAPI threadEntry(LPVOID p) { reinterpret_cast<Impl*>(p)->run(); return 0; }
 
     bool openOutput(const std::string& outputHint);
-    bool openStrip(Strip& s, const std::string& sourceHint);
+    bool openStrip(Strip& s, const MixerStripConfig& cfg);
+    bool openApplicationLoopback(Strip& s, uint32_t pid);
+    bool openEndpointStrip(Strip& s, const std::string& sourceHint);
+    bool finalizeStripBuffers(Strip& s, uint32_t bufFrames);
     void enqueue(Command cmd);
 
     void run();
@@ -248,7 +255,26 @@ bool AudioMixer::Impl::openOutput(const std::string& outputHint)
     return true;
 }
 
-bool AudioMixer::Impl::openStrip(Strip& s, const std::string& sourceHint)
+bool AudioMixer::Impl::openStrip(Strip& s, const MixerStripConfig& cfg)
+{
+    if (cfg.sourceType == StripSourceType::Application) {
+        try {
+            size_t pos = 0;
+            uint32_t pid = static_cast<uint32_t>(std::stoull(cfg.source, &pos));
+            if (pos == 0 || pos != cfg.source.size() || pid == 0) {
+                std::fprintf(stderr, "[mixer] Invalid application process id '%s'\n", cfg.source.c_str());
+                return false;
+            }
+            return openApplicationLoopback(s, pid);
+        } catch (const std::exception&) {
+            std::fprintf(stderr, "[mixer] Invalid application process id '%s'\n", cfg.source.c_str());
+            return false;
+        }
+    }
+    return openEndpointStrip(s, cfg.source);
+}
+
+bool AudioMixer::Impl::openEndpointStrip(Strip& s, const std::string& sourceHint)
 {
     EDataFlow foundFlow = eAll;
     ComPtr<IMMDevice> dev = findAnyDevice(enumerator.Get(), sourceHint, &foundFlow);
@@ -296,6 +322,11 @@ bool AudioMixer::Impl::openStrip(Strip& s, const std::string& sourceHint)
     s.captureAC->GetBufferSize(&bufFrames);
     if (bufFrames == 0) bufFrames = s.captureRate / 100;
 
+    return finalizeStripBuffers(s, bufFrames);
+}
+
+bool AudioMixer::Impl::finalizeStripBuffers(Strip& s, uint32_t bufFrames)
+{
     s.needsConvert = (s.captureCh != renderCh) || (s.captureRate != renderRate);
     s.ratio        = (double)renderRate / (double)s.captureRate;
     s.srcPhase     = 0.0;
@@ -317,6 +348,157 @@ bool AudioMixer::Impl::openStrip(Strip& s, const std::string& sourceHint)
                      (double)s.captureRate, (double)renderRate, s.captureCh, renderCh);
     }
     return true;
+}
+
+class ProcessLoopbackActivationHandler :
+    public IActivateAudioInterfaceCompletionHandler,
+    public IAgileObject {
+public:
+    ProcessLoopbackActivationHandler() : m_ref(1), m_event(CreateEvent(nullptr, FALSE, FALSE, nullptr)) {}
+    ~ProcessLoopbackActivationHandler() { if (m_event) CloseHandle(m_event); }
+
+    HANDLE eventHandle() const { return m_event; }
+    HRESULT result() const { return m_result; }
+    IAudioClient* client() const { return m_client.Get(); }
+
+    STDMETHOD(QueryInterface)(REFIID riid, void** ppv) override {
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, __uuidof(IActivateAudioInterfaceCompletionHandler))) {
+            *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+        } else if (IsEqualIID(riid, IID_IAgileObject)) {
+            *ppv = static_cast<IAgileObject*>(this);
+        } else {
+            *ppv = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+
+    STDMETHOD_(ULONG, AddRef)() override { return InterlockedIncrement(&m_ref); }
+    STDMETHOD_(ULONG, Release)() override {
+        ULONG c = InterlockedDecrement(&m_ref);
+        if (c == 0) delete this;
+        return c;
+    }
+
+    STDMETHOD(ActivateCompleted)(IActivateAudioInterfaceAsyncOperation* operation) override {
+        m_result = E_FAIL;
+        if (!operation) {
+            SetEvent(m_event);
+            return S_OK;
+        }
+        HRESULT hrActivate = E_UNEXPECTED;
+        ComPtr<IUnknown> punk;
+        HRESULT hr = operation->GetActivateResult(&hrActivate, &punk);
+        if (SUCCEEDED(hr) && SUCCEEDED(hrActivate) && punk) {
+            punk.As(&m_client);
+            m_result = m_client ? S_OK : E_NOINTERFACE;
+        } else {
+            m_result = FAILED(hrActivate) ? hrActivate : hr;
+        }
+        SetEvent(m_event);
+        return S_OK;
+    }
+
+private:
+    volatile LONG m_ref;
+    HANDLE m_event;
+    HRESULT m_result = E_FAIL;
+    ComPtr<IAudioClient> m_client;
+};
+
+static bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex)
+{
+    wfex.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+    wfex.Format.nChannels       = 2;
+    wfex.Format.nSamplesPerSec  = 48000;
+    wfex.Format.wBitsPerSample  = 32;
+    wfex.Format.nBlockAlign     = wfex.Format.nChannels * sizeof(float);
+    wfex.Format.nAvgBytesPerSec = wfex.Format.nSamplesPerSec * wfex.Format.nBlockAlign;
+    wfex.Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    wfex.Samples.wValidBitsPerSample = 32;
+    wfex.dwChannelMask          = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    wfex.SubFormat              = KSCONST_SUBTYPE_IEEE_FLOAT;
+    return true;
+}
+
+bool AudioMixer::Impl::openApplicationLoopback(Strip& s, uint32_t pid)
+{
+    AUDIOCLIENT_ACTIVATION_PARAMS params = {};
+    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+    params.ProcessLoopbackParams.TargetProcessId = pid;
+
+    PROPVARIANT activateParams = {};
+    activateParams.vt = VT_BLOB;
+    activateParams.blob.cbSize = sizeof(params);
+    activateParams.blob.pBlobData = reinterpret_cast<BYTE*>(&params);
+
+    // The handler starts with a refcount of 1, so Attach (rather than the
+    // AddRef'ing constructor) keeps the count balanced and lets ComPtr delete
+    // it once the async operation has released its own reference.
+    ComPtr<ProcessLoopbackActivationHandler> handler;
+    handler.Attach(new ProcessLoopbackActivationHandler());
+
+    ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+    HRESULT hr = ActivateAudioInterfaceAsync(
+        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        __uuidof(IAudioClient),
+        &activateParams,
+        handler.Get(),
+        &asyncOp);
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "[mixer] ActivateAudioInterfaceAsync failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        return false;
+    }
+
+    DWORD wait = WaitForSingleObject(handler->eventHandle(), 10000);
+    if (wait != WAIT_OBJECT_0) {
+        std::fprintf(stderr, "[mixer] Timeout waiting for process loopback activation (pid %u)\n", pid);
+        return false;
+    }
+    hr = handler->result();
+    if (FAILED(hr) || !handler->client()) {
+        std::fprintf(stderr, "[mixer] Process loopback activation failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        return false;
+    }
+    s.captureAC = handler->client();
+
+    WAVEFORMATEXTENSIBLE wfex;
+    initProcessLoopbackFormat(wfex);
+
+    DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
+    hr = s.captureAC->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0,
+                                 reinterpret_cast<const WAVEFORMATEX*>(&wfex), nullptr);
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "[mixer] Process loopback IAudioClient::Initialize failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        s.captureAC.Reset();
+        return false;
+    }
+
+    hr = s.captureAC->SetEventHandle(s.captureEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr));
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "[mixer] SetEventHandle failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        return false;
+    }
+
+    hr = s.captureAC->GetService(IID_PPV_ARGS(&s.captureSvc));
+    if (FAILED(hr) || !s.captureSvc) {
+        std::fprintf(stderr, "[mixer] GetService(IAudioCaptureClient) failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        return false;
+    }
+
+    UINT32 bufFrames = 0;
+    s.captureAC->GetBufferSize(&bufFrames);
+    if (bufFrames == 0) bufFrames = wfex.Format.nSamplesPerSec / 100;
+
+    s.captureCh      = wfex.Format.nChannels;
+    s.captureRate    = wfex.Format.nSamplesPerSec;
+    s.captureIsFloat = true;
+    s.captureIsLoopback = true;
+
+    return finalizeStripBuffers(s, bufFrames);
 }
 
 void AudioMixer::Impl::teardownStrip(Strip& s)
@@ -588,7 +770,11 @@ std::optional<StripId> AudioMixer::addStrip(const MixerStripConfig& cfg)
     strip->volume.store(std::clamp(cfg.volume, 0.0f, 2.0f));
     strip->muted.store(cfg.muted);
 
-    if (!m_impl->openStrip(*strip, cfg.source)) return std::nullopt;
+    if (!m_impl->openStrip(*strip, cfg)) {
+        // A partially opened strip may already own a capture event handle.
+        m_impl->teardownStrip(*strip);
+        return std::nullopt;
+    }
 
     if (m_impl->running.load()) {
         m_impl->enqueue(Impl::Command{ Impl::Command::Kind::Add, strip, 0, {}, {} });

@@ -72,3 +72,6 @@ node_modules/
 dist/
 .electron-builder/
 driver/AnniAudioCable.inf
+
+# TUI runtime sidecar (per-app route tracking)
+scripts/.routed_apps_*.json

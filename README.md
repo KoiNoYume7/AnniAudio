@@ -180,7 +180,43 @@ The `mixer` command mixes any number of WASAPI sources into one output with per-
 
 Mixer config files live in `config/mixers/` and act as presets: `output`, `master` volume, and a `strips` array of `{ name, source, volume, muted }`.
 
-A local control API and a dedicated mixer GUI, plus a proper Loupedeck Live plugin (via the Logi Actions C# SDK) to drive it from the device's 6 knobs, are in progress — see `docs/MIXER-CONTROL-API.md` for the design.
+The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default port `8850`) that any client can drive — see `docs/MIXER-CONTROL-API.md` for the full design. A dedicated mixer GUI and a Loupedeck Live plugin (via the Logi Actions C# SDK) to drive it from the device's 6 knobs are in progress.
+
+#### Mixer TUI
+
+`scripts/mixer_tui.py` is a curses terminal UI for the mixer control API: a live, color-coded view of every virtual cable and output with volume, mute, and routing, all driven from the keyboard while the mixer keeps running in the background. It's a thin REST/SSE client — it never touches audio directly, so it can be closed and reopened at any time without affecting playback, and it stays in sync with any other connected client (GUI, a future Loupedeck plugin, etc.) over the same API.
+
+```powershell
+# 1. Start the mixer (opens its control API on port 8850 by default)
+.\start-mixer.bat
+
+# 2. In another terminal, start the TUI
+.\mixer-tui.bat
+```
+
+| Key | Action |
+|---|---|
+| `Tab` | Switch between the Virtual Cables and Outputs panes |
+| `j`/`k`, arrows | Move the selection |
+| `+`/`-` | Nudge volume by 5% |
+| `v` | Type an exact volume (0-200%) |
+| `m` | Toggle mute on the selected virtual cable |
+| `Enter`/`e` | Expand/collapse a virtual cable's application list |
+| `i` | Add a device source to the selected virtual cable |
+| `a` | Add a running application to the selected virtual cable (uses loopback capture, or per-app routing to the group cable if one is set) |
+| `g` | Add a virtual cable |
+| `C` | Set the selected virtual cable's group cable (render VAC) for per-app application routing |
+| `o` | Add an output |
+| `c` | Connect/disconnect the selected virtual cable and output |
+| `r` | Rename the selected virtual cable |
+| `d` | Delete the selected virtual cable/application/output |
+| `s` | Save the current state as a preset (empty path = autosave) |
+| `R` | Refresh the endpoint and application lists |
+| `q`/`Esc` | Quit |
+
+When a group has a `cable` set, adding an application with `a` routes that application's Windows output to the cable (via `AudioPolicyConfig` / `winappaudiorouter`) and the mixer captures the cable. This avoids double audio. Without a cable, the application is captured via process loopback and will still be heard on its original device.
+
+Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing; otherwise `python -m pip install windows-curses`). Run it directly with `python scripts/mixer_tui.py [--port 8850]` if you'd rather skip the batch wrapper.
 
 `route_cli midi list` / `route_cli midi <device-hint>` remain available as a standalone diagnostic to inspect raw MIDI messages from any connected controller; it is not used to control the mixer.
 

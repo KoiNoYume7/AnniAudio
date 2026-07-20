@@ -46,6 +46,7 @@ nlohmann::json toJson(const GroupSnapshot& g)
     j["id"]        = g.id;
     j["name"]      = g.name;
     j["color"]     = g.color;
+    j["cable"]     = g.cable;
     j["inputIds"]  = g.inputIds;
     j["outputIds"] = g.outputIds;
     j["volume"]    = g.volume;
@@ -75,6 +76,21 @@ nlohmann::json toJson(const EndpointInfo& e)
     j["isRender"]    = e.isRender;
     j["isDefault"]   = e.isDefault;
     j["isAnniAudio"] = e.isAnniAudio;
+    return j;
+}
+
+nlohmann::json toJson(const ApplicationInfo& a)
+{
+    nlohmann::json j;
+    j["processId"]   = a.processId;
+    j["name"]        = a.name;
+    j["displayName"] = a.displayName;
+    j["endpoint"]    = a.endpoint;
+    j["isInput"]     = a.isInput;
+    j["isActive"]    = a.isActive;
+    j["isMuted"]     = a.isMuted;
+    j["volume"]      = a.volume;
+    j["isSystem"]    = a.isSystem;
     return j;
 }
 
@@ -170,18 +186,29 @@ struct MixerControlServer::Impl {
 
     void broadcastLoop()
     {
+        // Wait for the listen thread to actually start, otherwise we can exit
+        // immediately because svr.is_running() is not yet true.
+        for (int i = 0; i < 500 && !svr.is_running(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
         while (svr.is_running()) {
+            // Wait for an explicit dirty notification or the periodic 200 ms
+            // audio-level refresh window. Checking dirty *before* computing
+            // state prevents a markDirty() that fires while we are broadcasting
+            // from being lost.
+            {
+                std::unique_lock<std::mutex> lk(dirtyMutex);
+                dirtyCv.wait_for(lk, std::chrono::milliseconds(200),
+                                  [this] { return dirty || !svr.is_running(); });
+                dirty = false;
+            }
+
             std::string current = stateJson(matrix).dump();
-            bool changed = current != lastBroadcastState;
-            if (changed) {
+            if (current != lastBroadcastState) {
                 lastBroadcastState = current;
                 pushToAllClients("data: " + current + "\n\n");
             }
-
-            std::unique_lock<std::mutex> lk(dirtyMutex);
-            dirty = false;
-            dirtyCv.wait_for(lk, std::chrono::milliseconds(200),
-                              [this] { return dirty || !svr.is_running(); });
         }
     }
 
@@ -250,9 +277,10 @@ void MixerControlServer::Impl::registerRoutes()
 
     svr.Get("/api/applications", [this](const httplib::Request&, httplib::Response& res) {
         EnsureComInitializedOnThisThread();
-        // Placeholder: per-process audio session enumeration will come when
-        // process loopback capture is wired in.
-        sendJson(res, nlohmann::json{ { "applications", nlohmann::json::array() } });
+        auto apps = matrix.listApplications();
+        auto arr = nlohmann::json::array();
+        for (const auto& a : apps) arr.push_back(toJson(a));
+        sendJson(res, nlohmann::json{ { "applications", arr } });
     });
 
     svr.Get("/api/events", [this](const httplib::Request& req, httplib::Response& res) {
@@ -367,6 +395,7 @@ void MixerControlServer::Impl::registerRoutes()
         GroupConfig cfg;
         cfg.name   = body.value("name", std::string{});
         cfg.color  = body.value("color", std::string{"#3b82f6"});
+        cfg.cable  = body.value("cable", std::string{});
         cfg.volume = body.value("volume", 100.0f) / 100.0f;
         cfg.muted  = body.value("muted", false);
         if (body.contains("inputIds")) cfg.inputIds = body["inputIds"].get<std::vector<InputId>>();
@@ -405,6 +434,9 @@ void MixerControlServer::Impl::registerRoutes()
         }
         if (body.contains("color") && body["color"].is_string()) {
             if (matrix.setGroupColor(id, body["color"].get<std::string>())) changed = true;
+        }
+        if (body.contains("cable") && body["cable"].is_string()) {
+            if (matrix.setGroupCable(id, body["cable"].get<std::string>())) changed = true;
         }
         if (body.contains("volume")) {
             if (matrix.setGroupVolume(id, body["volume"].get<float>())) changed = true;

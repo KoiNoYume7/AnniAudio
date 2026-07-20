@@ -39,4 +39,16 @@ if errorlevel 1 (
     )
 )
 
+python -c "import winappaudiorouter" 2>nul
+if errorlevel 1 (
+    echo Installing winappaudiorouter for per-app VAC routing...
+    python -m pip install winappaudiorouter
+    if errorlevel 1 (
+        echo Failed to install winappaudiorouter. Please run:
+        echo   python -m pip install winappaudiorouter
+        pause
+        exit /b 1
+    )
+)
+
 python scripts\mixer_tui.py --port %PORT%

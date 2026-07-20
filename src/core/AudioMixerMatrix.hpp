@@ -17,9 +17,8 @@ using GroupId = uint32_t;
 
 // An audio source that feeds into one or more groups.
 // type = "device" uses a WASAPI endpoint name as source (render loopback or capture).
-// type = "application" reserves a process identifier; process-specific loopback
-// capture is not yet implemented, so these inputs only produce audio if their
-// source also matches a valid endpoint name.
+// type = "application" uses the source as a decimal process ID and captures that
+// process's audio via Windows process loopback capture.
 struct InputConfig {
     std::string name;
     std::string type = "device";
@@ -29,9 +28,16 @@ struct InputConfig {
 // A mix bus (route / group). It has one fader/mute, one colour, a list of
 // inputs, and a list of output names it is connected to. All inputs in the
 // group are summed and controlled by the group fader.
+//
+// `cable` is an optional render endpoint name (e.g. "Music (Virtual Audio Cable)").
+// When an application input is added to a group that has a cable, the mixer
+// routes that application's per-app default output to the cable. The mixer then
+// captures the cable as a device input, avoiding double audio. If cable is
+// empty, application inputs fall back to process loopback capture.
 struct GroupConfig {
     std::string name;
     std::string color = "#3b82f6";
+    std::string cable; // optional VAC / render endpoint for app routing
     std::vector<InputId> inputIds;
     std::vector<std::string> outputIds;
     float volume = 1.0f;
@@ -52,6 +58,7 @@ struct GroupSnapshot {
     GroupId id = 0;
     std::string name;
     std::string color;
+    std::string cable;
     std::vector<InputId> inputIds;
     std::vector<std::string> outputIds;
     float volume = 100.0f;
@@ -121,6 +128,7 @@ public:
 
     bool setGroupName(GroupId id, const std::string& name);
     bool setGroupColor(GroupId id, const std::string& color);
+    bool setGroupCable(GroupId id, const std::string& cable);
     bool setGroupVolume(GroupId id, float vol);
     bool setGroupMuted(GroupId id, bool muted);
     bool setGroupKnobIndex(GroupId id, std::optional<int> knobIndex);
@@ -141,6 +149,7 @@ public:
 
     MixerStateSnapshot snapshot() const;
     std::vector<EndpointInfo> listEndpoints() const;
+    std::vector<ApplicationInfo> listApplications() const;
 
     // -----------------------------------------------------------------------
     // Preset persistence & autosave

@@ -1,7 +1,11 @@
 #include "audio_utils.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
+
+#include <audiopolicy.h>
 
 namespace anniaudio::core {
 
@@ -247,6 +251,138 @@ void floatToPcm16(const float* src, size_t sampleCount, BYTE* dst)
         else if (s < -1.0f) s = -1.0f;
         p[i] = static_cast<int16_t>(s * 32767.0f);
     }
+}
+
+static std::string processNameFromId(DWORD pid)
+{
+    if (pid == 0) return "System Sounds";
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!h) return {};
+    char path[MAX_PATH] = {};
+    DWORD size = MAX_PATH;
+    BOOL ok = QueryFullProcessImageNameA(h, 0, path, &size);
+    CloseHandle(h);
+    if (!ok) return {};
+    if (const char* base = strrchr(path, '\\')) return std::string(base + 1);
+    if (const char* base = strrchr(path, '/')) return std::string(base + 1);
+    return std::string(path);
+}
+
+static std::string exeNameFromSessionIdentifier(IAudioSessionControl2* ctrl2)
+{
+    // Fallback for processes OpenProcess cannot touch (elevated apps, games
+    // with anticheat): the session identifier embeds the executable path, e.g.
+    // "{guid}|\Device\HarddiskVolume3\...\Spotify.exe%b{guid}".
+    wchar_t* sid = nullptr;
+    if (FAILED(ctrl2->GetSessionIdentifier(&sid)) || !sid) return {};
+    std::string s = wideToUtf8(sid);
+    CoTaskMemFree(sid);
+    size_t exe = s.find(".exe");
+    if (exe == std::string::npos) return {};
+    size_t start = s.find_last_of("\\/", exe);
+    if (start == std::string::npos) return {};
+    return s.substr(start + 1, exe + 4 - (start + 1));
+}
+
+std::vector<ApplicationInfo> enumAudioSessions(IMMDeviceEnumerator* enumerator)
+{
+    std::vector<ApplicationInfo> out;
+    if (!enumerator) return out;
+
+    std::unordered_map<DWORD, ApplicationInfo> best;
+    std::unordered_map<DWORD, int> bestScore;
+
+    EDataFlow flows[2] = { eRender, eCapture };
+    for (EDataFlow flow : flows) {
+        ComPtr<IMMDeviceCollection> col;
+        if (FAILED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &col))) continue;
+        UINT devCount = 0; col->GetCount(&devCount);
+        for (UINT d = 0; d < devCount; ++d) {
+            ComPtr<IMMDevice> dev;
+            if (FAILED(col->Item(d, &dev))) continue;
+            std::string endpointName = friendlyName(dev.Get());
+
+            ComPtr<IAudioSessionManager2> mgr;
+            if (FAILED(dev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr,
+                                     reinterpret_cast<void**>(mgr.GetAddressOf()))))
+                continue;
+
+            ComPtr<IAudioSessionEnumerator> sessions;
+            if (FAILED(mgr->GetSessionEnumerator(&sessions))) continue;
+
+            int sessionCount = 0;
+            sessions->GetCount(&sessionCount);
+            for (int s = 0; s < sessionCount; ++s) {
+                ComPtr<IAudioSessionControl> ctrl;
+                if (FAILED(sessions->GetSession(s, &ctrl))) continue;
+
+                ComPtr<IAudioSessionControl2> ctrl2;
+                if (FAILED(ctrl.As(&ctrl2))) continue;
+
+                DWORD pid = 0;
+                if (FAILED(ctrl2->GetProcessId(&pid))) continue;
+
+                // Skip sessions whose process has already exited; they linger
+                // in the enumerator until the session manager expires them.
+                AudioSessionState sessionState = AudioSessionStateInactive;
+                if (SUCCEEDED(ctrl->GetState(&sessionState)) && sessionState == AudioSessionStateExpired)
+                    continue;
+
+                // One entry per process id. Apps can hold sessions on several
+                // endpoints at once (e.g. before and after being re-routed);
+                // report the endpoint of the session that is actually playing,
+                // preferring active over inactive, then render over capture.
+                bool active = (sessionState == AudioSessionStateActive);
+                int score = (active ? 2 : 0) + (flow == eRender ? 1 : 0);
+                auto existing = best.find(pid);
+                if (existing != best.end() && bestScore[pid] >= score) continue;
+
+                ComPtr<ISimpleAudioVolume> vol;
+                BOOL muted = FALSE;
+                float volume = 1.0f;
+                if (SUCCEEDED(ctrl.As(&vol))) {
+                    vol->GetMute(&muted);
+                    vol->GetMasterVolume(&volume);
+                }
+
+                wchar_t* disp = nullptr;
+                std::string displayName;
+                if (SUCCEEDED(ctrl->GetDisplayName(&disp)) && disp) {
+                    displayName = wideToUtf8(disp);
+                    CoTaskMemFree(disp);
+                }
+
+                std::string name = processNameFromId(pid);
+                if (name.empty()) name = exeNameFromSessionIdentifier(ctrl2.Get());
+                if (name.empty()) {
+                    name = displayName.empty() ? (flow == eRender ? "Unknown app" : "Unknown capture")
+                                               : displayName;
+                }
+
+                ApplicationInfo info;
+                info.processId = pid;
+                info.name = name;
+                info.displayName = displayName;
+                info.endpoint = endpointName;
+                info.isInput = (flow == eCapture);
+                info.isActive = active;
+                info.isMuted = (muted != FALSE);
+                info.volume = volume;
+                info.isSystem = (pid == 0);
+
+                best[pid] = std::move(info);
+                bestScore[pid] = score;
+            }
+        }
+    }
+
+    out.reserve(best.size());
+    for (auto& kv : best) out.push_back(std::move(kv.second));
+    std::sort(out.begin(), out.end(), [](const ApplicationInfo& a, const ApplicationInfo& b) {
+        if (a.isSystem != b.isSystem) return a.isSystem < b.isSystem;
+        return a.name < b.name;
+    });
+    return out;
 }
 
 } // namespace anniaudio::core
