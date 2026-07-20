@@ -191,6 +191,9 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 | `POST`   | `/api/outputs`          | `{ name }`                                      | Add a render output by endpoint name |
 | `DELETE` | `/api/outputs`          | `{ name }`                                      | Remove an output and disconnect every group from it |
 | `POST`   | `/api/outputs/master`   | `{ name, volume?, muted? }`                     | Set an output's master volume and/or mute (at least one of `volume`/`muted` required) |
+| `GET`    | `/api/scenes`           | —                                               | List saved scenes (`config/scenes/*.json`) |
+| `POST`   | `/api/scenes/save`      | `{ name }`                                      | Snapshot current levels (group volumes/mutes/send gains, output masters/mutes) as a named scene |
+| `POST`   | `/api/scenes/apply`     | `{ name }`                                      | Apply a scene by matching group/output NAMES; instant level overlay, never a topology change. Returns `{ applied, missing }` |
 | `POST`   | `/api/presets/save`     | `{ path? }`                                     | Write current live state to a `config/mixers/*.json` preset file; empty `path` uses the configured autosave path |
 
 **State model: inputs → groups → outputs.**

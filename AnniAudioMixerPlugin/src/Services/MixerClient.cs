@@ -44,6 +44,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
         private readonly Object _lock = new Object();
         private List<MixerGroup> _groups = new List<MixerGroup>();
         private List<MixerOutput> _outputs = new List<MixerOutput>();
+        private List<String> _scenes = new List<String>();
         private readonly Dictionary<String, Func<HttpRequestMessage>> _pendingSends = new Dictionary<String, Func<HttpRequestMessage>>();
         private readonly Dictionary<String, DateTime> _holdUntil = new Dictionary<String, DateTime>();
 
@@ -81,6 +82,20 @@ namespace Loupedeck.AnniAudioMixerPlugin
         public MixerOutput[] Outputs
         {
             get { lock (this._lock) { return this._outputs.ToArray(); } }
+        }
+
+        public String[] Scenes
+        {
+            get { lock (this._lock) { return this._scenes.ToArray(); } }
+        }
+
+        public void ApplyScene(String name)
+        {
+            lock (this._lock)
+            {
+                this.QueueSendLocked($"scene{name}", "POST", "/api/scenes/apply",
+                    JsonSerializer.Serialize(new { name }));
+            }
         }
 
         public MixerGroup FindGroup(String idStr)
@@ -202,6 +217,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
         private void PollLoop()
         {
             var lastSignature = "";
+            var pollCount = 0;
             while (this._running)
             {
                 var ok = false;
@@ -211,6 +227,11 @@ namespace Loupedeck.AnniAudioMixerPlugin
                     var json = this._http.GetStringAsync(this._baseUrl + "/api/state").GetAwaiter().GetResult();
                     changed = this.ApplyState(json, ref lastSignature);
                     ok = true;
+                    // Scenes change rarely (file adds/removes); refresh every ~10s.
+                    if (pollCount++ % 10 == 0)
+                    {
+                        changed |= this.RefreshScenes();
+                    }
                 }
                 catch
                 {
@@ -228,6 +249,31 @@ namespace Loupedeck.AnniAudioMixerPlugin
                 }
                 Thread.Sleep(PollIntervalMs);
             }
+        }
+
+        private Boolean RefreshScenes()
+        {
+            var json = this._http.GetStringAsync(this._baseUrl + "/api/scenes").GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(json);
+            var scenes = new List<String>();
+            foreach (var s in doc.RootElement.GetProperty("scenes").EnumerateArray())
+            {
+                var name = s.GetProperty("name").GetString();
+                if (!String.IsNullOrEmpty(name))
+                {
+                    scenes.Add(name);
+                }
+            }
+            scenes.Sort(StringComparer.OrdinalIgnoreCase);
+            lock (this._lock)
+            {
+                if (scenes.SequenceEqual(this._scenes))
+                {
+                    return false;
+                }
+                this._scenes = scenes;
+            }
+            return true;
         }
 
         private Boolean ApplyState(String json, ref String lastSignature)

@@ -78,3 +78,4 @@ scripts/.routed_apps_*.json
 
 # Personal live mixer config (autosaved at runtime); base templates live elsewhere
 config/mixers/
+config/scenes/

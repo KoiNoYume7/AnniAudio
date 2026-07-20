@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -131,6 +132,18 @@ bool isSafePresetPath(const std::string& path)
     return true;
 }
 
+// Scene names become file names; keep them to a boring safe alphabet.
+bool isSafeSceneName(const std::string& name)
+{
+    if (name.empty() || name.size() > 64) return false;
+    for (char c : name) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
 std::optional<int> parseOptionalInt(const nlohmann::json& j, const std::string& key)
 {
     if (!j.contains(key)) return std::nullopt;
@@ -168,6 +181,24 @@ struct MixerControlServer::Impl {
     void setAutosavePath(const std::string& path) {
         autosavePath = path;
         matrix.setAutosavePath(path);
+    }
+
+    // Scenes live in config/scenes/ next to config/mixers/<autosave>.json.
+    // A scene is a lightweight level overlay (volumes, mutes, send gains,
+    // output masters) applied by NAME, never a topology change, so applying
+    // one is instant and glitch-free.
+    std::string sceneDir() const
+    {
+        namespace fs = std::filesystem;
+        if (autosavePath.empty()) return "config/scenes";
+        fs::path parent = fs::path(autosavePath).parent_path().parent_path();
+        if (parent.empty()) return "scenes";
+        return (parent / "scenes").string();
+    }
+
+    std::string scenePath(const std::string& name) const
+    {
+        return (std::filesystem::path(this->sceneDir()) / (name + ".json")).string();
     }
 
     void markDirty()
@@ -551,6 +582,103 @@ void MixerControlServer::Impl::registerRoutes()
     // -----------------------------------------------------------------------
     // Presets
     // -----------------------------------------------------------------------
+    svr.Get("/api/scenes", [this](const httplib::Request&, httplib::Response& res) {
+        namespace fs = std::filesystem;
+        auto arr = nlohmann::json::array();
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(this->sceneDir(), ec)) {
+            if (e.path().extension() == ".json") {
+                arr.push_back(nlohmann::json{ { "name", e.path().stem().string() } });
+            }
+        }
+        sendJson(res, nlohmann::json{ { "scenes", arr } });
+    });
+
+    svr.Post("/api/scenes/save", [this](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+        std::string name = body.value("name", std::string{});
+        if (!isSafeSceneName(name)) {
+            sendError(res, 400, "scene name must be 1-64 chars of letters, digits, space, - or _"); return;
+        }
+
+        auto snap = matrix.snapshot();
+        nlohmann::json scene;
+        scene["name"] = name;
+        scene["groups"] = nlohmann::json::array();
+        for (const auto& g : snap.groups) {
+            scene["groups"].push_back(nlohmann::json{
+                { "name", g.name }, { "volume", g.volume }, { "muted", g.muted },
+                { "outputGains", g.outputGains } });
+        }
+        scene["outputs"] = nlohmann::json::array();
+        for (const auto& o : snap.outputs) {
+            scene["outputs"].push_back(nlohmann::json{
+                { "name", o.name }, { "master", o.master }, { "muted", o.muted } });
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(this->sceneDir(), ec);
+        std::ofstream f(this->scenePath(name));
+        if (!f) { sendError(res, 500, "could not write scene file"); return; }
+        f << scene.dump(2);
+        sendJson(res, nlohmann::json{ { "name", name } }, 201);
+    });
+
+    svr.Post("/api/scenes/apply", [this](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+        std::string name = body.value("name", std::string{});
+        if (!isSafeSceneName(name)) { sendError(res, 400, "invalid scene name"); return; }
+
+        std::ifstream f(this->scenePath(name));
+        if (!f) { sendError(res, 404, "scene not found"); return; }
+        nlohmann::json scene;
+        try { f >> scene; }
+        catch (const std::exception&) { sendError(res, 500, "scene file is not valid JSON"); return; }
+
+        // Apply by name so scenes survive group ids changing between sessions.
+        auto snap = matrix.snapshot();
+        std::unordered_map<std::string, GroupId> groupIds;
+        for (const auto& g : snap.groups) groupIds[g.name] = g.id;
+
+        int applied = 0;
+        auto missing = nlohmann::json::array();
+        if (scene.contains("groups") && scene["groups"].is_array()) {
+            for (const auto& g : scene["groups"]) {
+                std::string gname = g.value("name", std::string{});
+                auto it = groupIds.find(gname);
+                if (it == groupIds.end()) { missing.push_back(gname); continue; }
+                if (g.contains("volume")) matrix.setGroupVolume(it->second, g["volume"].get<float>());
+                if (g.contains("muted"))  matrix.setGroupMuted(it->second, g["muted"].get<bool>());
+                if (g.contains("outputGains") && g["outputGains"].is_object()) {
+                    for (const auto& kv : g["outputGains"].items()) {
+                        matrix.setGroupOutputGain(it->second, kv.key(), kv.value().get<float>());
+                    }
+                }
+                ++applied;
+            }
+        }
+        if (scene.contains("outputs") && scene["outputs"].is_array()) {
+            for (const auto& o : scene["outputs"]) {
+                std::string oname = o.value("name", std::string{});
+                if (oname.empty()) continue;
+                const auto names = matrix.outputNames();
+                if (std::find(names.begin(), names.end(), oname) == names.end()) {
+                    missing.push_back(oname); continue;
+                }
+                if (o.contains("master")) matrix.setOutputMasterVolume(oname, o["master"].get<float>());
+                if (o.contains("muted"))  matrix.setOutputMuted(oname, o["muted"].get<bool>());
+                ++applied;
+            }
+        }
+
+        markDirty();
+        sendJson(res, nlohmann::json{ { "name", name }, { "applied", applied }, { "missing", missing } });
+    });
+
     svr.Post("/api/presets/save", [this](const httplib::Request& req, httplib::Response& res) {
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }

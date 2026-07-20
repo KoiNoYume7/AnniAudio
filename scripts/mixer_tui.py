@@ -39,6 +39,8 @@ Keybindings:
     r            rename the selected virtual cable
     d            delete the selected virtual cable/application/output
     n            assign newly detected apps (auto-routing rules in config/app-rules.json)
+    S            scenes: apply a saved level overlay (volumes/mutes/sends) or
+                 save the current levels as a new scene (config/scenes/)
     s            save the current state as a preset (empty path = autosave)
     R            refresh the endpoint and application lists from the mixer
     q            quit (Esc only cancels dialogs)
@@ -1386,7 +1388,7 @@ def main(stdscr, port):
         # Footer
         footer = (
             "Tab:panes  j/k:nav  +/-|v:vol  m:mute  x:send lvl  Enter/e:expand  i:add src  a:add app  "
-            "g:add cable  C:set cable  o:add output  c:connect  n:new apps  r:rename  d:delete  s:save  q:quit"
+            "g:add cable  C:set cable  o:add output  c:connect  n:new apps  S:scenes  r:rename  d:delete  s:save  q:quit"
         )
         try:
             stdscr.addstr(h - 1, 0, footer[:w - 1], curses.A_DIM)
@@ -1680,6 +1682,25 @@ def main(stdscr, port):
                 out = outputs[sel_output_idx]
                 if confirm_dialog(stdscr, f"Delete output '{out.get('name')}'?"):
                     api_call("DELETE", "/api/outputs", {"name": out["name"]})
+        elif ch == ord('S'):
+            # Scenes: named level overlays (volumes, mutes, sends, masters)
+            # applied instantly by name - e.g. "Night", "Streaming".
+            try:
+                r = requests.get(BASE.format(port=port) + "/api/scenes", timeout=5)
+                scenes = [s.get("name", "?") for s in r.json().get("scenes", [])] if r.ok else []
+            except Exception:
+                scenes = []
+            labels = [f"Apply: {s}" for s in scenes]
+            labels.append("<save current levels as new scene>")
+            idx = list_dialog(stdscr, "Scenes", labels)
+            if idx is None:
+                continue
+            if idx == len(scenes):
+                val = input_dialog(stdscr, "New scene name")
+                if val:
+                    api_call("POST", "/api/scenes/save", {"name": val})
+            else:
+                api_call("POST", "/api/scenes/apply", {"name": scenes[idx]})
         elif ch == ord('s'):
             val = input_dialog(stdscr, "Save path (empty = autosave)", "")
             if val is not None:
