@@ -75,3 +75,6 @@ driver/AnniAudioCable.inf
 
 # TUI runtime sidecar (per-app route tracking)
 scripts/.routed_apps_*.json
+
+# Personal live mixer config (autosaved at runtime); base templates live elsewhere
+config/mixers/
