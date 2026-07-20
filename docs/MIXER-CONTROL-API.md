@@ -180,7 +180,7 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 |----------|-------------------------|-------------------------------------------------|-------------|
 | `GET`    | `/api/state`            | —                                               | Full snapshot: `{ running, controlPort, inputs, groups, outputs }` |
 | `GET`    | `/api/endpoints`        | —                                               | Live WASAPI endpoints, for the source picker |
-| `GET`    | `/api/applications`     | —                                               | Running audio sessions (process id, name, endpoint, mute, volume, `isActive`). One entry per process; the reported endpoint is the session actually playing (active preferred over inactive, render over capture) |
+| `GET`    | `/api/applications`     | —                                               | Running audio sessions (process id, name, endpoint, mute, volume, `isActive`, `windowTitle`). One entry per process; the reported endpoint is the session actually playing (active preferred over inactive, render over capture). `windowTitle` is the app's main window title (resolved through same-exe parent processes for windowless audio children), for identification only |
 | `GET`    | `/api/events`           | —                                               | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
 | `POST`   | `/api/inputs`           | `{ name, type, source }`                        | Add an input source (type = `device` or `application`) |
 | `PATCH`  | `/api/inputs/{id}`      | `{ name?, type?, source? }`                     | Update an input; re-creates routes for any groups that use it |

@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include <audiopolicy.h>
+#include <tlhelp32.h>
 
 namespace anniaudio::core {
 
@@ -284,6 +285,43 @@ static std::string exeNameFromSessionIdentifier(IAudioSessionControl2* ctrl2)
     return s.substr(start + 1, exe + 4 - (start + 1));
 }
 
+static BOOL CALLBACK collectWindowTitle(HWND hwnd, LPARAM lp)
+{
+    auto* titles = reinterpret_cast<std::unordered_map<DWORD, std::string>*>(lp);
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    if (GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE; // skip owned popups
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid || titles->count(pid)) return TRUE; // keep the first (topmost in z-order)
+    wchar_t buf[256] = {};
+    if (GetWindowTextW(hwnd, buf, 256) <= 0) return TRUE;
+    (*titles)[pid] = wideToUtf8(buf);
+    return TRUE;
+}
+
+// pid -> (parent pid, exe name) for every running process. Used to find a
+// window title for processes that render audio in a windowless child (e.g.
+// browser audio utility processes).
+struct ProcParent { DWORD ppid = 0; std::string exe; };
+static std::unordered_map<DWORD, ProcParent> processParentTable()
+{
+    std::unordered_map<DWORD, ProcParent> table;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return table;
+    PROCESSENTRY32W pe = {};
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            ProcParent pp;
+            pp.ppid = pe.th32ParentProcessID;
+            pp.exe = wideToUtf8(pe.szExeFile);
+            table[pe.th32ProcessID] = std::move(pp);
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return table;
+}
+
 std::vector<ApplicationInfo> enumAudioSessions(IMMDeviceEnumerator* enumerator)
 {
     std::vector<ApplicationInfo> out;
@@ -373,6 +411,29 @@ std::vector<ApplicationInfo> enumAudioSessions(IMMDeviceEnumerator* enumerator)
                 best[pid] = std::move(info);
                 bestScore[pid] = score;
             }
+        }
+    }
+
+    // Attach a window title as an identification helper: exe names often have
+    // nothing to do with what the user sees on screen. If the audio process is
+    // windowless, walk up the parent chain -- but only through processes with
+    // the same exe name, so a browser's audio child finds the browser window
+    // without ever walking up into explorer.exe.
+    std::unordered_map<DWORD, std::string> titles;
+    EnumWindows(collectWindowTitle, reinterpret_cast<LPARAM>(&titles));
+    auto parents = processParentTable();
+    for (auto& kv : best) {
+        ApplicationInfo& info = kv.second;
+        DWORD cur = kv.first;
+        for (int hop = 0; hop < 4; ++hop) {
+            auto t = titles.find(cur);
+            if (t != titles.end()) { info.windowTitle = t->second; break; }
+            auto p = parents.find(cur);
+            if (p == parents.end()) break;
+            auto pp = parents.find(p->second.ppid);
+            if (pp == parents.end()) break;
+            if (_stricmp(pp->second.exe.c_str(), info.name.c_str()) != 0) break;
+            cur = p->second.ppid;
         }
     }
 

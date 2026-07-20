@@ -277,6 +277,21 @@ def fetch_applications(port):
             applications = []
 
 
+def apps_refresh_worker(port):
+    """Background thread: keep the application list fresh (every 5 seconds).
+
+    The route-mismatch warnings compare against this list; refreshing it
+    automatically means they clear on their own after an app restarts, instead
+    of lying until the user presses R.
+    """
+    while _route_running.is_set():
+        fetch_applications(port)
+        for _ in range(10):
+            if not _route_running.is_set():
+                return
+            time.sleep(0.5)
+
+
 def _add_input_to_group(port, group, name, input_type, source):
     """Create an input and attach it to the selected virtual cable. Returns the new input id."""
     global last_error
@@ -958,10 +973,11 @@ def main(stdscr, port):
             _load_tracked_routes(port, state)
 
     # None of the startup fetches may block the first frame; the UI comes up
-    # immediately and fills in as these complete.
+    # immediately and fills in as these complete. Applications refresh on
+    # their own every 5s (apps_refresh_worker); endpoints only on demand (R).
     threading.Thread(target=_startup_restore, daemon=True).start()
+    threading.Thread(target=apps_refresh_worker, args=(port,), daemon=True).start()
     run_job(lambda: fetch_endpoints(port))
-    run_job(lambda: fetch_applications(port))
 
     # The most recent status message and when it appeared. Messages are consumed
     # from last_error/last_success immediately but stay on screen for a few
@@ -1148,8 +1164,13 @@ def main(stdscr, port):
                     live = apps_by_pid.get(pid)
                     if live is None:
                         warn = " (app not running)"
-                    elif cable and live.get("endpoint") != cable:
-                        warn = f" ! on {live.get('endpoint', '?')} - restart app"
+                    elif (cable and live.get("isActive")
+                          and live.get("endpoint") != cable):
+                        # Only warn when the app is ACTIVELY playing into the
+                        # wrong endpoint. Idle leftover sessions on the old
+                        # device are harmless and used to trigger false
+                        # "restart app" warnings.
+                        warn = f" ! playing on {live.get('endpoint', '?')} - restart app"
                 prefix = f"  • {name:<16} [{itype}] {bar}"
                 try:
                     stdscr.addstr(y, 4, prefix, attr)
@@ -1325,7 +1346,17 @@ def main(stdscr, port):
             # Apps only appear here once they own a Windows audio session; a
             # game that has not made a sound yet will be missing. The manual
             # entry covers that (press R after the app starts playing instead).
-            app_labels = [f"{a.get('name', '?')} ({a.get('endpoint', '?')})" for a in local_apps]
+            # The window title is shown purely to help identify oddly named
+            # exes; the exe/pid is still what gets routed.
+            def app_label(a):
+                name = a.get('name', '?')
+                title = (a.get('windowTitle') or '').strip()
+                ep = a.get('endpoint', '?')
+                if title and title.lower() != name.lower():
+                    return f"{name} - \"{title[:48]}\" ({ep})"
+                return f"{name} ({ep})"
+
+            app_labels = [app_label(a) for a in local_apps]
             app_labels.append("<app not listed - enter PID manually>")
             idx = list_dialog(stdscr, "Select application", app_labels)
             if idx is None:

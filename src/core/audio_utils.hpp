@@ -31,6 +31,7 @@ struct ApplicationInfo {
     uint32_t    processId = 0;
     std::string name;        // executable name (e.g. "chrome.exe")
     std::string displayName; // session display name (may be empty)
+    std::string windowTitle; // main window title, as an identification helper (may be empty)
     std::string endpoint;    // friendly name of the device the session lives on
     bool        isInput = false; // true = capture, false = render
     bool        isActive = false; // true if the reported session is currently playing

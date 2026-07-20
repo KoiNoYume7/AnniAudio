@@ -85,6 +85,7 @@ nlohmann::json toJson(const ApplicationInfo& a)
     j["processId"]   = a.processId;
     j["name"]        = a.name;
     j["displayName"] = a.displayName;
+    j["windowTitle"] = a.windowTitle;
     j["endpoint"]    = a.endpoint;
     j["isInput"]     = a.isInput;
     j["isActive"]    = a.isActive;
