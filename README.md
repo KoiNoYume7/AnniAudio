@@ -200,23 +200,35 @@ The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default por
 | `j`/`k`, arrows | Move the selection |
 | `+`/`-` | Nudge volume by 5% |
 | `v` | Type an exact volume (0-200%) |
-| `m` | Toggle mute on the selected virtual cable |
+| `m` | Toggle mute on the selected virtual cable / output |
+| `x` | Set the selected virtual cable's send level towards one of its outputs (e.g. 100% on headphones, 15% on speakers) |
 | `Enter`/`e` | Expand/collapse a virtual cable's application list |
-| `i` | Add a device source to the selected virtual cable |
+| `i` | Add a device source to the selected virtual cable (entries labeled `[cable]`, `[microphone]`, `[system audio (loopback)]`) |
 | `a` | Add a running application to the selected virtual cable (uses loopback capture, or per-app routing to the group cable if one is set) |
 | `g` | Add a virtual cable |
 | `C` | Set the selected virtual cable's group cable (render VAC) for per-app application routing |
 | `o` | Add an output |
 | `c` | Connect/disconnect the selected virtual cable and output |
+| `n` | Assign newly detected apps (semi-automatic routing; rules in `config/app-rules.json`) |
 | `r` | Rename the selected virtual cable |
 | `d` | Delete the selected virtual cable/application/output |
 | `s` | Save the current state as a preset (empty path = autosave) |
 | `R` | Refresh the endpoint and application lists |
-| `q`/`Esc` | Quit |
+| `q` | Quit (`Esc` only cancels dialogs; pickers support type-to-filter) |
 
 When a group has a `cable` set, adding an application with `a` routes that application's Windows output to the cable (via `AudioPolicyConfig` / `winappaudiorouter`) and the mixer captures the cable. This avoids double audio. Without a cable, the application is captured via process loopback and will still be heard on its original device.
 
 Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing; otherwise `python -m pip install windows-curses`). Run it directly with `python scripts/mixer_tui.py [--port 8850]` if you'd rather skip the batch wrapper.
+
+#### Autostart at logon
+
+```powershell
+.\install-autostart.bat    # start the mixer hidden at every logon (no admin needed)
+.\uninstall-autostart.bat  # remove it again
+.\stop-mixer.bat           # stop a running mixer (e.g. before rebuilding route_cli)
+```
+
+This drops a small `.vbs` into the current user's Startup folder that launches `route_cli.exe mixer` with a hidden window. It deliberately is not a Windows service: WASAPI audio endpoints only exist inside the user session, so the mixer has to start at logon, not at boot. Config is loaded from `config/mixers/main.json` (autosaved continuously while running), so a force-stop never loses state.
 
 `route_cli midi list` / `route_cli midi <device-hint>` remain available as a standalone diagnostic to inspect raw MIDI messages from any connected controller; it is not used to control the mixer.
 
