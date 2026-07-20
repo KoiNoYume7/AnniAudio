@@ -38,6 +38,8 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
         ij["name"] = in.name;
         ij["type"] = in.type;
         ij["source"] = in.source;
+        ij["denoise"] = in.denoise;
+        ij["eqPreset"] = in.eqPreset;
         ij["peak"] = in.peak;
         ij["rms"] = in.rms;
         j["inputs"].push_back(ij);
@@ -84,6 +86,8 @@ MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g, cons
     cfg.name = g.name;
     cfg.source = in.source;
     cfg.sourceType = (in.type == "application") ? StripSourceType::Application : StripSourceType::Device;
+    cfg.denoise = in.denoise;
+    cfg.eqPreset = in.eqPreset;
     cfg.volume = g.volume * groupGainFor(g, outName);
     cfg.muted = g.muted;
     cfg.knobIndex = g.knobIndex;
@@ -565,6 +569,8 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         in.name = kv.second.name;
         in.type = kv.second.type;
         in.source = kv.second.source;
+        in.denoise = kv.second.denoise;
+        in.eqPreset = kv.second.eqPreset;
         s.inputs.push_back(in);
     }
     std::sort(s.inputs.begin(), s.inputs.end(), [](const InputSnapshot& a, const InputSnapshot& b) { return a.id < b.id; });
@@ -815,6 +821,8 @@ bool AudioMixerMatrix::load(const std::string& path)
                 ic.name = i.value("name", std::string{});
                 ic.type = i.value("type", "device");
                 ic.source = i.value("source", std::string{});
+                ic.denoise = i.value("denoise", false);
+                ic.eqPreset = i.value("eqPreset", std::string{});
                 if (ic.source.empty()) continue;
                 if (ic.name.empty()) ic.name = ic.source;
                 InputId iid = i.value("id", 0);

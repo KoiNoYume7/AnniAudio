@@ -39,6 +39,8 @@ Keybindings:
     r            rename the selected virtual cable
     d            delete the selected virtual cable/application/output
     n            assign newly detected apps (auto-routing rules in config/app-rules.json)
+    N / E        on a source row: toggle RNNoise suppression / the "voice" EQ
+                 preset for that input (processed engine-side, pre-mix)
     S            scenes: apply a saved level overlay (volumes/mutes/sends) or
                  save the current levels as a new scene (config/scenes/)
     s            save the current state as a preset (empty path = autosave)
@@ -1289,6 +1291,12 @@ def main(stdscr, port):
                 is_sel = pane == 0 and line == sel_group_idx
                 name = inp.get("name", "?")[:16]
                 itype = inp.get("type", "device")[:4]
+                fx = ""
+                if inp.get("denoise"):
+                    fx += " NS"
+                if inp.get("eqPreset"):
+                    fx += " EQ"
+                itype += fx
                 peak = max(inp.get("peak", 0.0), inp.get("rms", 0.0))
                 pct = level_to_pct(peak)
                 bar = meter_bar(pct, 8)
@@ -1388,7 +1396,7 @@ def main(stdscr, port):
         # Footer
         footer = (
             "Tab:panes  j/k:nav  +/-|v:vol  m:mute  x:send lvl  Enter/e:expand  i:add src  a:add app  "
-            "g:add cable  C:set cable  o:add output  c:connect  n:new apps  S:scenes  r:rename  d:delete  s:save  q:quit"
+            "g:add cable  C:set cable  o:add output  c:connect  n:new apps  N/E:mic fx  S:scenes  r:rename  d:delete  s:save  q:quit"
         )
         try:
             stdscr.addstr(h - 1, 0, footer[:w - 1], curses.A_DIM)
@@ -1738,6 +1746,22 @@ def main(stdscr, port):
             app_rules.setdefault("rules", []).append({"match": exe.lower(), "group": g.get("name")})
             _save_app_rules()
             run_job(lambda g=g, app=app: _assign_app_to_group(port, g, app))
+        elif ch in (ord('N'), ord('E')):
+            # Mic processing on the selected INPUT row: N toggles RNNoise
+            # suppression, E toggles the built-in "voice" EQ preset. Applied
+            # engine-side before the signal reaches any output or cable.
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] != "input":
+                    with state_lock:
+                        last_error = "Expand a cable and select a source row first"
+                    continue
+                inp = item[2]
+                if ch == ord('N'):
+                    body = {"denoise": not inp.get("denoise", False)}
+                else:
+                    body = {"eqPreset": "" if inp.get("eqPreset") else "voice"}
+                api_call("PATCH", f"/api/inputs/{inp['id']}", body)
         elif ch == ord('R'):
             run_job(lambda: fetch_endpoints(port))
             run_job(lambda: fetch_applications(port))

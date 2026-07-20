@@ -24,6 +24,10 @@ struct MixerStripConfig {
     StripSourceType sourceType = StripSourceType::Device;
     float       volume = 1.0f;
     bool        muted  = false;
+    // Capture-side DSP, applied before resampling/mixing so every output of
+    // this strip hears the processed signal.
+    bool        denoise = false;   // RNNoise suppression (needs 48 kHz capture)
+    std::string eqPreset;          // "" = off; "voice" = HPF + mud cut + presence + air
     // Optional binding to a physical controller's Nth control (e.g. a Loupedeck
     // Live knob). Purely informational to AudioMixer itself — it's read back via
     // snapshot() so a control-API client can act on it. 0-based, no fixed range

@@ -16,6 +16,9 @@
 #include <audioclientactivationparams.h>
 #include <objidl.h>
 
+#include "eq.hpp"
+#include "noise_suppressor.hpp"
+
 #pragma comment(lib, "mmdevapi.lib")
 
 namespace anniaudio::core {
@@ -89,6 +92,12 @@ struct AudioMixer::Impl {
         std::vector<float> readBuf;
         RingBuffer ring;
 
+        // Capture-side DSP (denoise, EQ). Allocated and prepared in
+        // setupStripDsp() before the strip reaches the audio thread; only
+        // process() is called from there, which is allocation-free.
+        std::unique_ptr<anniaudio::dsp::NoiseSuppressor> denoiser;
+        std::unique_ptr<anniaudio::dsp::EqChain> eq;
+
         std::atomic<float> volume{1.0f};
         std::atomic<bool>  muted{false};
 
@@ -149,6 +158,7 @@ struct AudioMixer::Impl {
     bool openApplicationLoopback(Strip& s, uint32_t pid);
     bool openEndpointStrip(Strip& s, const std::string& sourceHint);
     bool finalizeStripBuffers(Strip& s, uint32_t bufFrames);
+    void setupStripDsp(Strip& s, const MixerStripConfig& cfg);
     void enqueue(Command cmd);
 
     void run();
@@ -258,6 +268,7 @@ bool AudioMixer::Impl::openOutput(const std::string& outputHint)
 
 bool AudioMixer::Impl::openStrip(Strip& s, const MixerStripConfig& cfg)
 {
+    bool ok = false;
     if (cfg.sourceType == StripSourceType::Application) {
         try {
             size_t pos = 0;
@@ -266,13 +277,50 @@ bool AudioMixer::Impl::openStrip(Strip& s, const MixerStripConfig& cfg)
                 std::fprintf(stderr, "[mixer] Invalid application process id '%s'\n", cfg.source.c_str());
                 return false;
             }
-            return openApplicationLoopback(s, pid);
+            ok = openApplicationLoopback(s, pid);
         } catch (const std::exception&) {
             std::fprintf(stderr, "[mixer] Invalid application process id '%s'\n", cfg.source.c_str());
             return false;
         }
+    } else {
+        ok = openEndpointStrip(s, cfg.source);
     }
-    return openEndpointStrip(s, cfg.source);
+    if (!ok) return false;
+    setupStripDsp(s, cfg);
+    return true;
+}
+
+void AudioMixer::Impl::setupStripDsp(Strip& s, const MixerStripConfig& cfg)
+{
+    if (cfg.denoise) {
+        // RNNoise is trained on 48 kHz audio; other rates would need an extra
+        // resample stage, so for now the flag is only honored at 48 kHz.
+        if (s.captureRate == 48000) {
+            s.denoiser = std::make_unique<anniaudio::dsp::NoiseSuppressor>();
+            s.denoiser->prepare(s.captureCh);
+            if (!s.denoiser->prepared()) {
+                std::fprintf(stderr, "[mixer] denoise init failed for '%s'\n", s.name.c_str());
+                s.denoiser.reset();
+            } else {
+                std::fprintf(stderr, "[mixer] denoise enabled for '%s' (%u ch)\n", s.name.c_str(), s.captureCh);
+            }
+        } else {
+            std::fprintf(stderr, "[mixer] denoise skipped for '%s': capture rate %u != 48000\n",
+                         s.name.c_str(), s.captureRate);
+        }
+    }
+    if (cfg.eqPreset == "voice") {
+        s.eq = std::make_unique<anniaudio::dsp::EqChain>();
+        s.eq->addBand(anniaudio::dsp::FilterType::HighPass, 80.0, 0.0, 0.707);    // rumble
+        s.eq->addBand(anniaudio::dsp::FilterType::Peak, 250.0, -2.0, 1.0);        // mud
+        s.eq->addBand(anniaudio::dsp::FilterType::Peak, 3000.0, 2.5, 1.0);        // presence
+        s.eq->addBand(anniaudio::dsp::FilterType::HighShelf, 8000.0, 1.5, 0.707); // air
+        s.eq->prepare(s.captureRate, s.captureCh);
+        std::fprintf(stderr, "[mixer] voice EQ enabled for '%s'\n", s.name.c_str());
+    } else if (!cfg.eqPreset.empty()) {
+        std::fprintf(stderr, "[mixer] unknown eq preset '%s' for '%s' (available: voice)\n",
+                     cfg.eqPreset.c_str(), s.name.c_str());
+    }
 }
 
 bool AudioMixer::Impl::openEndpointStrip(Strip& s, const std::string& sourceHint)
@@ -508,6 +556,8 @@ void AudioMixer::Impl::teardownStrip(Strip& s)
     if (s.captureEvent) { CloseHandle(s.captureEvent); s.captureEvent = nullptr; }
     s.captureSvc.Reset();
     s.captureAC.Reset();
+    s.denoiser.reset();
+    s.eq.reset();
 }
 
 void AudioMixer::Impl::applyPendingCommands(bool& handlesDirty)
@@ -629,6 +679,11 @@ void AudioMixer::Impl::processStrip(Strip& s)
             } else {
                 pcm16ToFloat(data, sampleCount, s.captureTmp.data());
             }
+
+            // Capture-side DSP at the source's native rate, before any
+            // resampling, so every route of this strip gets the clean signal.
+            if (s.denoiser) s.denoiser->process(s.captureTmp.data(), frames, s.captureCh);
+            if (s.eq)       s.eq->process(s.captureTmp.data(), frames, s.captureCh);
 
             if (s.needsConvert) {
                 uint32_t dstFrames = convertBuffer(

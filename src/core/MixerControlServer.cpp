@@ -32,12 +32,14 @@ void EnsureComInitializedOnThisThread()
 nlohmann::json toJson(const InputSnapshot& in)
 {
     nlohmann::json j;
-    j["id"]     = in.id;
-    j["name"]   = in.name;
-    j["type"]   = in.type;
-    j["source"] = in.source;
-    j["peak"]   = in.peak;
-    j["rms"]    = in.rms;
+    j["id"]       = in.id;
+    j["name"]     = in.name;
+    j["type"]     = in.type;
+    j["source"]   = in.source;
+    j["denoise"]  = in.denoise;
+    j["eqPreset"] = in.eqPreset;
+    j["peak"]     = in.peak;
+    j["rms"]      = in.rms;
     return j;
 }
 
@@ -366,9 +368,11 @@ void MixerControlServer::Impl::registerRoutes()
         catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
 
         InputConfig cfg;
-        cfg.name   = body.value("name", std::string{});
-        cfg.type   = body.value("type", std::string{"device"});
-        cfg.source = body.value("source", std::string{});
+        cfg.name     = body.value("name", std::string{});
+        cfg.type     = body.value("type", std::string{"device"});
+        cfg.source   = body.value("source", std::string{});
+        cfg.denoise  = body.value("denoise", false);
+        cfg.eqPreset = body.value("eqPreset", std::string{});
         if (cfg.name.empty() || cfg.source.empty()) {
             sendError(res, 400, "missing required fields 'name' and 'source'"); return;
         }
@@ -392,10 +396,21 @@ void MixerControlServer::Impl::registerRoutes()
         try { body = nlohmann::json::parse(req.body); }
         catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
 
+        // Merge with the current input so a partial PATCH (e.g. only
+        // {"denoise": true}) leaves every other field untouched.
+        auto preSnap = matrix.snapshot();
+        const InputSnapshot* cur = nullptr;
+        for (const auto& in : preSnap.inputs) {
+            if (in.id == id) { cur = &in; break; }
+        }
+        if (cur == nullptr) { sendError(res, 404, "input not found"); return; }
+
         InputConfig cfg;
-        cfg.name   = body.value("name", std::string{});
-        cfg.type   = body.value("type", std::string{"device"});
-        cfg.source = body.value("source", std::string{});
+        cfg.name     = body.value("name", cur->name);
+        cfg.type     = body.value("type", cur->type);
+        cfg.source   = body.value("source", cur->source);
+        cfg.denoise  = body.value("denoise", cur->denoise);
+        cfg.eqPreset = body.value("eqPreset", cur->eqPreset);
         if (cfg.name.empty() || cfg.source.empty()) {
             sendError(res, 400, "'name' and 'source' cannot be empty"); return;
         }

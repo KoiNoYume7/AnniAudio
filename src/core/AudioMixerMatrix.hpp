@@ -22,6 +22,10 @@ using GroupId = uint32_t;
 struct InputConfig {
     std::string name;
     std::string type = "device";
+    // Capture-side DSP applied wherever this input is routed (see
+    // MixerStripConfig): RNNoise suppression and/or a named EQ preset.
+    bool denoise = false;
+    std::string eqPreset; // "" = off; "voice"
     std::string source;
 };
 
@@ -55,6 +59,8 @@ struct InputSnapshot {
     std::string name;
     std::string type;
     std::string source;
+    bool denoise = false;
+    std::string eqPreset;
     float peak = 0.0f;
     float rms = 0.0f;
 };
