@@ -26,7 +26,9 @@ Keybindings:
     PgUp/PgDn    page the selection
     +/-          nudge the selected virtual cable / output volume by 5%
     v            type an exact volume (0-200%)
-    m            toggle mute on the selected virtual cable
+    m            toggle mute on the selected virtual cable / output
+    x            set the selected virtual cable's send level to one of its
+                 outputs (e.g. 100% on headphones, 15% on speakers)
     Enter/e      expand/collapse a virtual cable's application list
     i            add a device source (from a device picker) to the selected virtual cable
     a            add an application (from a running app picker) to the selected virtual cable
@@ -1254,7 +1256,10 @@ def main(stdscr, port):
                 pct = level_to_pct(peak)
                 bar = meter_bar(pct, 8)
                 vbar = vol_bar(vol, 10)
-                out_list = ", ".join(g.get("outputIds", []))
+                gains = g.get("outputGains", {})
+                out_list = ", ".join(
+                    o if abs(gains.get(o, 100) - 100) < 0.5 else f"{o}@{gains.get(o, 100):.0f}%"
+                    for o in g.get("outputIds", []))
                 color = g.get("color", "#3b82f6")
                 attr = group_color_attr(color, pair_cache, selected=is_sel)
                 n_inputs = len(g.get("inputIds", []))
@@ -1356,8 +1361,14 @@ def main(stdscr, port):
             bar = meter_bar(pct, 8)
             vbar = vol_bar(vol, 12)
             attr = curses.color_pair(SELECTED_PAIR) if is_sel else curses.A_NORMAL
+            row_text = f"{name:<22} {vbar} {vol:>3.0f}% {bar}"
             try:
-                stdscr.addstr(y, mid + 1, f"{name:<22} {vbar} {vol:>3.0f}% {bar}", attr)
+                stdscr.addstr(y, mid + 1, row_text, attr)
+                if out.get("muted"):
+                    mattr = curses.color_pair(MUTED_PAIR) | curses.A_BOLD
+                    if is_sel:
+                        mattr |= curses.A_REVERSE
+                    stdscr.addstr(y, mid + 2 + len(row_text), "MUTED", mattr)
             except curses.error:
                 pass
             # connected groups
@@ -1374,8 +1385,8 @@ def main(stdscr, port):
 
         # Footer
         footer = (
-            "Tab:panes  j/k:nav  +/-|v:vol  m:mute  Enter/e:expand  i:add src  a:add app  g:add cable  "
-            "C:set cable  o:add output  c:connect  n:new apps  r:rename  d:delete  s:save  q:quit"
+            "Tab:panes  j/k:nav  +/-|v:vol  m:mute  x:send lvl  Enter/e:expand  i:add src  a:add app  "
+            "g:add cable  C:set cable  o:add output  c:connect  n:new apps  r:rename  d:delete  s:save  q:quit"
         )
         try:
             stdscr.addstr(h - 1, 0, footer[:w - 1], curses.A_DIM)
@@ -1446,6 +1457,10 @@ def main(stdscr, port):
                 if item[0] == "group":
                     g = item[1]
                     api_call("PATCH", f"/api/groups/{g['id']}", {"muted": not g.get("muted", False)})
+            elif pane == 1 and outputs:
+                out = outputs[sel_output_idx]
+                api_call("POST", "/api/outputs/master",
+                         {"name": out["name"], "muted": not out.get("muted", False)})
         elif ch in (ord('e'), ord('E'), 10, 13, curses.KEY_ENTER):
             if pane == 0 and group_rows:
                 item = group_rows[sel_group_idx]
@@ -1577,6 +1592,37 @@ def main(stdscr, port):
                         last_success = f"Disconnected from VAC {out['name']}"
                 else:
                     last_success = f"{'Disconnected from' if connected else 'Connected to'} {out['name']}"
+        elif ch == ord('x'):
+            # Per-output send level: how loud THIS cable is on ONE output,
+            # independent of its main fader (e.g. quiet on speakers, full on
+            # headphones).
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] != "group":
+                    with state_lock:
+                        last_error = "Select a virtual cable header"
+                    continue
+                g = item[1]
+                outs = g.get("outputIds", [])
+                if not outs:
+                    with state_lock:
+                        last_error = "Cable is not connected to any output (use c)"
+                    continue
+                gains = g.get("outputGains", {})
+                labels = [f"{o}  (send {gains.get(o, 100):.0f}%)" for o in outs]
+                idx = list_dialog(stdscr, "Send level to which output?", labels)
+                if idx is None:
+                    continue
+                out_name = outs[idx]
+                val = input_dialog(stdscr, f"Send level 0-200% -> {out_name[:28]}",
+                                   str(int(gains.get(out_name, 100))))
+                if val:
+                    try:
+                        api_call("PATCH", f"/api/groups/{g['id']}",
+                                 {"outputGains": {out_name: clamp_vol(float(val))}})
+                    except ValueError:
+                        with state_lock:
+                            last_error = f"Not a number: {val}"
         elif ch == ord('C'):
             if pane == 0 and group_rows:
                 item = group_rows[sel_group_idx]

@@ -1,0 +1,202 @@
+{
+  "controlPort": 8850,
+  "groups": [
+    {
+      "cable": "Music (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 7,
+      "inputIds": [
+        32
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Music",
+      "outputIds": [
+        "Speakers (Realtek(R) Audio)"
+      ],
+      "peak": 0.0,
+      "rms": 0.0,
+      "volume": 10.0
+    },
+    {
+      "cable": "Media (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 8,
+      "inputIds": [
+        23
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Media",
+      "outputIds": [
+        "Speakers (Realtek(R) Audio)"
+      ],
+      "peak": 0.021892089396715164,
+      "rms": 0.009497585706412792,
+      "volume": 10.0
+    },
+    {
+      "cable": "Game (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 11,
+      "inputIds": [
+        25
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Game",
+      "outputIds": [
+        "Speakers (Realtek(R) Audio)"
+      ],
+      "peak": 0.0,
+      "rms": 0.0,
+      "volume": 0.0
+    },
+    {
+      "cable": "Chat (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 12,
+      "inputIds": [
+        34
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Chat",
+      "outputIds": [
+        "Speakers (Realtek(R) Audio)"
+      ],
+      "peak": 0.0,
+      "rms": 0.0,
+      "volume": 38.0
+    },
+    {
+      "cable": "System (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 13,
+      "inputIds": [
+        35
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "System",
+      "outputIds": [
+        "Speakers (Realtek(R) Audio)"
+      ],
+      "peak": 7.62939453125e-06,
+      "rms": 3.0339485874719685e-06,
+      "volume": 25.0
+    },
+    {
+      "cable": "Mic (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 14,
+      "inputIds": [
+        28
+      ],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Mic",
+      "outputIds": [
+        "Mic (Virtual Audio Cable)"
+      ],
+      "peak": 1.6149627413142298e-08,
+      "rms": 5.128403923748692e-09,
+      "volume": 200.0
+    },
+    {
+      "cable": "Ext (Virtual Audio Cable)",
+      "color": "#3b82f6",
+      "id": 15,
+      "inputIds": [],
+      "knobIndex": null,
+      "muted": false,
+      "name": "Ext",
+      "outputIds": [],
+      "peak": 0.0,
+      "rms": 0.0,
+      "volume": 20.0
+    }
+  ],
+  "inputs": [
+    {
+      "id": 23,
+      "name": "brave.exe",
+      "peak": 0.021892089396715164,
+      "rms": 0.009497585706412792,
+      "source": "Media (Virtual Audio Cable)",
+      "type": "device"
+    },
+    {
+      "id": 25,
+      "name": "HTGame.exe",
+      "peak": 0.0,
+      "rms": 0.0,
+      "source": "Game (Virtual Audio Cable)",
+      "type": "device"
+    },
+    {
+      "id": 28,
+      "name": "Microphone (2- HyperX QuadCast S)",
+      "peak": 1.6149627413142298e-08,
+      "rms": 5.128403923748692e-09,
+      "source": "Microphone (2- HyperX QuadCast S)",
+      "type": "device"
+    },
+    {
+      "id": 32,
+      "name": "Spotify.exe",
+      "peak": 0.0,
+      "rms": 0.0,
+      "source": "Music (Virtual Audio Cable)",
+      "type": "device"
+    },
+    {
+      "id": 34,
+      "name": "Chat (VAC)",
+      "peak": 0.0,
+      "rms": 0.0,
+      "source": "Chat (Virtual Audio Cable)",
+      "type": "device"
+    },
+    {
+      "id": 35,
+      "name": "System (VAC)",
+      "peak": 7.62939453125e-06,
+      "rms": 3.0339485874719685e-06,
+      "source": "System (Virtual Audio Cable)",
+      "type": "device"
+    }
+  ],
+  "outputs": [
+    {
+      "groupIds": [
+        14
+      ],
+      "master": 100.0,
+      "masterPeak": 1.6149627413142298e-08,
+      "masterRms": 5.128403923748692e-09,
+      "name": "Mic (Virtual Audio Cable)"
+    },
+    {
+      "groupIds": [],
+      "master": 0.0,
+      "masterPeak": 0.0,
+      "masterRms": 0.0,
+      "name": "Speakers (Logitech G560 Gaming Speaker)"
+    },
+    {
+      "groupIds": [
+        7,
+        8,
+        11,
+        12,
+        13
+      ],
+      "master": 40.0,
+      "masterPeak": 0.008759887889027596,
+      "masterRms": 0.0037990291602909565,
+      "name": "Speakers (Realtek(R) Audio)"
+    }
+  ],
+  "running": true
+}

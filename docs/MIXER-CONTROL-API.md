@@ -186,11 +186,11 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a 4
 | `PATCH`  | `/api/inputs/{id}`      | `{ name?, type?, source? }`                     | Update an input; re-creates routes for any groups that use it |
 | `DELETE` | `/api/inputs/{id}`      | —                                               | Remove an input and remove it from all groups |
 | `POST`   | `/api/groups`           | `{ name, color?, cable?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Add a group (mix bus) |
-| `PATCH`  | `/api/groups/{id}`      | `{ name?, color?, cable?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Partial update of a group |
+| `PATCH`  | `/api/groups/{id}`      | `{ name?, color?, cable?, inputIds?, outputIds?, outputGains?, volume?, muted?, knobIndex? }` | Partial update of a group. `outputGains` is `{ "<output name>": percent }` — the group's send level towards that output (100 = unity); effective route volume is group volume x send gain |
 | `DELETE` | `/api/groups/{id}`      | —                                               | Remove a group |
 | `POST`   | `/api/outputs`          | `{ name }`                                      | Add a render output by endpoint name |
 | `DELETE` | `/api/outputs`          | `{ name }`                                      | Remove an output and disconnect every group from it |
-| `POST`   | `/api/outputs/master`   | `{ name, volume }`                              | Set an output's master volume |
+| `POST`   | `/api/outputs/master`   | `{ name, volume?, muted? }`                     | Set an output's master volume and/or mute (at least one of `volume`/`muted` required) |
 | `POST`   | `/api/presets/save`     | `{ path? }`                                     | Write current live state to a `config/mixers/*.json` preset file; empty `path` uses the configured autosave path |
 
 **State model: inputs → groups → outputs.**

@@ -40,6 +40,11 @@ struct GroupConfig {
     std::string cable; // optional VAC / render endpoint for app routing
     std::vector<InputId> inputIds;
     std::vector<std::string> outputIds;
+    // Per-output send gain (output name -> linear gain, 1.0 = unity). The
+    // effective strip volume for a route is group volume * send gain, so one
+    // group can e.g. run at 100% into headphones but 15% into speakers.
+    // Outputs without an entry are at unity.
+    std::map<std::string, float> outputGains;
     float volume = 1.0f;
     bool muted = false;
     std::optional<int> knobIndex;
@@ -61,6 +66,7 @@ struct GroupSnapshot {
     std::string cable;
     std::vector<InputId> inputIds;
     std::vector<std::string> outputIds;
+    std::map<std::string, float> outputGains; // output name -> send gain in percent
     float volume = 100.0f;
     bool muted = false;
     std::optional<int> knobIndex;
@@ -71,6 +77,7 @@ struct GroupSnapshot {
 struct OutputSnapshot {
     std::string name;
     float master = 100.0f;
+    bool muted = false;
     std::vector<GroupId> groupIds;
     float masterPeak = 0.0f;
     float masterRms = 0.0f;
@@ -131,6 +138,10 @@ public:
     bool setGroupCable(GroupId id, const std::string& cable);
     bool setGroupVolume(GroupId id, float vol);
     bool setGroupMuted(GroupId id, bool muted);
+    // Send gain (percent, 100 = unity) for one group -> output route.
+    bool setGroupOutputGain(GroupId id, const std::string& output, float gainPct);
+    bool setOutputMuted(const std::string& outputName, bool muted);
+    bool outputMuted(const std::string& outputName) const;
     bool setGroupKnobIndex(GroupId id, std::optional<int> knobIndex);
     bool setGroupInputIds(GroupId id, std::vector<InputId> ids);
     bool setGroupOutputIds(GroupId id, std::vector<std::string> ids);

@@ -20,6 +20,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
     {
         public String Name { get; init; }
         public Double Master { get; set; }
+        public Boolean Muted { get; set; }
     }
 
     // Client for the mixer control API served by `route_cli mixer` on localhost
@@ -130,6 +131,22 @@ namespace Loupedeck.AnniAudioMixerPlugin
             }
         }
 
+        public void ToggleOutputMute(String name)
+        {
+            lock (this._lock)
+            {
+                var o = this._outputs.FirstOrDefault(x => x.Name == name);
+                if (o == null)
+                {
+                    return;
+                }
+                o.Muted = !o.Muted;
+                this._holdUntil[$"omute{name}"] = DateTime.UtcNow.AddMilliseconds(HoldMs);
+                this.QueueSendLocked($"omute{name}", "POST", "/api/outputs/master",
+                    JsonSerializer.Serialize(new { name, muted = o.Muted }));
+            }
+        }
+
         public void NudgeOutputVolume(String name, Int32 diffPercent)
         {
             lock (this._lock)
@@ -237,6 +254,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
                 {
                     Name = o.GetProperty("name").GetString() ?? "?",
                     Master = o.GetProperty("master").GetDouble(),
+                    Muted = o.TryGetProperty("muted", out var m) && m.GetBoolean(),
                 });
             }
 
@@ -263,9 +281,17 @@ namespace Loupedeck.AnniAudioMixerPlugin
                 foreach (var o in outputs)
                 {
                     var old = this._outputs.FirstOrDefault(x => x.Name == o.Name);
-                    if (old != null && this._holdUntil.TryGetValue($"ovol{o.Name}", out var tv) && now < tv)
+                    if (old == null)
+                    {
+                        continue;
+                    }
+                    if (this._holdUntil.TryGetValue($"ovol{o.Name}", out var tv) && now < tv)
                     {
                         o.Master = old.Master;
+                    }
+                    if (this._holdUntil.TryGetValue($"omute{o.Name}", out var tm) && now < tm)
+                    {
+                        o.Muted = old.Muted;
                     }
                 }
 
@@ -277,7 +303,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
             // meter levels in the state json are deliberately not part of this.
             var signature = String.Join("|",
                 groups.Select(g => $"{g.Id}:{g.Name}:{Math.Round(g.Volume)}:{g.Muted}")
-                      .Concat(outputs.Select(o => $"{o.Name}:{Math.Round(o.Master)}")));
+                      .Concat(outputs.Select(o => $"{o.Name}:{Math.Round(o.Master)}:{o.Muted}")));
             if (signature == lastSignature)
             {
                 return false;

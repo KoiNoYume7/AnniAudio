@@ -49,6 +49,7 @@ nlohmann::json toJson(const GroupSnapshot& g)
     j["cable"]     = g.cable;
     j["inputIds"]  = g.inputIds;
     j["outputIds"] = g.outputIds;
+    j["outputGains"] = g.outputGains;
     j["volume"]    = g.volume;
     j["muted"]     = g.muted;
     j["peak"]      = g.peak;
@@ -62,6 +63,7 @@ nlohmann::json toJson(const OutputSnapshot& o)
     nlohmann::json j;
     j["name"]        = o.name;
     j["master"]      = o.master;
+    j["muted"]       = o.muted;
     j["groupIds"]    = o.groupIds;
     j["masterPeak"]  = o.masterPeak;
     j["masterRms"]   = o.masterRms;
@@ -453,6 +455,11 @@ void MixerControlServer::Impl::registerRoutes()
             auto ids = body["outputIds"].get<std::vector<std::string>>();
             if (matrix.setGroupOutputIds(id, ids)) changed = true;
         }
+        if (body.contains("outputGains") && body["outputGains"].is_object()) {
+            for (const auto& kv : body["outputGains"].items()) {
+                if (matrix.setGroupOutputGain(id, kv.key(), kv.value().get<float>())) changed = true;
+            }
+        }
         if (body.contains("knobIndex")) {
             std::optional<int> k;
             if (!body["knobIndex"].is_null()) k = body["knobIndex"].get<int>();
@@ -525,14 +532,15 @@ void MixerControlServer::Impl::registerRoutes()
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }
         catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
-        if (!body.contains("name") || !body.contains("volume")) {
-            sendError(res, 400, "missing required fields 'name' and 'volume'"); return;
+        if (!body.contains("name") || (!body.contains("volume") && !body.contains("muted"))) {
+            sendError(res, 400, "missing required field 'name' plus 'volume' and/or 'muted'"); return;
         }
         std::string name = body["name"].get<std::string>();
         if (std::find(matrix.outputNames().begin(), matrix.outputNames().end(), name) == matrix.outputNames().end()) {
             sendError(res, 404, "output not found"); return;
         }
-        matrix.setOutputMasterVolume(name, body["volume"].get<float>());
+        if (body.contains("volume")) matrix.setOutputMasterVolume(name, body["volume"].get<float>());
+        if (body.contains("muted"))  matrix.setOutputMuted(name, body["muted"].get<bool>());
         markDirty();
         nlohmann::json j;
         j["name"]   = name;

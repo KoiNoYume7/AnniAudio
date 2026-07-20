@@ -138,6 +138,7 @@ struct AudioMixer::Impl {
     HANDLE thread    = nullptr;
     std::atomic<bool> running{false};
     std::atomic<float> masterVolume{1.0f};
+    std::atomic<bool>  masterMuted{false};
     std::atomic<float> masterPeak{0.0f};
     std::atomic<float> masterRms{0.0f};
 
@@ -691,6 +692,9 @@ void AudioMixer::Impl::processRender()
     if (master != 1.0f) {
         for (size_t i = 0; i < outSamples; ++i) mixBuf[i] *= master;
     }
+    if (masterMuted.load()) {
+        for (size_t i = 0; i < outSamples; ++i) mixBuf[i] = 0.0f;
+    }
 
     {
         float sumSq = 0.0f;
@@ -880,6 +884,9 @@ void AudioMixer::setMasterVolume(float v)
 }
 
 float AudioMixer::masterVolume() const { return m_impl->masterVolume.load(); }
+
+void AudioMixer::setMasterMuted(bool muted) { m_impl->masterMuted.store(muted); }
+bool AudioMixer::masterMuted() const { return m_impl->masterMuted.load(); }
 float AudioMixer::masterPeak() const { return m_impl->masterPeak.load(); }
 float AudioMixer::masterRms() const { return m_impl->masterRms.load(); }
 

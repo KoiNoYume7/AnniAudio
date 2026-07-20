@@ -51,6 +51,7 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
         gj["cable"] = g.cable;
         gj["inputIds"] = g.inputIds;
         gj["outputIds"] = g.outputIds;
+        gj["outputGains"] = g.outputGains;
         gj["volume"] = g.volume;
         gj["muted"] = g.muted;
         gj["peak"] = g.peak;
@@ -63,6 +64,7 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
         nlohmann::json oj;
         oj["name"] = o.name;
         oj["master"] = o.master;
+        oj["muted"] = o.muted;
         oj["groupIds"] = o.groupIds;
         oj["masterPeak"] = o.masterPeak;
         oj["masterRms"] = o.masterRms;
@@ -71,12 +73,18 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
     return j;
 }
 
-MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g) {
+// Send gain of a group towards one output; unity when no entry exists.
+float groupGainFor(const GroupConfig& g, const std::string& outName) {
+    auto it = g.outputGains.find(outName);
+    return it != g.outputGains.end() ? it->second : 1.0f;
+}
+
+MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g, const std::string& outName) {
     MixerStripConfig cfg;
     cfg.name = g.name;
     cfg.source = in.source;
     cfg.sourceType = (in.type == "application") ? StripSourceType::Application : StripSourceType::Device;
-    cfg.volume = g.volume;
+    cfg.volume = g.volume * groupGainFor(g, outName);
     cfg.muted = g.muted;
     cfg.knobIndex = g.knobIndex;
     return cfg;
@@ -351,11 +359,50 @@ bool AudioMixerMatrix::setGroupVolume(GroupId id, float vol)
 
     for (const auto& kv : m_impl->routes) {
         if (kv.second.groupId == id) {
-            kv.second.mixer->setStripVolume(kv.second.localId, vol);
+            kv.second.mixer->setStripVolume(kv.second.localId,
+                vol * groupGainFor(it->second, kv.second.output));
         }
     }
     maybeAutosave();
     return true;
+}
+
+bool AudioMixerMatrix::setGroupOutputGain(GroupId id, const std::string& output, float gainPct)
+{
+    float gain = pctToLin(gainPct);
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    auto it = m_impl->groups.find(id);
+    if (it == m_impl->groups.end()) return false;
+
+    if (gain == 1.0f) {
+        it->second.outputGains.erase(output); // unity entries stay implicit
+    } else {
+        it->second.outputGains[output] = gain;
+    }
+    for (const auto& kv : m_impl->routes) {
+        if (kv.second.groupId == id && kv.second.output == output) {
+            kv.second.mixer->setStripVolume(kv.second.localId, it->second.volume * gain);
+        }
+    }
+    maybeAutosave();
+    return true;
+}
+
+bool AudioMixerMatrix::setOutputMuted(const std::string& outputName, bool muted)
+{
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    auto* m = m_impl->findOutputMixer(outputName);
+    if (!m) return false;
+    m->setMasterMuted(muted);
+    maybeAutosave();
+    return true;
+}
+
+bool AudioMixerMatrix::outputMuted(const std::string& outputName) const
+{
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    auto* m = m_impl->findOutputMixer(outputName);
+    return m != nullptr && m->masterMuted();
 }
 
 bool AudioMixerMatrix::setGroupMuted(GroupId id, bool muted)
@@ -531,6 +578,7 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         g.cable = kv.second.cable;
         g.inputIds = kv.second.inputIds;
         g.outputIds = kv.second.outputIds;
+        for (const auto& gk : kv.second.outputGains) g.outputGains[gk.first] = linToPct(gk.second);
         g.volume = linToPct(kv.second.volume);
         g.muted = kv.second.muted;
         g.knobIndex = kv.second.knobIndex;
@@ -543,6 +591,7 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         OutputSnapshot o;
         o.name = kv.first;
         o.master = linToPct(kv.second->masterVolume());
+        o.muted = kv.second->masterMuted();
         o.masterPeak = kv.second->masterPeak();
         o.masterRms = kv.second->masterRms();
         s.outputs.push_back(o);
@@ -749,9 +798,13 @@ bool AudioMixerMatrix::load(const std::string& path)
             for (const auto& o : j["outputs"]) {
                 std::string name = o.is_string() ? o.get<std::string>() : o.value("name", std::string{});
                 float master = o.is_object() ? o.value("master", 100.0f) / 100.0f : 1.0f;
+                bool muted = o.is_object() && o.value("muted", false);
                 if (!name.empty() && addOutputLocked(name)) {
                     auto* m = m_impl->findOutputMixer(name);
-                    if (m) m->setMasterVolume(master);
+                    if (m) {
+                        m->setMasterVolume(master);
+                        m->setMasterMuted(muted);
+                    }
                 }
             }
         }
@@ -781,6 +834,11 @@ bool AudioMixerMatrix::load(const std::string& path)
                 gc.muted = g.value("muted", false);
                 if (g.contains("inputIds")) gc.inputIds = g["inputIds"].get<std::vector<InputId>>();
                 if (g.contains("outputIds")) gc.outputIds = g["outputIds"].get<std::vector<std::string>>();
+                if (g.contains("outputGains") && g["outputGains"].is_object()) {
+                    for (const auto& kv : g["outputGains"].items()) {
+                        gc.outputGains[kv.key()] = kv.value().get<float>() / 100.0f;
+                    }
+                }
                 if (g.contains("knobIndex") && !g["knobIndex"].is_null()) {
                     gc.knobIndex = g["knobIndex"].get<int>();
                 }
@@ -851,7 +909,7 @@ bool AudioMixerMatrix::rebuildGroupRoutesLocked(GroupId id)
             AudioMixer* mixer = m_impl->findOutputMixer(outName);
             if (!mixer) continue;
 
-            MixerStripConfig cfg = stripForRoute(iit->second, g);
+            MixerStripConfig cfg = stripForRoute(iit->second, g, outName);
             auto local = mixer->addStrip(cfg);
             if (!local) {
                 std::fprintf(stderr, "[AudioMixerMatrix] failed to open input '%s' for group '%s' -> '%s'\n",

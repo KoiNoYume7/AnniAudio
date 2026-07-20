@@ -97,6 +97,8 @@ public:
 
     void  setMasterVolume(float v);
     float masterVolume() const;
+    void  setMasterMuted(bool muted);
+    bool  masterMuted() const;
     float masterPeak() const; // post-master peak level (0..1)
     float masterRms() const;  // post-master RMS level (0..1)
 

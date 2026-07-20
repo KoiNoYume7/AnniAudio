@@ -6,8 +6,8 @@ namespace Loupedeck.AnniAudioMixerPlugin
 
     // Dial adjustment for output master volume. One action parameter per
     // output (render endpoint) opened in the mixer, registered dynamically:
-    //   turn -> master volume up/down (2% per tick, 0-200%)
-    // The mixer API has no output mute, so pressing the dial does nothing.
+    //   turn  -> master volume up/down (2% per tick, 0-200%)
+    //   press -> mute/unmute the output (e.g. park the speakers muted)
     public class OutputVolumeAdjustment : PluginDynamicAdjustment
     {
         private const Int32 StepPercent = 2;
@@ -17,7 +17,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
         private AnniAudioMixerPlugin MixerPlugin => (AnniAudioMixerPlugin)this.Plugin;
 
         public OutputVolumeAdjustment()
-            : base(hasReset: false)
+            : base(hasReset: true)
         {
         }
 
@@ -71,6 +71,17 @@ namespace Loupedeck.AnniAudioMixerPlugin
             this.AdjustmentValueChanged(actionParameter);
         }
 
+        // Dial press (the adjustment's reset command): mute/unmute the output.
+        protected override void RunCommand(String actionParameter)
+        {
+            if (String.IsNullOrEmpty(actionParameter))
+            {
+                return;
+            }
+            this.MixerPlugin.Mixer.ToggleOutputMute(actionParameter);
+            this.AdjustmentValueChanged(actionParameter);
+        }
+
         protected override String GetAdjustmentValue(String actionParameter)
         {
             var o = this.MixerPlugin.Mixer.FindOutput(actionParameter);
@@ -78,7 +89,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
             {
                 return this.MixerPlugin.Mixer.Connected ? "?" : "--";
             }
-            return $"{Math.Round(o.Master)}%";
+            return o.Muted ? "MUTE" : $"{Math.Round(o.Master)}%";
         }
     }
 }
