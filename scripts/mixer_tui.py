@@ -999,6 +999,12 @@ def main(stdscr, port):
             return ("g", item[1].get("id"))
         return ("i", item[1].get("id"), item[2].get("id"))
 
+    # Route-mismatch warnings only show once the mismatch has persisted for a
+    # while: Windows briefly reports sessions on the old endpoint during app
+    # startup/device switches, which made the warning flicker on and off.
+    MISMATCH_GRACE_SECONDS = 8.0
+    mismatch_since = {}  # input id -> first time the mismatch was seen
+
     # Optimistic volumes: rapid +/- presses would otherwise each be computed
     # from the last server-confirmed value (broadcast at most every 200 ms), so
     # three quick presses move the fader once and then it snaps around. The
@@ -1158,19 +1164,25 @@ def main(stdscr, port):
                 # silently not in effect. Compare the app's LIVE session
                 # endpoint against the cable this row should be on and say so.
                 warn = ""
-                route = routed_apps.get(inp.get("id"))
+                iid_key = inp.get("id")
+                route = routed_apps.get(iid_key)
                 if route:
                     pid, cable, _gid = route
                     live = apps_by_pid.get(pid)
                     if live is None:
                         warn = " (app not running)"
+                        mismatch_since.pop(iid_key, None)
                     elif (cable and live.get("isActive")
                           and live.get("endpoint") != cable):
                         # Only warn when the app is ACTIVELY playing into the
-                        # wrong endpoint. Idle leftover sessions on the old
-                        # device are harmless and used to trigger false
-                        # "restart app" warnings.
-                        warn = f" ! playing on {live.get('endpoint', '?')} - restart app"
+                        # wrong endpoint, and only once that has persisted
+                        # past the grace period (transient sessions on the old
+                        # device are normal during app startup).
+                        first = mismatch_since.setdefault(iid_key, time.time())
+                        if time.time() - first > MISMATCH_GRACE_SECONDS:
+                            warn = f" ! playing on {live.get('endpoint', '?')} - restart app"
+                    else:
+                        mismatch_since.pop(iid_key, None)
                 prefix = f"  • {name:<16} [{itype}] {bar}"
                 try:
                     stdscr.addstr(y, 4, prefix, attr)
@@ -1325,11 +1337,36 @@ def main(stdscr, port):
                 continue
             item = group_rows[sel_group_idx]
             g = item[1]
-            names = [e.get("name", "") for e in local_eps]
-            idx = list_dialog(stdscr, "Select device source", names)
+            # One entry per device name, labeled by what capturing it means:
+            # VACs expose render+capture under the same name (a cable), real
+            # mics are capture-only, speakers/headphones are render-only and
+            # get captured via loopback.
+            by_name = {}
+            for e in local_eps:
+                n = e.get("name", "")
+                r, c = by_name.get(n, (False, False))
+                if e.get("isRender"):
+                    r = True
+                else:
+                    c = True
+                by_name[n] = (r, c)
+            entries = []
+            for n, (r, c) in by_name.items():
+                if r and c:
+                    kind = "cable"
+                elif c:
+                    kind = "microphone"
+                else:
+                    kind = "system audio (loopback)"
+                entries.append((n, f"{n}  [{kind}]"))
+            idx = list_dialog(stdscr, "Select device source", [lab for _n, lab in entries])
             if idx is None:
                 continue
-            source = names[idx]
+            source = entries[idx][0]
+            if source in g.get("outputIds", []):
+                if not confirm_dialog(stdscr,
+                        f"Feedback loop: this cable already outputs to '{source[:30]}'. Add anyway?"):
+                    continue
             val = input_dialog(stdscr, "Source name (optional)", source)
             if val is None:
                 continue
@@ -1399,6 +1436,16 @@ def main(stdscr, port):
             out = outputs[sel_output_idx]
             outs = list(g.get("outputIds", []))
             connected = out["name"] in outs
+            if not connected:
+                sources = set()
+                for iid in g.get("inputIds", []):
+                    inp = input_for_id(iid, local_state)
+                    if inp:
+                        sources.add(inp.get("source"))
+                if out["name"] in sources:
+                    if not confirm_dialog(stdscr,
+                            f"Feedback loop: this cable captures '{out['name'][:30]}'. Connect anyway?"):
+                        continue
             if connected:
                 outs.remove(out["name"])
             else:
