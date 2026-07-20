@@ -36,9 +36,17 @@ Keybindings:
     c            connect/disconnect the selected virtual cable and output
     r            rename the selected virtual cable
     d            delete the selected virtual cable/application/output
+    n            assign newly detected apps (auto-routing rules in config/app-rules.json)
     s            save the current state as a preset (empty path = autosave)
     R            refresh the endpoint and application lists from the mixer
     q            quit (Esc only cancels dialogs)
+
+Semi-automatic app assignment:
+    Apps whose audio shows up on the DEFAULT render device are matched against
+    config/app-rules.json. A matching rule routes them to its group's cable
+    automatically; unknown apps are queued (header shows "N new app(s)") and
+    keep playing through the default device's group until assigned via 'n' --
+    new apps are never silent and never guessed into the wrong group.
 
 Usage:
     python scripts/mixer_tui.py [--port 8850]
@@ -48,6 +56,7 @@ start-mixer.bat / mixer-tui.bat for the usual two-step launch).
 """
 
 import argparse
+import fnmatch
 import json
 import math
 import os
@@ -99,6 +108,15 @@ api_queue = queue.Queue()
 # (guarded by state_lock) drives the "working..." indicator in the header.
 job_queue = queue.Queue()
 busy_jobs = 0
+
+# Semi-automatic app assignment. Rules map exe names to groups: a matching app
+# that shows up on the DEFAULT render device is auto-routed to that group's
+# cable. Unknown apps are queued in pending_new_apps (header shows a hint,
+# 'n' opens the assignment picker) and keep playing through the default
+# device's group in the meantime, so nothing ever goes silent.
+app_rules = {"rules": [], "ignore": []}
+pending_new_apps = []   # guarded by state_lock
+_auto_handled = set()   # pids already auto-routed, queued, or ignored this run
 
 SELECTED_PAIR = 1
 METER_PAIR = 2
@@ -277,6 +295,96 @@ def fetch_applications(port):
             applications = []
 
 
+def _rules_path():
+    """config/app-rules.json next to config/mixers/, shared across TUI runs."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "config", "app-rules.json")
+
+
+def _load_app_rules():
+    global app_rules
+    try:
+        with open(_rules_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        app_rules = {"rules": data.get("rules", []), "ignore": data.get("ignore", [])}
+    except Exception:
+        pass  # no rules file yet: everything lands in the new-app queue
+
+
+def _save_app_rules():
+    global last_error
+    try:
+        os.makedirs(os.path.dirname(_rules_path()), exist_ok=True)
+        with open(_rules_path(), "w", encoding="utf-8") as f:
+            json.dump(app_rules, f, indent=2)
+    except Exception as e:
+        with state_lock:
+            last_error = f"Could not save app rules: {e}"
+
+
+def _rule_group_for(exe):
+    """Return the group name the rules assign this exe to, or None."""
+    exe_l = exe.lower()
+    for rule in app_rules.get("rules", []):
+        pat = str(rule.get("match", "")).lower()
+        if not pat:
+            continue
+        if "*" in pat or "?" in pat:
+            if fnmatch.fnmatch(exe_l, pat):
+                return rule.get("group")
+        elif exe_l == pat:
+            return rule.get("group")
+    return None
+
+
+def _scan_new_apps(port):
+    """Auto-route rule-matched apps off the default device; queue unknown ones.
+
+    Runs after every application-list refresh. Only looks at render sessions
+    sitting on the DEFAULT device: an app someone already put on a specific
+    cable (manually or by an earlier rule) is left alone.
+    """
+    global last_error, last_success
+    with state_lock:
+        local_apps = list(applications)
+        local_state = state
+        local_eps = list(endpoints)
+        routed_pids = {pid for (pid, _c, _g) in routed_apps.values()}
+    default_render = next(
+        (e.get("name") for e in local_eps if e.get("isRender") and e.get("isDefault")), None)
+    if not default_render:
+        return
+    groups_by_name = {g.get("name"): g for g in local_state.get("groups", [])}
+    ignore = {str(x).lower() for x in app_rules.get("ignore", [])}
+
+    for app in local_apps:
+        pid = app.get("processId")
+        exe = str(app.get("name", ""))
+        if not pid or app.get("isSystem") or app.get("isInput"):
+            continue
+        if pid in _auto_handled or pid in routed_pids:
+            continue
+        if app.get("endpoint") != default_render:
+            continue
+        _auto_handled.add(pid)
+        if exe.lower() in ignore:
+            continue
+        gname = _rule_group_for(exe)
+        if gname is None:
+            with state_lock:
+                if all(p.get("processId") != pid for p in pending_new_apps):
+                    pending_new_apps.append(app)
+            continue
+        g = groups_by_name.get(gname)
+        if g and g.get("cable"):
+            _assign_app_to_group(port, g, app)
+            with state_lock:
+                last_success = f"Auto-routed {exe} -> {gname}"
+        else:
+            with state_lock:
+                last_error = f"App rule for {exe}: group '{gname}' missing or has no cable"
+
+
 def apps_refresh_worker(port):
     """Background thread: keep the application list fresh (every 5 seconds).
 
@@ -284,8 +392,14 @@ def apps_refresh_worker(port):
     automatically means they clear on their own after an app restarts, instead
     of lying until the user presses R.
     """
+    global last_error
     while _route_running.is_set():
         fetch_applications(port)
+        try:
+            _scan_new_apps(port)
+        except Exception as e:
+            with state_lock:
+                last_error = f"App scan failed: {e}"
         for _ in range(10):
             if not _route_running.is_set():
                 return
@@ -714,6 +828,16 @@ def group_color_attr(color, pair_cache, selected=False):
     return attr
 
 
+def app_label(a):
+    """Picker label for an application: exe, window title (id helper), endpoint."""
+    name = a.get('name', '?')
+    title = (a.get('windowTitle') or '').strip()
+    ep = a.get('endpoint', '?')
+    if title and title.lower() != name.lower():
+        return f"{name} - \"{title[:48]}\" ({ep})"
+    return f"{name} ({ep})"
+
+
 def input_for_id(iid, local_state):
     """Look up an input dict by id within a state snapshot; O(n), state is small."""
     for inp in local_state.get("inputs", []):
@@ -972,6 +1096,8 @@ def main(stdscr, port):
         with state_lock:
             _load_tracked_routes(port, state)
 
+    _load_app_rules()
+
     # None of the startup fetches may block the first frame; the UI comes up
     # immediately and fills in as these complete. Applications refresh on
     # their own every 5s (apps_refresh_worker); endpoints only on demand (R).
@@ -1039,6 +1165,7 @@ def main(stdscr, port):
             local_eps = endpoints
             local_apps = applications
             local_busy = busy_jobs > 0
+            local_pending = list(pending_new_apps)
             last_error = ""
             last_success = ""
 
@@ -1054,7 +1181,8 @@ def main(stdscr, port):
 
         # Header
         busy = "  |  working..." if local_busy else ""
-        header = f" AnniAudio Mixer TUI  |  port {port}  |  {local_status}{busy} "
+        newapps = f"  |  {len(local_pending)} new app(s): press n" if local_pending else ""
+        header = f" AnniAudio Mixer TUI  |  port {port}  |  {local_status}{busy}{newapps} "
         try:
             stdscr.addstr(0, 0, header.ljust(w), curses.color_pair(HEADER_PAIR) | curses.A_BOLD)
         except curses.error:
@@ -1247,7 +1375,7 @@ def main(stdscr, port):
         # Footer
         footer = (
             "Tab:panes  j/k:nav  +/-|v:vol  m:mute  Enter/e:expand  i:add src  a:add app  g:add cable  "
-            "C:set cable  o:add output  c:connect  r:rename  d:delete  s:save  q:quit"
+            "C:set cable  o:add output  c:connect  n:new apps  r:rename  d:delete  s:save  q:quit"
         )
         try:
             stdscr.addstr(h - 1, 0, footer[:w - 1], curses.A_DIM)
@@ -1383,16 +1511,6 @@ def main(stdscr, port):
             # Apps only appear here once they own a Windows audio session; a
             # game that has not made a sound yet will be missing. The manual
             # entry covers that (press R after the app starts playing instead).
-            # The window title is shown purely to help identify oddly named
-            # exes; the exe/pid is still what gets routed.
-            def app_label(a):
-                name = a.get('name', '?')
-                title = (a.get('windowTitle') or '').strip()
-                ep = a.get('endpoint', '?')
-                if title and title.lower() != name.lower():
-                    return f"{name} - \"{title[:48]}\" ({ep})"
-                return f"{name} ({ep})"
-
             app_labels = [app_label(a) for a in local_apps]
             app_labels.append("<app not listed - enter PID manually>")
             idx = list_dialog(stdscr, "Select application", app_labels)
@@ -1520,6 +1638,39 @@ def main(stdscr, port):
             val = input_dialog(stdscr, "Save path (empty = autosave)", "")
             if val is not None:
                 api_call("POST", "/api/presets/save", {"path": val})
+        elif ch == ord('n'):
+            if not local_pending:
+                with state_lock:
+                    last_error = "No new apps waiting for assignment"
+                continue
+            idx = list_dialog(stdscr, "New applications", [app_label(a) for a in local_pending])
+            if idx is None:
+                continue
+            app = local_pending[idx]
+            exe = app.get("name", "?")
+            cable_groups = [g for g in local_state.get("groups", []) if g.get("cable")]
+            options = [f"{g['name']} (cable: {g['cable']})" for g in cable_groups]
+            options.append("<ignore this app from now on>")
+            options.append("<not now>")
+            gidx = list_dialog(stdscr, f"Assign {exe} to", options)
+            if gidx is None:
+                continue
+            with state_lock:
+                pending_new_apps[:] = [p for p in pending_new_apps
+                                       if p.get("processId") != app.get("processId")]
+            if gidx == len(options) - 1:
+                continue  # decide later; pid stays in _auto_handled for this run
+            if gidx == len(options) - 2:
+                app_rules.setdefault("ignore", []).append(exe.lower())
+                _save_app_rules()
+                with state_lock:
+                    last_success = f"{exe} will be ignored from now on"
+                continue
+            g = cable_groups[gidx]
+            # Save the rule first, so the next launch of this app is automatic.
+            app_rules.setdefault("rules", []).append({"match": exe.lower(), "group": g.get("name")})
+            _save_app_rules()
+            run_job(lambda g=g, app=app: _assign_app_to_group(port, g, app))
         elif ch == ord('R'):
             run_job(lambda: fetch_endpoints(port))
             run_job(lambda: fetch_applications(port))
