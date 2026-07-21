@@ -1,13 +1,37 @@
 {
-  "_comment": "Semi-automatic app assignment for the mixer TUI. 'rules' auto-route a matching app to its group's cable the moment its audio appears on the default render device. 'ignore' suppresses the new-app prompt for background/system processes. 'match' is a case-insensitive exe name; * and ? wildcards are allowed.",
   "rules": [
-    { "match": "spotify.exe", "group": "Music" },
-    { "match": "brave.exe", "group": "Media" },
-    { "match": "chrome.exe", "group": "Media" },
-    { "match": "firefox.exe", "group": "Media" },
-    { "match": "htgame.exe", "group": "Game" },
-    { "match": "nteglobalgame.exe", "group": "Game" },
-    { "match": "steam.exe", "group": "Game" }
+    {
+      "match": "spotify.exe",
+      "group": "Music"
+    },
+    {
+      "match": "brave.exe",
+      "group": "Media"
+    },
+    {
+      "match": "chrome.exe",
+      "group": "Media"
+    },
+    {
+      "match": "firefox.exe",
+      "group": "Media"
+    },
+    {
+      "match": "htgame.exe",
+      "group": "Game"
+    },
+    {
+      "match": "nteglobalgame.exe",
+      "group": "Game"
+    },
+    {
+      "match": "steam.exe",
+      "group": "Game"
+    },
+    {
+      "match": "rustdesk.exe",
+      "group": "System"
+    }
   ],
   "ignore": [
     "discord.exe",

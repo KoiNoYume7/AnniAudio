@@ -197,12 +197,43 @@ def run_job(fn):
     job_queue.put(fn)
 
 
+def _pid_alive(pid):
+    """True if a process with this id currently exists (best effort, Windows)."""
+    if not pid:
+        return False
+    try:
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not h:
+            return False
+        k32.CloseHandle(h)
+        return True
+    except Exception:
+        # If we can't check, assume alive so we don't wrongly drop routes.
+        return True
+
+
+# pid -> consecutive repair failures. After _ROUTE_FAIL_LIMIT the pid is parked
+# in _route_unroutable and no longer retried (some processes -- elevated apps
+# like remote-desktop tools -- can never be routed by winappaudiorouter, and
+# retrying them every cycle just spams the status line).
+_route_fail_counts = {}
+_route_unroutable = set()
+_ROUTE_FAIL_LIMIT = 3
+
+
 def _route_worker(port):
     """Background thread: repair per-app routes that Windows overrides.
 
     Every few seconds it checks every tracked app route. If the current route
     does not match the cable we expect, it re-applies it. This keeps Spotify/etc.
     on the chosen VAC even if the volume mixer is touched.
+
+    Routes whose process has exited are dropped; routes that fail to repair
+    repeatedly (e.g. elevated processes we cannot touch) are parked so they
+    stop retrying and stop spamming errors.
     """
     global last_error, last_success
     while _route_running.is_set():
@@ -211,6 +242,16 @@ def _route_worker(port):
             routes = list(routed_apps.items())
         for iid, (pid, cable, gid) in routes:
             if not cable or not _HAS_ROUTER or not winappaudiorouter:
+                continue
+            if pid in _route_unroutable:
+                continue
+            # Drop routes for processes that are gone: their pid is stale and
+            # would fail (or, if reused, mis-route) forever.
+            if not _pid_alive(pid):
+                with state_lock:
+                    if iid in routed_apps:
+                        del routed_apps[iid]
+                _route_fail_counts.pop(pid, None)
                 continue
             try:
                 with winappaudiorouter.com.com_initialized():
@@ -221,9 +262,15 @@ def _route_worker(port):
                         winappaudiorouter.set_app_output_device(process_id=pid, device=cable)
                         with state_lock:
                             last_success = f"Repaired route for pid {pid} -> {cable}"
+                _route_fail_counts.pop(pid, None)
             except Exception as e:
-                with state_lock:
-                    last_error = f"Route repair failed for pid {pid}: {e}"
+                n = _route_fail_counts.get(pid, 0) + 1
+                _route_fail_counts[pid] = n
+                if n >= _ROUTE_FAIL_LIMIT:
+                    _route_unroutable.add(pid)
+                    with state_lock:
+                        last_error = (f"Giving up auto-routing pid {pid} -> {cable} "
+                                      f"(can't control this app): {e}")
         # Wait in small chunks so we can exit quickly.
         for _ in range(10):
             if not _route_running.is_set():
