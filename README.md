@@ -28,7 +28,9 @@ What works today:
 Not yet finished:
 
 - The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing. Daily use currently relies on a third-party virtual cable driver plus WASAPI loopback.
-- **HRTF** spatial audio is still a standalone POC, not wired into the mixer.
+- **HRTF** spatial audio has a working, verified standalone POC (`poc_hrtf`: FFT
+  overlap-add convolution over MIT KEMAR HRIRs, with correct ITD/ILD cues) but is
+  not yet wired into the mixer — per-input positioning is the next step.
 - No graphical mixer UI yet (the TUI and the Loupedeck plugin are the current surfaces); no installer.
 
 ---
@@ -78,6 +80,11 @@ Built binaries will be in `build/bin/Release/`.
 
 # WASAPI loopback: renders a 1 kHz sine and verifies it comes back through loopback capture
 .\build\bin\Release\poc_wasapi.exe
+
+# HRTF spatializer: verifies the convolution engine + spatial cues against MIT KEMAR,
+# and renders hrtf_orbit_48k.wav (a source circling your head) for a listening check.
+# Run from the repo root so assets/hrtf/mit_kemar.sofa resolves.
+.\build\bin\Release\poc_hrtf.exe
 
 # List all audio endpoints
 .\build\bin\Release\route_cli.exe list
@@ -327,7 +334,7 @@ AnniAudio/
 | 0 | Research — proof of concept for every major component | Done |
 | 1 | Virtual driver + WASAPI routing — audio flows through AnniAudio | Engine + loopback working; driver unsigned |
 | 2 | DSP chain + routing matrix — EQ, RNNoise, per-app routing, scenes, control API, Loupedeck | Working end-to-end |
-| 3 | Spatial audio — HRTF convolution | Planned |
+| 3 | Spatial audio — HRTF convolution | POC + engine done; mixer integration next |
 | 4 | API + hotkeys + CLI | Control API + TUI + Loupedeck done; global hotkeys planned |
 | 5 | UI — graphical mixer | Planned |
 | 6 | Installer, driver signing, packaging | Planned |

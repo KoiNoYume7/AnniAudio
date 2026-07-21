@@ -18,7 +18,7 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 - [x] Get WASAPI loopback capture working — capture what's playing on a device
 - [ ] Integrate NVIDIA RTX Effects SDK in a test harness — confirm it runs on the GPU
 - [x] Integrate RNNoise in a test harness — confirm it reduces noise on a test signal
-- [ ] Load a SOFA HRTF file with libmysofa, apply convolution to a test signal, verify it sounds spatial through headphones
+- [x] Load a SOFA HRTF file with libmysofa, apply convolution to a test signal, verify it sounds spatial through headphones — `poc_hrtf` (Phase 3 Stage A)
 - [x] Implement a basic biquad parametric EQ and verify it shapes frequency response correctly
 
 **Exit criteria:** Every component listed above works in isolation. No major technical unknowns remain.
@@ -59,16 +59,53 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 
 ## Phase 3 — Spatial Audio
 
-**Goal:** HRTF-based spatial audio works and sounds noticeably good through headphones.
+**Goal:** HRTF-based spatial audio works, sounds noticeably good through headphones,
+and is a first-class node in the live mixer (not just a standalone POC).
 
-- [ ] SOFA file loader via libmysofa
-- [ ] FFT-based overlap-add convolution engine using KissFFT
-- [ ] HRTF profile selection and switching at runtime
-- [ ] MIT KEMAR and at least one other dataset bundled
-- [ ] SOFA file loading from user-provided path
-- [ ] Spatial audio node plugs into DSP chain
+Built once as a reusable `Spatializer` DSP class (`src/dsp/spatializer.{hpp,cpp}`),
+then wired into the matrix in two phases: per-input positioning first (daily value),
+per-output virtualization second (the Windows Sonic replacement). The engine — FFT
+overlap-add convolution on KissFFT, HRIRs from libmysofa — is shared by both.
 
-**Exit criteria:** A mono source processed through the spatial node sounds clearly 3D through headphones. Noticeably better than Windows Sonic.
+Dependencies vendored in `third_party/`: **KissFFT** (BSD, FFT), **libmysofa** 1.3.3
+(SOFA reader), **miniz** (zlib-compatible inflate for libmysofa's gzip'd HDF5 chunks,
+avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_kemar.sofa`.
+
+### Stage A — POC + convolution engine — **DONE**
+- [x] Vendor KissFFT + libmysofa (+ miniz) and bundle MIT KEMAR
+- [x] `Spatializer` DSP class: `loadHrtf()` (libmysofa resamples to the stream rate),
+      `setDirection(az, el)`, real-time-safe `process()` (mono in → interleaved stereo).
+      Overlap-add with a fixed tail, so any block size ≤ maxBlock convolves correctly —
+      drops straight into the mixer's variable frame counts.
+- [x] ITD preserved by placing each ear's HRIR at its libmysofa onset delay.
+- [x] `poc_hrtf` verification harness (`build/bin/Release/poc_hrtf.exe`):
+      - block-size invariance (Δ ≈ 6e-7), impulse response == dataset HRIR (Δ ≈ 3e-8)
+      - physical spatial cues: ILD symmetric to ±11.8 dB, ITD to ±667 µs (the human max)
+      - renders `hrtf_orbit_48k.wav`, a binaural orbit for the human "does it sound 3D?" gate.
+
+### Stage B — Per-input positioning (mixer integration)
+- [ ] Add `spatial` + `azimuth`/`elevation` to the **input** config model
+      (mirrors how `denoise` / `eqPreset` already live on an input).
+- [ ] A spatialized strip downmixes to mono, convolves to a stereo contribution
+      summed into the output — the one real engine change, at the per-strip DSP point
+      in `AudioMixer.cpp`. Pre-allocate all `Spatializer` state before the RT thread.
+- [ ] Thread through `AudioMixerMatrix` → `MixerControlServer` API → keep
+      `docs/MIXER-CONTROL-API.md` in sync.
+- [ ] Runtime direction changes without clicks (double-buffer the HRIR swap).
+
+### Stage C — Surface + document
+- [ ] TUI: toggle spatial + set azimuth/elevation on a source row (beside `NS`/`EQ`).
+- [ ] Loupedeck: an azimuth dial action (a physical knob is the natural fit).
+- [ ] README + this file: flip Phase 3 to "in daily use".
+
+### Stage D — Per-output virtualization (Windows Sonic replacement)
+- [ ] Flag an output as spatial; map a virtual 5.1/7.1 layout to fixed directions and
+      binauralize the mix — reuses the same `Spatializer`, near-free once Stage B ships.
+- [ ] Bundle SADIE II as the high-quality dataset option; support user-provided SOFA paths.
+
+**Exit criteria:** A mono source positioned via a per-input direction sounds clearly 3D
+through headphones and tracks its position live from the TUI/Loupedeck. Noticeably
+better than Windows Sonic.
 
 ---
 

@@ -56,10 +56,59 @@ if(MSVC)
         COMPILE_FLAGS "/wd4244 /wd4267 /wd4305 /wd4996")
 endif()
 
-# --- Production DSP library (Phase 2) ---
-add_library(audio_dsp STATIC src/dsp/eq.cpp src/dsp/noise_suppressor.cpp)
+# --- KissFFT static library (Phase 3: HRTF convolution) ---
+# BSD-3 / Unlicensed. Default scalar type is float (no FIXED_POINT / USE_SIMD).
+add_library(kissfft STATIC
+    third_party/kissfft/kiss_fft.c
+    third_party/kissfft/kiss_fftr.c)
+target_include_directories(kissfft PUBLIC third_party/kissfft)
+if(MSVC)
+    set_target_properties(kissfft PROPERTIES COMPILE_FLAGS "/wd4244 /wd4305 /wd4996")
+endif()
+
+# --- libmysofa static library (Phase 3: SOFA HRTF reader) ---
+# Vendored from hoene/libmysofa 1.3.3. gunzip.c needs a zlib inflate API, which
+# we satisfy with miniz (third_party/miniz/zlib.h -> miniz.h) instead of full zlib.
+set(MYSOFA_SOURCES
+    third_party/libmysofa/src/hrtf/cache.c
+    third_party/libmysofa/src/hrtf/check.c
+    third_party/libmysofa/src/hrtf/easy.c
+    third_party/libmysofa/src/hrtf/interpolate.c
+    third_party/libmysofa/src/hrtf/kdtree.c
+    third_party/libmysofa/src/hrtf/lookup.c
+    third_party/libmysofa/src/hrtf/loudness.c
+    third_party/libmysofa/src/hrtf/minphase.c
+    third_party/libmysofa/src/hrtf/neighbors.c
+    third_party/libmysofa/src/hrtf/reader.c
+    third_party/libmysofa/src/hrtf/resample.c
+    third_party/libmysofa/src/hrtf/spherical.c
+    third_party/libmysofa/src/hrtf/tools.c
+    third_party/libmysofa/src/hdf/btree.c
+    third_party/libmysofa/src/hdf/dataobject.c
+    third_party/libmysofa/src/hdf/fractalhead.c
+    third_party/libmysofa/src/hdf/gcol.c
+    third_party/libmysofa/src/hdf/gunzip.c
+    third_party/libmysofa/src/hdf/superblock.c
+    third_party/libmysofa/src/resampler/speex_resampler.c
+    third_party/miniz/miniz.c)
+add_library(mysofa STATIC ${MYSOFA_SOURCES})
+target_include_directories(mysofa PUBLIC third_party/libmysofa/src/hrtf)
+target_include_directories(mysofa PRIVATE
+    third_party/libmysofa/src/hdf
+    third_party/libmysofa/src/resampler
+    third_party/miniz)
+if(MSVC)
+    set_source_files_properties(${MYSOFA_SOURCES} PROPERTIES
+        COMPILE_FLAGS "/wd4244 /wd4267 /wd4305 /wd4996 /wd4018 /wd4101 /wd4133")
+endif()
+
+# --- Production DSP library (Phase 2 + Phase 3 spatializer) ---
+add_library(audio_dsp STATIC
+    src/dsp/eq.cpp
+    src/dsp/noise_suppressor.cpp
+    src/dsp/spatializer.cpp)
 target_include_directories(audio_dsp PUBLIC src/dsp third_party/rnnoise/include)
-target_link_libraries(audio_dsp PUBLIC rnnoise)
+target_link_libraries(audio_dsp PUBLIC rnnoise kissfft mysofa)
 
 # --- Phase 0 POC targets (standalone, not part of the main build) ---
 # Each POC is a self-contained executable built only when explicitly requested.
@@ -70,7 +119,8 @@ target_link_libraries(audio_dsp PUBLIC rnnoise)
 add_executable(poc_eq src/dsp/poc_eq.cpp)
 add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp)
 target_link_libraries(poc_rnnoise PRIVATE rnnoise)
-# add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
+add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
+target_link_libraries(poc_hrtf PRIVATE audio_dsp)
 add_executable(poc_wasapi src/core/poc_wasapi.cpp)
 target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
 
