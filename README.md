@@ -12,25 +12,24 @@ Part of the [Anni Ecosystem](https://github.com/KoiNoYume7).
 
 ## Status
 
-**Phase 1 — Active development**
+**Phase 2 — DSP + routing matrix in daily use**
 
 What works today:
 
-- Virtual WDM driver builds and links (`AnniAudioCable.sys`).
-- WASAPI routing engine (`AudioEngine`) compiles and enumerates endpoints.
-- `AudioEngine` now supports **WASAPI loopback capture** from a render endpoint through the `process` CLI command.
-- Phase 0 POCs all pass:
-  - `poc_eq` — biquad parametric EQ frequency response verified.
-  - `poc_rnnoise` — CPU noise cancellation, ~57 dB reduction on white noise.
-  - `poc_wasapi` — loopback capture + render, 1 kHz sine round-trip verified.
-- `route_cli list` correctly shows all render/capture devices.
-- CMake build configured; C++20 core + RNNoise submodule build cleanly.
+- **Live routing matrix** (`AudioMixerMatrix`): any number of inputs → colour-coded groups (virtual cables) → any number of outputs, edited live over a REST + SSE control API with no audio glitches. State autosaves continuously.
+- **Per-app routing**: applications are routed to a group's cable via `winappaudiorouter`, or captured directly via **Windows process loopback** (`ActivateAudioInterfaceAsync`), avoiding double audio.
+- **Semi-automatic app assignment**: apps landing on the default device are matched against `config/app-rules.json` and auto-routed; unknown apps queue for one-tap assignment instead of being guessed.
+- **Per-output send gains and mute**: one group can play at different levels into different outputs (e.g. full on headphones, quiet on speakers) and each output has its own mute.
+- **Mic processing**: RNNoise suppression and a "voice" EQ preset run engine-side per input, so the cleaned signal follows the mic through every route (e.g. into Discord via a Mic cable).
+- **Scenes**: named level snapshots (volumes, mutes, send gains, output masters) applied instantly by name.
+- **Loupedeck plugin** (`AnniAudioMixerPlugin/`): a real Logi Actions C# SDK plugin with dials and touch buttons for group/output volume, mute, and scene recall, driven entirely through the control API.
+- **Autostart at logon**, a curses **TUI** front-end, and Phase 0 POCs (`poc_eq`, `poc_rnnoise`, `poc_wasapi`) all still pass.
 
 Not yet finished:
 
-- The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing.
-- **EQ, RNNoise and a multi-source mixer** are now connected to the CLI. **HRTF** is still a standalone POC only.
-- Loupedeck integration works over MIDI; the on-device screen feedback and a polished mixer GUI are still on the roadmap.
+- The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing. Daily use currently relies on a third-party virtual cable driver plus WASAPI loopback.
+- **HRTF** spatial audio is still a standalone POC, not wired into the mixer.
+- No graphical mixer UI yet (the TUI and the Loupedeck plugin are the current surfaces); no installer.
 
 ---
 
@@ -178,9 +177,9 @@ The `mixer` command mixes any number of WASAPI sources into one output with per-
 .\build\bin\Release\route_cli.exe mixer config/mixers/loupedeck.json
 ```
 
-Mixer config files live in `config/mixers/` and act as presets: `output`, `master` volume, and a `strips` array of `{ name, source, volume, muted }`.
+Mixer config files live in `config/mixers/` and describe the full matrix: `inputs` (device or application sources, each with optional `denoise` / `eqPreset`), `groups` (virtual cables with a fader, mute, colour, optional per-app `cable`, `outputIds`, and per-output `outputGains`), and `outputs` (render endpoints with a `master` volume and `muted`). The running mixer autosaves to `config/mixers/main.json`.
 
-The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default port `8850`) that any client can drive — see `docs/MIXER-CONTROL-API.md` for the full design. A dedicated mixer GUI and a Loupedeck Live plugin (via the Logi Actions C# SDK) to drive it from the device's 6 knobs are in progress.
+The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default port `8850`) that any client can drive — see `docs/MIXER-CONTROL-API.md` for the full surface. Three clients ship today: the curses **TUI** (below), the **Loupedeck plugin** (`AnniAudioMixerPlugin/`), and any HTTP client. A graphical mixer GUI is still on the roadmap.
 
 #### Mixer TUI
 
@@ -210,6 +209,8 @@ The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default por
 | `o` | Add an output |
 | `c` | Connect/disconnect the selected virtual cable and output |
 | `n` | Assign newly detected apps (semi-automatic routing; rules in `config/app-rules.json`) |
+| `N` / `E` | On a source row: toggle RNNoise suppression / the "voice" EQ preset for that input (processed engine-side, pre-mix; shown as `NS` / `EQ` tags) |
+| `S` | Scenes: apply a saved level overlay or save the current levels as a new scene (`config/scenes/`) |
 | `r` | Rename the selected virtual cable |
 | `d` | Delete the selected virtual cable/application/output |
 | `s` | Save the current state as a preset (empty path = autosave) |
@@ -230,7 +231,18 @@ Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing;
 
 This drops a small `.vbs` into the current user's Startup folder that launches `route_cli.exe mixer` with a hidden window. It deliberately is not a Windows service: WASAPI audio endpoints only exist inside the user session, so the mixer has to start at logon, not at boot. Config is loaded from `config/mixers/main.json` (autosaved continuously while running), so a force-stop never loses state.
 
-`route_cli midi list` / `route_cli midi <device-hint>` remain available as a standalone diagnostic to inspect raw MIDI messages from any connected controller; it is not used to control the mixer.
+#### Loupedeck plugin
+
+`AnniAudioMixerPlugin/` is a Logi Actions C# SDK plugin (`.NET 8`) that controls the mixer from a Loupedeck / Razer Stream Controller device. It talks only to the control API — no direct audio access — so it stays in sync with the TUI and any other client. Build it with `dotnet build AnniAudioMixerPlugin/src/AnniAudioMixerPlugin.csproj -c Release`; a post-build step links it into the Logi Plugin Service and reloads it. Actions:
+
+- **Cable Volume** dial (one per group): turn = volume, press = mute.
+- **Output Master** dial (one per output): turn = master volume, press = mute.
+- **Mute** touch button (one per group): shows name + level, one-tap toggle.
+- **Scene** touch button (one per saved scene): one-tap recall.
+
+The action lists mirror live mixer state, so groups/outputs/scenes appearing, disappearing, or being renamed update the device automatically. If the mixer is not running, the plugin reports an error status.
+
+`route_cli midi list` / `route_cli midi <device-hint>` remain available as a standalone diagnostic to inspect raw MIDI messages from any connected controller; it is not used to control the mixer (the Loupedeck plugin above is the supported control surface).
 
 See `docs/ROADMAP.md` for the full breakdown.
 
@@ -270,11 +282,14 @@ See `docs/ROADMAP.md` for the full breakdown.
 
 Key components:
 
-- `src/core/AudioEngine.cpp` — WASAPI capture/render with a ring buffer and format conversion.
-- `src/core/route_cli.cpp` — command-line routing tool built on `AudioEngine`.
+- `src/core/AudioMixer.cpp` — single-output WASAPI mixer: sums N capture strips (device / render-loopback / process-loopback) into one render endpoint, with per-strip volume/mute, master volume/mute, and capture-side DSP.
+- `src/core/AudioMixerMatrix.cpp` — the routing matrix over multiple `AudioMixer` outputs: inputs, groups (cables), per-output send gains, preset/scene persistence.
+- `src/core/MixerControlServer.cpp` — local HTTP + SSE control API.
+- `src/core/AudioEngine.cpp` — original single source→output engine (WASAPI capture/render, ring buffer, format conversion) used by the `process` CLI command.
+- `src/dsp/` — `EqChain` (biquad parametric EQ) and `NoiseSuppressor` (RNNoise), built as the `audio_dsp` library and linked into the mixer.
+- `src/core/route_cli.cpp` — CLI entry point (`list`, `process`, `mixer`, `midi`).
+- `AnniAudioMixerPlugin/` — Loupedeck control plugin.
 - `driver/` — WDM PortCls virtual audio driver.
-- `src/dsp/poc_eq.cpp` — biquad parametric EQ POC (all 7 filter types).
-- `src/noise/poc_rnnoise.cpp` — RNNoise integration POC.
 - `cli/anniaudio.ps1` — control panel for driver install, config, and test-signing mode.
 
 Full technical breakdown in `docs/ARCHITECTURE.md`.
@@ -286,22 +301,19 @@ Full technical breakdown in `docs/ARCHITECTURE.md`.
 ```
 AnniAudio/
 ├── src/
-│   ├── core/        # Engine, session management, route_cli
-│   ├── driver/      # (placeholder; real driver lives in /driver)
-│   ├── dsp/         # EQ and filter POC
-│   ├── noise/       # RNNoise and NVIDIA RTX SDK wrappers
-│   ├── spatial/     # HRTF / convolution (placeholder)
-│   ├── routing/     # Routing matrix logic (placeholder)
-│   └── api/         # REST/WebSocket server (placeholder)
-├── driver/          # WDM PortCls driver source + .inf template
+│   ├── core/        # Engine, mixer matrix, control server, route_cli
+│   ├── dsp/         # EQ chain + RNNoise wrapper (audio_dsp library)
+│   ├── noise/       # RNNoise POC
+│   └── spatial/     # HRTF / convolution (placeholder)
+├── AnniAudioMixerPlugin/  # Loupedeck (Logi Actions C#) plugin
+├── driver/          # WDM PortCls virtual audio driver source + .inf template
 ├── include/         # Public headers
-├── cli/             # PowerShell control panel
-├── scripts/         # Build helpers, driver scripts, TUI/GUI wrappers
-├── config/          # Cable definitions and user settings
-├── docs/            # Architecture, roadmap, research
-├── tests/           # Unit and integration tests (placeholder)
-├── third_party/     # Vendored dependencies (rnnoise, etc.)
-├── assets/          # Icons, bundled HRTF datasets
+├── cli/             # PowerShell control panel (driver install / signing)
+├── scripts/         # mixer_tui.py and build/driver helpers
+├── config/          # mixers/ (matrix configs), scenes/, app-rules.json, presets/, profiles/, cables
+├── docs/            # ARCHITECTURE, ROADMAP, MIXER-CONTROL-API, research
+├── third_party/     # Vendored dependencies (rnnoise)
+├── *.bat            # start/stop mixer, TUI/GUI launchers, autostart install
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -314,11 +326,11 @@ AnniAudio/
 |---|---|---|
 | 0 | Research — proof of concept for every major component | Done |
 | 1 | Virtual driver + WASAPI routing — audio flows through AnniAudio | Engine + loopback working; driver unsigned |
-| 2 | DSP chain — EQ and noise cancellation working end-to-end | In progress |
+| 2 | DSP chain + routing matrix — EQ, RNNoise, per-app routing, scenes, control API, Loupedeck | Working end-to-end |
 | 3 | Spatial audio — HRTF convolution | Planned |
-| 4 | API + hotkeys + CLI | Planned |
-| 5 | UI | Planned |
-| 6 | Installer and packaging | Planned |
+| 4 | API + hotkeys + CLI | Control API + TUI + Loupedeck done; global hotkeys planned |
+| 5 | UI — graphical mixer | Planned |
+| 6 | Installer, driver signing, packaging | Planned |
 
 Full detail in `docs/ROADMAP.md`.
 
