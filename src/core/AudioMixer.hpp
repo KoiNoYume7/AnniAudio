@@ -28,6 +28,13 @@ struct MixerStripConfig {
     // this strip hears the processed signal.
     bool        denoise = false;   // RNNoise suppression (needs 48 kHz capture)
     std::string eqPreset;          // "" = off; "voice" = HPF + mud cut + presence + air
+    // HRTF binaural spatialization. When on, the strip is downmixed to mono and
+    // convolved to a positioned stereo image (see dsp::Spatializer). Requires a
+    // stereo-or-wider output. azimuth: 0 = front, +90 = left, -90 = right;
+    // elevation: 0 = ear level, +90 = above.
+    bool        spatial = false;
+    float       azimuth = 0.0f;
+    float       elevation = 0.0f;
     // Optional binding to a physical controller's Nth control (e.g. a Loupedeck
     // Live knob). Purely informational to AudioMixer itself — it's read back via
     // snapshot() so a control-API client can act on it. 0-based, no fixed range
@@ -43,6 +50,9 @@ struct StripSnapshot {
     float               volume = 1.0f;
     bool                muted  = false;
     std::optional<int>  knobIndex;
+    bool                spatial = false;
+    float               azimuth = 0.0f;
+    float               elevation = 0.0f;
     float               peak = 0.0f; // post-fader peak level (0..1)
     float               rms  = 0.0f; // post-fader RMS level (0..1)
 };
@@ -98,6 +108,10 @@ public:
 
     bool  setStripVolume(StripId id, float vol);
     bool  setStripMuted(StripId id, bool muted);
+    // Live HRTF direction change for a spatialized strip. Cheap and glitch-free
+    // (applied on the audio thread between blocks); no-op if the strip isn't
+    // spatialized. Safe to call at knob-turn rates.
+    bool  setStripDirection(StripId id, float azimuth, float elevation);
 
     void  setMasterVolume(float v);
     float masterVolume() const;

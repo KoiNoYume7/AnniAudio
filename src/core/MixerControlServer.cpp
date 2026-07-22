@@ -38,6 +38,9 @@ nlohmann::json toJson(const InputSnapshot& in)
     j["source"]   = in.source;
     j["denoise"]  = in.denoise;
     j["eqPreset"] = in.eqPreset;
+    j["spatial"]  = in.spatial;
+    j["azimuth"]  = in.azimuth;
+    j["elevation"]= in.elevation;
     j["peak"]     = in.peak;
     j["rms"]      = in.rms;
     return j;
@@ -373,6 +376,9 @@ void MixerControlServer::Impl::registerRoutes()
         cfg.source   = body.value("source", std::string{});
         cfg.denoise  = body.value("denoise", false);
         cfg.eqPreset = body.value("eqPreset", std::string{});
+        cfg.spatial  = body.value("spatial", false);
+        cfg.azimuth  = body.value("azimuth", 0.0f);
+        cfg.elevation= body.value("elevation", 0.0f);
         if (cfg.name.empty() || cfg.source.empty()) {
             sendError(res, 400, "missing required fields 'name' and 'source'"); return;
         }
@@ -411,6 +417,9 @@ void MixerControlServer::Impl::registerRoutes()
         cfg.source   = body.value("source", cur->source);
         cfg.denoise  = body.value("denoise", cur->denoise);
         cfg.eqPreset = body.value("eqPreset", cur->eqPreset);
+        cfg.spatial  = body.value("spatial", cur->spatial);
+        cfg.azimuth  = body.value("azimuth", cur->azimuth);
+        cfg.elevation= body.value("elevation", cur->elevation);
         if (cfg.name.empty() || cfg.source.empty()) {
             sendError(res, 400, "'name' and 'source' cannot be empty"); return;
         }
@@ -423,6 +432,30 @@ void MixerControlServer::Impl::registerRoutes()
             if (in.id == id) { sendJson(res, toJson(in)); return; }
         }
         sendJson(res, nlohmann::json{{"id", id}}, 202);
+    });
+
+    // Live HRTF direction change. Unlike PATCH (which rebuilds the input's
+    // strips), this updates the running spatializer in place — glitch-free and
+    // safe to call at knob-turn rates. Body: {"azimuth": deg, "elevation": deg}.
+    svr.Post(R"(/api/inputs/(\d+)/direction)", [this](const httplib::Request& req, httplib::Response& res) {
+        InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+
+        auto snap = matrix.snapshot();
+        const InputSnapshot* cur = nullptr;
+        for (const auto& in : snap.inputs) if (in.id == id) { cur = &in; break; }
+        if (cur == nullptr) { sendError(res, 404, "input not found"); return; }
+
+        float az = body.value("azimuth", cur->azimuth);
+        float el = body.value("elevation", cur->elevation);
+        if (!matrix.setInputDirection(id, az, el)) { sendError(res, 404, "input not found"); return; }
+        markDirty();
+
+        auto after = matrix.snapshot();
+        for (const auto& in : after.inputs) if (in.id == id) { sendJson(res, toJson(in)); return; }
+        sendJson(res, nlohmann::json{{"id", id}, {"azimuth", az}, {"elevation", el}});
     });
 
     svr.Delete(R"(/api/inputs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {

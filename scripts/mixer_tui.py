@@ -41,6 +41,8 @@ Keybindings:
     n            assign newly detected apps (auto-routing rules in config/app-rules.json)
     N / E        on a source row: toggle RNNoise suppression / the "voice" EQ
                  preset for that input (processed engine-side, pre-mix)
+    H / Y        on a source row: toggle HRTF 3D spatial (H) and aim it (Y) —
+                 azimuth 0=front, +90=left, -90=right (needs a stereo output)
     S            scenes: apply a saved level overlay (volumes/mutes/sends) or
                  save the current levels as a new scene (config/scenes/)
     s            save the current state as a preset (empty path = autosave)
@@ -1343,6 +1345,8 @@ def main(stdscr, port):
                     fx += " NS"
                 if inp.get("eqPreset"):
                     fx += " EQ"
+                if inp.get("spatial"):
+                    fx += " 3D%+d" % int(inp.get("azimuth", 0))
                 itype += fx
                 peak = max(inp.get("peak", 0.0), inp.get("rms", 0.0))
                 pct = level_to_pct(peak)
@@ -1809,6 +1813,40 @@ def main(stdscr, port):
                 else:
                     body = {"eqPreset": "" if inp.get("eqPreset") else "voice"}
                 api_call("PATCH", f"/api/inputs/{inp['id']}", body)
+        elif ch == ord('H'):
+            # Toggle HRTF binaural spatialization on the selected INPUT row.
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] != "input":
+                    with state_lock:
+                        last_error = "Expand a cable and select a source row first"
+                    continue
+                inp = item[2]
+                api_call("PATCH", f"/api/inputs/{inp['id']}",
+                         {"spatial": not inp.get("spatial", False)})
+        elif ch == ord('Y'):
+            # Aim a spatialized input: azimuth (0=front, +90=left, -90=right),
+            # optionally elevation. Sent live via the direction endpoint.
+            if pane == 0 and group_rows:
+                item = group_rows[sel_group_idx]
+                if item[0] != "input":
+                    with state_lock:
+                        last_error = "Expand a cable and select a source row first"
+                    continue
+                inp = item[2]
+                if not inp.get("spatial", False):
+                    with state_lock:
+                        last_error = "Enable spatial with H first"
+                    continue
+                val = input_dialog(stdscr, "Azimuth -180..180 (0=front,+90=left)",
+                                   str(int(inp.get("azimuth", 0))))
+                if val:
+                    try:
+                        api_call("POST", f"/api/inputs/{inp['id']}/direction",
+                                 {"azimuth": float(val)})
+                    except ValueError:
+                        with state_lock:
+                            last_error = f"Not a number: {val}"
         elif ch == ord('R'):
             run_job(lambda: fetch_endpoints(port))
             run_job(lambda: fetch_applications(port))

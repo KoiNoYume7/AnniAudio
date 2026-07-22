@@ -66,6 +66,7 @@ std::vector<float> runChunked(Spatializer& sp, const std::vector<float>& mono, u
 void captureIR(Spatializer& sp, uint32_t len, std::vector<float>& left, std::vector<float>& right) {
     left.assign(len, 0.0f);
     right.assign(len, 0.0f);
+    sp.reset();   // start from a clean tail so the captured IR isn't contaminated
     const uint32_t block = 256;
     std::vector<float> in(block, 0.0f), out(block * 2, 0.0f);
     uint32_t produced = 0;
@@ -145,11 +146,9 @@ int main(int argc, char** argv) {
     {
         auto noise = makeNoise(4000);
         sp.setDirection(30.0f, 0.0f);
-        auto a = runChunked(sp, noise, 512);
-        sp.setDirection(30.0f, 0.0f);   // reset overlap state
-        auto b = runChunked(sp, noise, 100);
-        sp.setDirection(30.0f, 0.0f);
-        auto c = runChunked(sp, noise, 337);   // deliberately not a divisor
+        sp.reset(); auto a = runChunked(sp, noise, 512);
+        sp.reset(); auto b = runChunked(sp, noise, 100);
+        sp.reset(); auto c = runChunked(sp, noise, 337);   // deliberately not a divisor
         double maxd = 0.0;
         for (size_t i = 0; i < a.size(); ++i) {
             maxd = std::max(maxd, (double)std::fabs(a[i] - b[i]));
@@ -259,6 +258,7 @@ int main(int argc, char** argv) {
         for (const Anchor& a : anchors) {
             std::printf("    %5.1fs  %s\n", out.size() / (2.0 * kSampleRate), a.name);
             sp.setDirection(a.az, a.el);
+            sp.reset();   // clean start per discrete anchor
             uint32_t hn = (uint32_t)(hold * kSampleRate);
             auto burst = makeNoise(hn, 4242);
             for (uint32_t i = 0; i < hn; ++i) {

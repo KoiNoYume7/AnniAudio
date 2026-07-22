@@ -40,6 +40,9 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
         ij["source"] = in.source;
         ij["denoise"] = in.denoise;
         ij["eqPreset"] = in.eqPreset;
+        ij["spatial"] = in.spatial;
+        ij["azimuth"] = in.azimuth;
+        ij["elevation"] = in.elevation;
         ij["peak"] = in.peak;
         ij["rms"] = in.rms;
         j["inputs"].push_back(ij);
@@ -88,6 +91,9 @@ MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g, cons
     cfg.sourceType = (in.type == "application") ? StripSourceType::Application : StripSourceType::Device;
     cfg.denoise = in.denoise;
     cfg.eqPreset = in.eqPreset;
+    cfg.spatial = in.spatial;
+    cfg.azimuth = in.azimuth;
+    cfg.elevation = in.elevation;
     cfg.volume = g.volume * groupGainFor(g, outName);
     cfg.muted = g.muted;
     cfg.knobIndex = g.knobIndex;
@@ -287,6 +293,26 @@ bool AudioMixerMatrix::updateInput(InputId id, const InputConfig& cfg)
     }
     for (GroupId gid : affected) rebuildGroupRoutesLocked(gid);
 
+    maybeAutosave();
+    return true;
+}
+
+bool AudioMixerMatrix::setInputDirection(InputId id, float azimuth, float elevation)
+{
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    auto it = m_impl->inputs.find(id);
+    if (it == m_impl->inputs.end()) return false;
+
+    // Persist on the input, and if it isn't spatial there's nothing live to push.
+    it->second.azimuth = azimuth;
+    it->second.elevation = elevation;
+    if (!it->second.spatial) { maybeAutosave(); return true; }
+
+    // Push into every live strip this input feeds — no route rebuild.
+    for (const auto& kv : m_impl->routes) {
+        const auto& r = kv.second;
+        if (r.inputId == id && r.mixer) r.mixer->setStripDirection(r.localId, azimuth, elevation);
+    }
     maybeAutosave();
     return true;
 }
@@ -571,6 +597,9 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         in.source = kv.second.source;
         in.denoise = kv.second.denoise;
         in.eqPreset = kv.second.eqPreset;
+        in.spatial = kv.second.spatial;
+        in.azimuth = kv.second.azimuth;
+        in.elevation = kv.second.elevation;
         s.inputs.push_back(in);
     }
     std::sort(s.inputs.begin(), s.inputs.end(), [](const InputSnapshot& a, const InputSnapshot& b) { return a.id < b.id; });
@@ -823,6 +852,9 @@ bool AudioMixerMatrix::load(const std::string& path)
                 ic.source = i.value("source", std::string{});
                 ic.denoise = i.value("denoise", false);
                 ic.eqPreset = i.value("eqPreset", std::string{});
+                ic.spatial = i.value("spatial", false);
+                ic.azimuth = i.value("azimuth", 0.0f);
+                ic.elevation = i.value("elevation", 0.0f);
                 if (ic.source.empty()) continue;
                 if (ic.name.empty()) ic.name = ic.source;
                 InputId iid = i.value("id", 0);

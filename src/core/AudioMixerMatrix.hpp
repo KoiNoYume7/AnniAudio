@@ -26,6 +26,10 @@ struct InputConfig {
     // MixerStripConfig): RNNoise suppression and/or a named EQ preset.
     bool denoise = false;
     std::string eqPreset; // "" = off; "voice"
+    // HRTF binaural positioning (see MixerStripConfig / dsp::Spatializer).
+    bool spatial = false;
+    float azimuth = 0.0f;   // 0 = front, +90 = left, -90 = right
+    float elevation = 0.0f; // 0 = ear level, +90 = above
     std::string source;
 };
 
@@ -61,6 +65,9 @@ struct InputSnapshot {
     std::string source;
     bool denoise = false;
     std::string eqPreset;
+    bool spatial = false;
+    float azimuth = 0.0f;
+    float elevation = 0.0f;
     float peak = 0.0f;
     float rms = 0.0f;
 };
@@ -132,6 +139,10 @@ public:
     std::optional<InputId> addInput(const InputConfig& cfg);
     bool removeInput(InputId id);
     bool updateInput(InputId id, const InputConfig& cfg); // re-creates routes for groups using it
+    // Live HRTF direction change for a spatialized input — updates every route's
+    // strip in place without rebuilding (glitch-free, safe at knob-turn rates).
+    // Only meaningful while the input has spatial enabled.
+    bool setInputDirection(InputId id, float azimuth, float elevation);
 
     // -----------------------------------------------------------------------
     // Groups

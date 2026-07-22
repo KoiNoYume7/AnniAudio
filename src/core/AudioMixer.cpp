@@ -18,6 +18,7 @@
 
 #include "eq.hpp"
 #include "noise_suppressor.hpp"
+#include "spatializer.hpp"
 
 #pragma comment(lib, "mmdevapi.lib")
 
@@ -98,6 +99,23 @@ struct AudioMixer::Impl {
         std::unique_ptr<anniaudio::dsp::NoiseSuppressor> denoiser;
         std::unique_ptr<anniaudio::dsp::EqChain> eq;
 
+        // HRTF spatializer (mono -> positioned stereo). When present it replaces
+        // the strip's normal channel-convert step: the strip is downmixed to
+        // mono, resampled to the render rate, then convolved to stereo. Prepared
+        // in setupStripDsp() before the audio thread; only process()/setDirection()
+        // run on the audio thread, both allocation-free.
+        std::unique_ptr<anniaudio::dsp::Spatializer> spatializer;
+        std::vector<float> monoTmp;    // downmixed source, capture rate
+        std::vector<float> monoRes;    // downmixed source, render rate
+        std::vector<float> stereoTmp;  // spatialized interleaved stereo
+        // Requested direction (written by any thread via setStripDirection), and
+        // the last direction actually applied (audio thread only).
+        std::atomic<float> reqAz{0.0f};
+        std::atomic<float> reqEl{0.0f};
+        std::atomic<bool>  dirDirty{false};
+        float appliedAz = 0.0f;
+        float appliedEl = 0.0f;
+
         std::atomic<float> volume{1.0f};
         std::atomic<bool>  muted{false};
 
@@ -165,6 +183,7 @@ struct AudioMixer::Impl {
     void applyPendingCommands(bool& handlesDirty);
     void processRender();
     void processStrip(Strip& s);
+    void writeStripSpatial(Strip& s, uint32_t frames); // mono in s.monoTmp -> stereo ring
     void teardownStrip(Strip& s);
     void cleanup();
 
@@ -198,6 +217,9 @@ StripSnapshot AudioMixer::Impl::toSnapshot(const Strip& s) const
     snap.volume    = s.volume.load();
     snap.muted     = s.muted.load();
     snap.knobIndex = s.knobIndex;
+    snap.spatial   = (bool)s.spatializer;
+    snap.azimuth   = s.reqAz.load();
+    snap.elevation = s.reqEl.load();
     snap.peak      = s.peak.load();
     snap.rms       = s.rms.load();
     return snap;
@@ -290,6 +312,33 @@ bool AudioMixer::Impl::openStrip(Strip& s, const MixerStripConfig& cfg)
     return true;
 }
 
+// Locate the bundled HRTF dataset. The mixer normally runs with the repo root
+// as its working directory (start-mixer.bat), but fall back to a path resolved
+// from the executable location so it also works when launched from elsewhere.
+static std::string resolveHrtfPath()
+{
+    auto exists = [](const std::string& p) {
+        DWORD a = GetFileAttributesA(p.c_str());
+        return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+    };
+    const char* rel = "assets/hrtf/mit_kemar.sofa";
+    if (exists(rel)) return rel;
+
+    char exePath[MAX_PATH] = {0};
+    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) > 0) {
+        std::string dir(exePath);
+        size_t slash = dir.find_last_of("\\/");
+        if (slash != std::string::npos) dir.resize(slash);
+        // exe lives in build/bin/Release — walk up to the repo root.
+        for (const char* up : {"/assets/hrtf/mit_kemar.sofa",
+                               "/../../../assets/hrtf/mit_kemar.sofa"}) {
+            std::string cand = dir + up;
+            if (exists(cand)) return cand;
+        }
+    }
+    return rel; // best effort; loadHrtf() will log if it can't open it
+}
+
 void AudioMixer::Impl::setupStripDsp(Strip& s, const MixerStripConfig& cfg)
 {
     if (cfg.denoise) {
@@ -320,6 +369,34 @@ void AudioMixer::Impl::setupStripDsp(Strip& s, const MixerStripConfig& cfg)
     } else if (!cfg.eqPreset.empty()) {
         std::fprintf(stderr, "[mixer] unknown eq preset '%s' for '%s' (available: voice)\n",
                      cfg.eqPreset.c_str(), s.name.c_str());
+    }
+
+    if (cfg.spatial) {
+        if (renderCh < 2) {
+            std::fprintf(stderr, "[mixer] spatial skipped for '%s': output '%s' has %u channel(s), needs >= 2\n",
+                         s.name.c_str(), outputName.c_str(), renderCh);
+        } else {
+            // maxBlock must cover the largest resampled mono block a packet can
+            // produce; cvtMax is exactly that bound (see finalizeStripBuffers).
+            const uint32_t maxBlock = s.cvtMax;
+            s.spatializer = std::make_unique<anniaudio::dsp::Spatializer>();
+            if (s.spatializer->loadHrtf(resolveHrtfPath(), (double)renderRate, maxBlock)) {
+                s.spatializer->setDirection(cfg.azimuth, cfg.elevation);
+                s.appliedAz = cfg.azimuth;
+                s.appliedEl = cfg.elevation;
+                s.reqAz.store(cfg.azimuth);
+                s.reqEl.store(cfg.elevation);
+                s.monoTmp.resize(s.captureTmp.size() / (s.captureCh ? s.captureCh : 1) + 1);
+                s.monoRes.resize(s.cvtMax + 1);
+                s.stereoTmp.resize((size_t)s.cvtMax * 2 + 2);
+                std::fprintf(stderr, "[mixer] spatial enabled for '%s' (az=%.0f el=%.0f, %u taps @ %u Hz)\n",
+                             s.name.c_str(), cfg.azimuth, cfg.elevation,
+                             s.spatializer->irLength(), renderRate);
+            } else {
+                std::fprintf(stderr, "[mixer] spatial init failed for '%s' (HRTF load)\n", s.name.c_str());
+                s.spatializer.reset();
+            }
+        }
     }
 }
 
@@ -558,6 +635,7 @@ void AudioMixer::Impl::teardownStrip(Strip& s)
     s.captureAC.Reset();
     s.denoiser.reset();
     s.eq.reset();
+    s.spatializer.reset();
 }
 
 void AudioMixer::Impl::applyPendingCommands(bool& handlesDirty)
@@ -665,10 +743,29 @@ void AudioMixer::Impl::processStrip(Strip& s)
         if (FAILED(s.captureSvc->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
         if (frames == 0) { s.captureSvc->ReleaseBuffer(frames); continue; }
 
+        // Apply a pending live direction change on the audio thread, serialized
+        // with process() (both run here), so the HRIR swap can't race.
+        if (s.spatializer && s.dirDirty.exchange(false)) {
+            float az = s.reqAz.load(), el = s.reqEl.load();
+            if (az != s.appliedAz || el != s.appliedEl) {
+                s.spatializer->setDirection(az, el);
+                s.appliedAz = az;
+                s.appliedEl = el;
+            }
+        }
+
         if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-            uint32_t dstFrames = (uint32_t)std::ceil((double)frames * s.ratio);
-            std::fill_n(s.convertBuf.data(), (size_t)dstFrames * renderCh, 0.0f);
-            s.ring.write(s.convertBuf.data(), (size_t)dstFrames * renderCh);
+            if (s.spatializer) {
+                // Feed silence through so the mono resample phase and the
+                // spatializer's overlap tail stay coherent across gaps.
+                if (s.monoTmp.size() < frames) s.monoTmp.resize(frames);
+                std::fill_n(s.monoTmp.data(), frames, 0.0f);
+                writeStripSpatial(s, frames);
+            } else {
+                uint32_t dstFrames = (uint32_t)std::ceil((double)frames * s.ratio);
+                std::fill_n(s.convertBuf.data(), (size_t)dstFrames * renderCh, 0.0f);
+                s.ring.write(s.convertBuf.data(), (size_t)dstFrames * renderCh);
+            }
         } else {
             size_t sampleCount = (size_t)frames * s.captureCh;
             if (s.captureTmp.size() < sampleCount) s.captureTmp.resize(sampleCount);
@@ -685,7 +782,19 @@ void AudioMixer::Impl::processStrip(Strip& s)
             if (s.denoiser) s.denoiser->process(s.captureTmp.data(), frames, s.captureCh);
             if (s.eq)       s.eq->process(s.captureTmp.data(), frames, s.captureCh);
 
-            if (s.needsConvert) {
+            if (s.spatializer) {
+                // Downmix to mono at the capture rate, then hand off to the
+                // spatial path (resample -> convolve -> stereo).
+                if (s.monoTmp.size() < frames) s.monoTmp.resize(frames);
+                const float inv = 1.0f / (float)s.captureCh;
+                for (uint32_t f = 0; f < frames; ++f) {
+                    float acc = 0.0f;
+                    const float* fr = &s.captureTmp[(size_t)f * s.captureCh];
+                    for (uint32_t c = 0; c < s.captureCh; ++c) acc += fr[c];
+                    s.monoTmp[f] = acc * inv;
+                }
+                writeStripSpatial(s, frames);
+            } else if (s.needsConvert) {
                 uint32_t dstFrames = convertBuffer(
                     s.captureTmp.data(), frames, s.captureCh,
                     s.convertBuf.data(), s.cvtMax, renderCh,
@@ -696,6 +805,42 @@ void AudioMixer::Impl::processStrip(Strip& s)
             }
         }
         s.captureSvc->ReleaseBuffer(frames);
+    }
+}
+
+// Takes `frames` mono samples (capture rate) already sitting in s.monoTmp,
+// resamples them to the render rate, convolves to a positioned stereo image,
+// and writes the result into the strip's ring as renderCh-interleaved audio.
+void AudioMixer::Impl::writeStripSpatial(Strip& s, uint32_t frames)
+{
+    const float* monoSrc = s.monoTmp.data();
+    uint32_t outFrames = frames;
+
+    if (s.captureRate != renderRate) {
+        if (s.monoRes.size() < s.cvtMax) s.monoRes.resize(s.cvtMax);
+        outFrames = convertBuffer(s.monoTmp.data(), frames, 1,
+                                  s.monoRes.data(), s.cvtMax, 1,
+                                  s.ratio, s.srcPhase);
+        monoSrc = s.monoRes.data();
+    }
+    if (outFrames == 0) return;
+    if (outFrames > s.cvtMax) outFrames = s.cvtMax;  // process() contract guard
+
+    if (s.stereoTmp.size() < (size_t)outFrames * 2) s.stereoTmp.resize((size_t)outFrames * 2);
+    s.spatializer->process(monoSrc, s.stereoTmp.data(), outFrames);
+
+    if (renderCh == 2) {
+        s.ring.write(s.stereoTmp.data(), (size_t)outFrames * 2);
+    } else {
+        // Wider output: place the binaural pair in channels 0/1, silence the rest.
+        const size_t need = (size_t)outFrames * renderCh;
+        if (s.convertBuf.size() < need) s.convertBuf.resize(need);
+        std::fill_n(s.convertBuf.data(), need, 0.0f);
+        for (uint32_t f = 0; f < outFrames; ++f) {
+            s.convertBuf[(size_t)f * renderCh + 0] = s.stereoTmp[(size_t)f * 2 + 0];
+            s.convertBuf[(size_t)f * renderCh + 1] = s.stereoTmp[(size_t)f * 2 + 1];
+        }
+        s.ring.write(s.convertBuf.data(), need);
     }
 }
 
@@ -930,6 +1075,16 @@ bool AudioMixer::setStripMuted(StripId id, bool muted)
     auto s = m_impl->findStrip(id);
     if (!s) return false;
     s->muted.store(muted);
+    return true;
+}
+
+bool AudioMixer::setStripDirection(StripId id, float azimuth, float elevation)
+{
+    auto s = m_impl->findStrip(id);
+    if (!s || !s->spatializer) return false;
+    s->reqAz.store(azimuth);
+    s->reqEl.store(elevation);
+    s->dirDirty.store(true);   // picked up on the audio thread in processStrip
     return true;
 }
 

@@ -52,6 +52,11 @@ public:
     // <= maxBlock passed to loadHrtf().
     void process(const float* mono, float* stereoOut, uint32_t frames) noexcept;
 
+    // Clear the overlap-add tail (discards convolution history). Use to start a
+    // fresh, discontinuous stream — not for live direction changes, which are
+    // smoother when the tail is kept.
+    void reset() noexcept;
+
     bool     ready() const noexcept { return ready_; }
     uint32_t irLength() const noexcept { return irLen_; }
     uint32_t fftSize() const noexcept { return nfft_; }

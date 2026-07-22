@@ -149,7 +149,15 @@ void Spatializer::setDirection(float azimuthDeg, float elevationDeg) {
     azimuthDeg_ = azimuthDeg;
     elevationDeg_ = elevationDeg;
 
-    // A direction change discards continuity; clear the tail to avoid a click.
+    // Intentionally keep the overlap tail: on a live direction change the old
+    // IR's decaying tail blends into the new IR's head over the next L-1 samples,
+    // which cross-fades far more smoothly than clearing (a clear would drop the
+    // tail abruptly and click). A full crossfade is a later refinement.
+}
+
+void Spatializer::reset() noexcept {
+    if (!ready_) return;
+    auto& I = *p_;
     std::fill(I.overlapL.begin(), I.overlapL.end(), 0.0f);
     std::fill(I.overlapR.begin(), I.overlapR.end(), 0.0f);
 }

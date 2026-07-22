@@ -83,20 +83,25 @@ avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_ke
       - physical spatial cues: ILD symmetric to ±11.8 dB, ITD to ±667 µs (the human max)
       - renders `hrtf_orbit_48k.wav`, a binaural orbit for the human "does it sound 3D?" gate.
 
-### Stage B — Per-input positioning (mixer integration)
-- [ ] Add `spatial` + `azimuth`/`elevation` to the **input** config model
-      (mirrors how `denoise` / `eqPreset` already live on an input).
-- [ ] A spatialized strip downmixes to mono, convolves to a stereo contribution
-      summed into the output — the one real engine change, at the per-strip DSP point
-      in `AudioMixer.cpp`. Pre-allocate all `Spatializer` state before the RT thread.
-- [ ] Thread through `AudioMixerMatrix` → `MixerControlServer` API → keep
-      `docs/MIXER-CONTROL-API.md` in sync.
-- [ ] Runtime direction changes without clicks (double-buffer the HRIR swap).
+### Stage B — Per-input positioning (mixer integration) — **DONE**
+- [x] `spatial` + `azimuth`/`elevation` on the **input** config model
+      (mirrors `denoise` / `eqPreset`), through matrix → control server → JSON persistence.
+- [x] A spatialized strip downmixes to mono, resamples to the render rate, and
+      convolves to a stereo contribution summed into the output — the engine change
+      lives in `AudioMixer::Impl::writeStripSpatial()`. All `Spatializer` state is
+      pre-allocated in `setupStripDsp()` before the RT thread; wider-than-stereo
+      outputs get the binaural pair in channels 0/1.
+- [x] Live, glitch-free direction changes: `setStripDirection()` queues an atomic
+      request applied on the audio thread between blocks (no HRIR-swap race); the
+      overlap tail is kept so a moving source cross-fades instead of clicking.
+      `POST /api/inputs/{id}/direction` is the live path; `PATCH` toggles spatial on/off.
 
 ### Stage C — Surface + document
-- [ ] TUI: toggle spatial + set azimuth/elevation on a source row (beside `NS`/`EQ`).
+- [x] TUI: `H` toggles spatial, `Y` aims it, `3D±az` tag on the source row.
+- [x] `docs/MIXER-CONTROL-API.md` documents the fields + the direction endpoint.
 - [ ] Loupedeck: an azimuth dial action (a physical knob is the natural fit).
-- [ ] README + this file: flip Phase 3 to "in daily use".
+- [ ] Optional daily-phase polish: HRTF dataset selection, reverb for externalization.
+- [ ] Flip README Phase 3 to "in daily use" once it's had real mileage.
 
 ### Stage D — Per-output virtualization (Windows Sonic replacement)
 - [ ] Flag an output as spatial; map a virtual 5.1/7.1 layout to fixed directions and

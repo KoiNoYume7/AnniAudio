@@ -28,9 +28,10 @@ What works today:
 Not yet finished:
 
 - The virtual driver is **built but not signed**. It cannot load on a normal Windows install without test signing or Microsoft attestation signing. Daily use currently relies on a third-party virtual cable driver plus WASAPI loopback.
-- **HRTF** spatial audio has a working, verified standalone POC (`poc_hrtf`: FFT
-  overlap-add convolution over MIT KEMAR HRIRs, with correct ITD/ILD cues) but is
-  not yet wired into the mixer — per-input positioning is the next step.
+- **HRTF** spatial audio is wired into the mixer as a **per-input** property: any
+  input can be positioned in 3D (azimuth/elevation), convolved engine-side against
+  MIT KEMAR HRIRs (FFT overlap-add), with live, glitch-free re-aiming over the API.
+  Per-output surround virtualization (the Windows Sonic replacement) is the next step.
 - No graphical mixer UI yet (the TUI and the Loupedeck plugin are the current surfaces); no installer.
 
 ---
@@ -217,6 +218,7 @@ The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default por
 | `c` | Connect/disconnect the selected virtual cable and output |
 | `n` | Assign newly detected apps (semi-automatic routing; rules in `config/app-rules.json`) |
 | `N` / `E` | On a source row: toggle RNNoise suppression / the "voice" EQ preset for that input (processed engine-side, pre-mix; shown as `NS` / `EQ` tags) |
+| `H` / `Y` | On a source row: toggle HRTF 3D spatialization (`H`) and aim it (`Y`, azimuth 0=front/+90=left/-90=right); shown as a `3D±az` tag. Needs a stereo output |
 | `S` | Scenes: apply a saved level overlay or save the current levels as a new scene (`config/scenes/`) |
 | `r` | Rename the selected virtual cable |
 | `d` | Delete the selected virtual cable/application/output |
@@ -334,7 +336,7 @@ AnniAudio/
 | 0 | Research — proof of concept for every major component | Done |
 | 1 | Virtual driver + WASAPI routing — audio flows through AnniAudio | Engine + loopback working; driver unsigned |
 | 2 | DSP chain + routing matrix — EQ, RNNoise, per-app routing, scenes, control API, Loupedeck | Working end-to-end |
-| 3 | Spatial audio — HRTF convolution | POC + engine done; mixer integration next |
+| 3 | Spatial audio — HRTF convolution | Per-input spatial live in the mixer; per-output virtualization next |
 | 4 | API + hotkeys + CLI | Control API + TUI + Loupedeck done; global hotkeys planned |
 | 5 | UI — graphical mixer | Planned |
 | 6 | Installer, driver signing, packaging | Planned |
