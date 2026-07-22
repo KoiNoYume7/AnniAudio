@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "spatializer.hpp"
+#include "eq.hpp"
 #include "mysofa.h"   // transitively available via audio_dsp -> mysofa
 
 using anniaudio::dsp::Spatializer;
@@ -238,6 +239,98 @@ int main(int argc, char** argv) {
         std::printf("  left  vs right  (az +90 vs -90): %6.1f%%   <- the strong cue\n", irDiff(90,0,-90,0));
         std::printf("  front vs back   (az   0 vs 180): %6.1f%%   <- the weak one you noticed\n", irDiff(0,0,180,0));
         std::printf("  ear   vs above  (el   0 vs +60): %6.1f%%   <- elevation cue\n", irDiff(0,0,0,60));
+    }
+
+    // ── Diagnostic: HRIR magnitude vs frequency (why binaural can sound thin) ──
+    // Generic HRIRs (esp. MIT KEMAR) attenuate the low end, so convolving full-
+    // range audio through them removes bass. Measured here relative to 1 kHz; a
+    // big negative number at low frequencies is the "no bass" the user reported,
+    // and tells us where a low-frequency bypass crossover should sit.
+    std::printf("Diagnostic — front HRIR magnitude vs 1 kHz (left ear)\n");
+    {
+        sp.setDirection(0.0f, 0.0f);
+        std::vector<float> l, r;
+        captureIR(sp, sp.irLength() + 128, l, r);
+        auto mag = [&](double f) {
+            double re = 0, im = 0;
+            for (size_t n = 0; n < l.size(); ++n) {
+                double w = -2.0 * M_PI * f * (double)n / kSampleRate;
+                re += l[n] * std::cos(w);
+                im += l[n] * std::sin(w);
+            }
+            return std::sqrt(re * re + im * im);
+        };
+        double ref = mag(1000.0);
+        for (double f : {30.0, 60.0, 100.0, 150.0, 250.0, 500.0, 1000.0, 4000.0, 10000.0})
+            std::printf("  %6.0f Hz : %+6.1f dB\n", f, 20.0 * std::log10((mag(f) + 1e-12) / (ref + 1e-12)));
+    }
+
+    // ── Design + verify the coloration-compensation EQ ──
+    // A pure output EQ (no crossover, so no phase-cancellation artifacts) applied
+    // to the two-speaker virtualization. We measure the raw response, then the
+    // compensated one, and require the compensated curve to sit within a tight
+    // band from 60 Hz to 10 kHz. The winning bands are copied into AudioMixer.
+    std::printf("Test 6 — coloration-compensation EQ flattens the response\n");
+    {
+        using namespace anniaudio::dsp;
+
+        // Runs a mono impulse through the two-speaker virtualization, optionally
+        // followed by a compensation EQ, and returns the left-output impulse.
+        auto chainIR = [&](EqChain* comp) {
+            Spatializer vL, vR;
+            if (!(vL.loadHrtf(sofa, kSampleRate, 512) && vR.loadHrtf(sofa, kSampleRate, 512)))
+                return std::vector<float>();
+            vL.setDirection(+30.0f, 0.0f);
+            vR.setDirection(-30.0f, 0.0f);
+            const uint32_t len = 4096, block = 256;
+            std::vector<float> outL(len, 0.0f), mono(block), wl(block*2), wr(block*2);
+            uint32_t produced = 0; bool first = true;
+            while (produced < len) {
+                std::fill(mono.begin(), mono.end(), 0.0f);
+                if (first) { mono[0] = 1.0f; first = false; }
+                vL.process(mono.data(), wl.data(), block);
+                vR.process(mono.data(), wr.data(), block);
+                for (uint32_t i = 0; i < block*2; ++i) wl[i] += wr[i];
+                if (comp) comp->process(wl.data(), block, 2);
+                for (uint32_t f = 0; f < block && produced+f < len; ++f) outL[produced+f] = wl[2*f];
+                produced += block;
+            }
+            return outL;
+        };
+        auto magOf = [&](const std::vector<float>& ir, double freq) {
+            double re = 0, im = 0;
+            for (size_t n = 0; n < ir.size(); ++n) {
+                double w = -2.0*M_PI*freq*(double)n/kSampleRate;
+                re += ir[n]*std::cos(w); im += ir[n]*std::sin(w);
+            }
+            return std::sqrt(re*re + im*im);
+        };
+
+        // Compensation bands — mirror AudioMixer's colorEq (keep in sync).
+        EqChain comp;
+        comp.addBand(FilterType::LowShelf,   70.0,  7.0, 0.707); // counter bass rolloff
+        comp.addBand(FilterType::Peak,      160.0, -3.0, 1.2);   // undo the shelf's low-mid mud
+        comp.addBand(FilterType::Peak,     2500.0, -12.0, 0.8);  // tame lower presence hump
+        comp.addBand(FilterType::Peak,     4000.0, -13.0, 1.1);  // tame ear-gain peak
+        comp.addBand(FilterType::HighShelf, 8000.0, -4.0, 0.707);// calm the top end
+        comp.prepare(kSampleRate, 2);
+
+        auto raw = chainIR(nullptr);
+        auto cor = chainIR(&comp);
+        bool ok = !raw.empty() && !cor.empty();
+        double rref = ok ? magOf(raw, 1000.0) : 1.0;
+        double cref = ok ? magOf(cor, 1000.0) : 1.0;
+        std::printf("            raw     compensated\n");
+        double worst = 0.0;
+        for (double f : {60.0, 100.0, 150.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 10000.0}) {
+            double rdb = 20.0*std::log10((magOf(raw,f)+1e-12)/(rref+1e-12));
+            double cdb = 20.0*std::log10((magOf(cor,f)+1e-12)/(cref+1e-12));
+            std::printf("  %6.0f Hz : %+6.1f   %+6.1f dB\n", f, rdb, cdb);
+            if (f >= 60.0 && f <= 10000.0) worst = std::max(worst, std::fabs(cdb));
+        }
+        std::printf("  worst |deviation| 60 Hz-10 kHz after comp: %.1f dB\n", worst);
+        check(ok, "virtualization chain built");
+        check(worst < 6.0, "compensated response flat within 6 dB");
     }
 
     // ── Human gate 2: discrete anchored positions (incl. elevation) ──

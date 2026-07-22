@@ -108,6 +108,11 @@ struct AudioMixer::Impl {
         // process()/setDirection() run on the audio thread, both allocation-free.
         std::unique_ptr<anniaudio::dsp::Spatializer> spatialL; // left virtual speaker
         std::unique_ptr<anniaudio::dsp::Spatializer> spatialR; // right virtual speaker
+        // Generic HRIRs roll off the bass and (once two speakers sum) boost ~2-4 kHz
+        // hard, so raw binaural sounds thin and harsh. colorEq is a fixed
+        // compensation applied to the spatialized (wet) signal that flattens that
+        // coloration — bands measured/tuned in poc_hrtf's Test 6.
+        std::unique_ptr<anniaudio::dsp::EqChain> colorEq;
         std::vector<float> chL, chR;       // source L/R, capture rate
         std::vector<float> resL, resR;     // source L/R, render rate
         double srcPhaseL = 0.0;            // independent resample phase per channel
@@ -322,6 +327,20 @@ bool AudioMixer::Impl::openStrip(Strip& s, const MixerStripConfig& cfg)
 // standard stereo triangle, so azimuth=0 reproduces a normal frontal image.
 static constexpr float kSpatialSpreadDeg = 30.0f;
 
+// Binaural coloration compensation applied to the virtualized (wet) output.
+// Generic MIT KEMAR HRIRs roll the bass off and, once the two virtual speakers
+// sum, boost 2-4 kHz by ~15 dB — thin and harsh. These bands flatten that to
+// within ~5 dB across 60 Hz-10 kHz; they were tuned against the measured
+// response in poc_hrtf's Test 6 (keep the two in sync).
+struct CompBand { anniaudio::dsp::FilterType type; double freq, gainDb, q; };
+static const CompBand kColorComp[] = {
+    { anniaudio::dsp::FilterType::LowShelf,    70.0,   7.0, 0.707 }, // restore bass
+    { anniaudio::dsp::FilterType::Peak,       160.0,  -3.0, 1.2   }, // undo shelf's low-mid mud
+    { anniaudio::dsp::FilterType::Peak,      2500.0, -12.0, 0.8   }, // lower presence hump
+    { anniaudio::dsp::FilterType::Peak,      4000.0, -13.0, 1.1   }, // ear-gain peak
+    { anniaudio::dsp::FilterType::HighShelf, 8000.0,  -4.0, 0.707 }, // calm the top
+};
+
 // Locate the bundled HRTF dataset. The mixer normally runs with the repo root
 // as its working directory (start-mixer.bat), but fall back to a path resolved
 // from the executable location so it also works when launched from elsewhere.
@@ -401,6 +420,12 @@ void AudioMixer::Impl::setupStripDsp(Strip& s, const MixerStripConfig& cfg)
                 s.appliedEl = cfg.elevation;
                 s.reqAz.store(cfg.azimuth);
                 s.reqEl.store(cfg.elevation);
+
+                // Coloration compensation on the wet signal (see kColorComp).
+                s.colorEq = std::make_unique<anniaudio::dsp::EqChain>();
+                for (const auto& b : kColorComp) s.colorEq->addBand(b.type, b.freq, b.gainDb, b.q);
+                s.colorEq->prepare((double)renderRate, 2);
+
                 const size_t capFrames = s.captureTmp.size() / (s.captureCh ? s.captureCh : 1) + 1;
                 s.chL.resize(capFrames);
                 s.chR.resize(capFrames);
@@ -657,6 +682,7 @@ void AudioMixer::Impl::teardownStrip(Strip& s)
     s.eq.reset();
     s.spatialL.reset();
     s.spatialR.reset();
+    s.colorEq.reset();
 }
 
 void AudioMixer::Impl::applyPendingCommands(bool& handlesDirty)
@@ -853,11 +879,13 @@ void AudioMixer::Impl::writeStripSpatial(Strip& s, uint32_t frames)
     if (outFrames > s.cvtMax) outFrames = s.cvtMax;  // process() contract guard
 
     const size_t stereoSamps = (size_t)outFrames * 2;
-    if (s.mixTmp.size() < stereoSamps) { s.mixTmp.resize(stereoSamps); s.spkTmp.resize(stereoSamps); }
 
     s.spatialL->process(Lsrc, s.mixTmp.data(), outFrames);   // left speaker -> mixTmp
     s.spatialR->process(Rsrc, s.spkTmp.data(), outFrames);   // right speaker -> spkTmp
     for (size_t i = 0; i < stereoSamps; ++i) s.mixTmp[i] += s.spkTmp[i];
+
+    // Flatten the HRTF coloration (bass rolloff + harsh 2-4 kHz peak).
+    s.colorEq->process(s.mixTmp.data(), outFrames, 2);
 
     if (renderCh == 2) {
         s.ring.write(s.mixTmp.data(), stereoSamps);
