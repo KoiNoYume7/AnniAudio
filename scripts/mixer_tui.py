@@ -38,7 +38,9 @@ Keybindings:
     m            toggle mute on the selected virtual cable / output
     x            set the selected virtual cable's send level to one of its
                  outputs (e.g. 100% on headphones, 15% on speakers)
-    Enter/e      expand/collapse a virtual cable's application list
+    Enter/e      expand/collapse a cable: shows its capture input and, for a
+                 cabled cable, the apps LIVE-routed into that VAC right now
+                 (from each app's real playback endpoint -- always truthful)
     i            add a device source (from a device picker) to the selected virtual cable
     a            add an application (from a running app picker) to the selected virtual cable
     g            add a new virtual cable
@@ -46,7 +48,8 @@ Keybindings:
     o            add a new output (from a render-endpoint picker)
     c            connect/disconnect the selected virtual cable and output
     r            rename the selected virtual cable
-    d            delete the selected virtual cable/application/output
+    d            remove the selected item: delete a cable or output, drop an
+                 input, or unroute an app member (app row) back to the default
     n            assign newly detected apps (auto-routing rules in config/app-rules.json)
     N / E        on a source row: toggle RNNoise suppression / the "voice" EQ
                  preset for that input (processed engine-side, pre-mix)
@@ -306,6 +309,23 @@ def _pid_alive(pid):
 _route_fail_counts = {}
 _route_unroutable = set()
 _ROUTE_FAIL_LIMIT = 3
+
+
+def _forget_pid(pid):
+    """Drop every routed_apps entry for this pid and clear its repair bookkeeping.
+
+    A process is only ever routed to one place at a time, so re-routing it to a
+    different group -- or removing it -- must forget all prior tracking. Otherwise
+    the old and new entries both survive and _route_worker enforces both, which is
+    exactly what made an app bounce between VACs or reappear after removal.
+    """
+    if not pid:
+        return
+    with state_lock:
+        for iid in [i for i, (p, _c, _g) in list(routed_apps.items()) if p == pid]:
+            routed_apps.pop(iid, None)
+        _route_fail_counts.pop(pid, None)
+        _route_unroutable.discard(pid)
 
 
 def _route_worker(port):
@@ -835,6 +855,17 @@ def _load_tracked_routes(port, state):
                 routed_apps[iid2] = (pid, cable, gid)
                 break
 
+    # Validate what we restored: drop routes whose process has exited and keep at
+    # most one entry per pid, so a stale sidecar can never make the repair loop
+    # fight itself (the bounce/reappear bug started here).
+    seen_pids = set()
+    for iid in list(routed_apps.keys()):
+        pid = routed_apps[iid][0]
+        if not _pid_alive(pid) or pid in seen_pids:
+            routed_apps.pop(iid, None)
+        else:
+            seen_pids.add(pid)
+
 
 def _save_tracked_routes(port, state):
     """Persist routed_apps so the next TUI run can repair routes."""
@@ -869,6 +900,11 @@ def _assign_app_to_group(port, group, app):
     name = app.get("name", str(pid))
     cable = group.get("cable", "")
     group_id = group.get("id")
+
+    # Re-routing this app anywhere means it can no longer belong to a previous
+    # group, so forget any stale tracking for it first -- otherwise the repair
+    # loop would keep yanking it back to where it used to be.
+    _forget_pid(pid)
 
     # Reuse an existing matching input instead of stacking duplicates: repeated
     # 'a' presses used to add a new input every time (five Spotify entries...).
@@ -1210,13 +1246,22 @@ def confirm_dialog(stdscr, text):
 # Main TUI
 # ---------------------------------------------------------------------------
 
-def build_group_rows(local_state, expanded_ids):
-    """Flatten groups (and, for expanded ones, their inputs) into one row list.
+def short_cable(name):
+    """Trim the boilerplate off a VAC endpoint name for display."""
+    return (name or "").replace(" (Virtual Audio Cable)", "").strip() or name
 
-    Keeping this as a single linear list of ("group", g) / ("input", g, inp)
-    tuples lets the groups pane's keyboard navigation (sel_group_idx) treat
-    collapsed and expanded groups uniformly.
+
+def build_group_rows(local_state, expanded_ids, apps_by_endpoint=None):
+    """Flatten groups (and, for expanded ones, their inputs and live app members)
+    into one linear row list of ("group", g) / ("input", g, inp) / ("app", g, app)
+    tuples, so the groups pane's keyboard navigation treats them uniformly.
+
+    For a cabled group the "app" rows come straight from which applications are
+    *actually* playing into that VAC right now (their live session endpoint), so
+    the membership is always truthful and self-heals when an app is re-routed --
+    no client-side tracking involved.
     """
+    apps_by_endpoint = apps_by_endpoint or {}
     rows = []
     for g in local_state.get("groups", []):
         rows.append(("group", g))
@@ -1225,6 +1270,10 @@ def build_group_rows(local_state, expanded_ids):
                 inp = input_for_id(iid, local_state)
                 if inp:
                     rows.append(("input", g, inp))
+            cable = g.get("cable", "")
+            if cable:
+                for app in apps_by_endpoint.get(cable, []):
+                    rows.append(("app", g, app))
     return rows
 
 
@@ -1306,6 +1355,8 @@ def main(stdscr, port):
     def row_key(item):
         if item[0] == "group":
             return ("g", item[1].get("id"))
+        if item[0] == "app":
+            return ("a", item[1].get("id"), item[2].get("processId"))
         return ("i", item[1].get("id"), item[2].get("id"))
 
     # Route-mismatch warnings only show once the mismatch has persisted for a
@@ -1384,8 +1435,17 @@ def main(stdscr, port):
                 pass
 
         outputs = local_state.get("outputs", [])
-        group_rows = build_group_rows(local_state, expanded_groups)
         apps_by_pid = {a.get("processId"): a for a in local_apps}
+        # Live per-VAC membership: which apps are actually playing into each cable
+        # right now. Drives the truthful "app under group" rows below.
+        apps_by_endpoint = {}
+        for a in local_apps:
+            if a.get("isInput") or a.get("isSystem"):
+                continue
+            ep = a.get("endpoint")
+            if ep:
+                apps_by_endpoint.setdefault(ep, []).append(a)
+        group_rows = build_group_rows(local_state, expanded_groups, apps_by_endpoint)
 
         # Re-resolve the selection: follow the remembered item if it still
         # exists, otherwise fall back to the nearest valid row index.
@@ -1463,11 +1523,17 @@ def main(stdscr, port):
                             stdscr.addstr(y, right_x, f"→ {out_list[:avail]}", attr | curses.A_DIM)
                 except curses.error:
                     pass
-            else:
+            elif item[0] == "input":
                 g = item[1]
                 inp = item[2]
                 is_sel = pane == 0 and line == sel_group_idx
-                name = inp.get("name", "?")[:16]
+                # A cabled group's capture input IS the VAC, not any one app, so
+                # label it after the cable instead of masquerading as whichever
+                # app happened to be routed to it first.
+                if g.get("cable") and inp.get("source") == g.get("cable"):
+                    name = (short_cable(g.get("cable")) + " VAC")[:16]
+                else:
+                    name = inp.get("name", "?")[:16]
                 itype = inp.get("type", "device")[:4]
                 fx = ""
                 if inp.get("denoise"):
@@ -1516,6 +1582,16 @@ def main(stdscr, port):
                         avail = mid - 2 - (4 + len(prefix))
                         if avail > 0:
                             stdscr.addstr(y, 4 + len(prefix), warn[:avail], wattr)
+                except curses.error:
+                    pass
+            else:  # ("app", g, app): a live member of a cabled group
+                app = item[2]
+                is_sel = pane == 0 and line == sel_group_idx
+                attr = curses.color_pair(SELECTED_PAIR) if is_sel else curses.A_DIM
+                aname = app.get("name", "?")[:24]
+                marker = "♪" if app.get("isActive") else "·"
+                try:
+                    stdscr.addstr(y, 6, f"{marker} {aname}  (routed here)"[:mid - 8], attr)
                 except curses.error:
                     pass
 
@@ -1848,20 +1924,36 @@ def main(stdscr, port):
                     g = item[1]
                     if confirm_dialog(stdscr, f"Delete virtual cable '{g.get('name')}'?"):
                         for iid in g.get("inputIds", []):
-                            if iid in routed_apps:
-                                pid, _cable, _gid = routed_apps.pop(iid)
+                            info = routed_apps.get(iid)
+                            if info:
+                                pid = info[0]
+                                _forget_pid(pid)  # clear all tracking so repair can't re-add
                                 run_job(lambda pid=pid: _clear_app_route(pid))
                             # Delete inputs that only this group used, so they
                             # do not linger in the config as orphans.
                             if not input_used_elsewhere(iid, g.get("id")):
                                 api_call("DELETE", f"/api/inputs/{iid}")
                         api_call("DELETE", f"/api/groups/{g['id']}")
+                elif item[0] == "app":
+                    # An app member row: unroute the app back to the Windows
+                    # default (which is where "remove from this group" belongs
+                    # for a cabled group -- the app was never its own input).
+                    g = item[1]
+                    app = item[2]
+                    pid = app.get("processId")
+                    aname = app.get("name", str(pid))
+                    if confirm_dialog(stdscr,
+                            f"Unroute {aname} from {g.get('name')} (back to default)?"):
+                        _forget_pid(pid)
+                        run_job(lambda pid=pid: _clear_app_route(pid))
                 else:
                     g = item[1]
                     inp = item[2]
                     iid = inp["id"]
-                    if iid in routed_apps:
-                        pid, _cable, _gid = routed_apps.pop(iid)
+                    info = routed_apps.get(iid)
+                    if info:
+                        pid = info[0]
+                        _forget_pid(pid)  # clear all tracking so repair can't re-add
                         run_job(lambda pid=pid: _clear_app_route(pid))
                     ids = [x for x in g.get("inputIds", []) if x != iid]
                     api_call("PATCH", f"/api/groups/{g['id']}", {"inputIds": ids})
