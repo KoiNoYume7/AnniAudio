@@ -86,11 +86,15 @@ avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_ke
 ### Stage B — Per-input positioning (mixer integration) — **DONE**
 - [x] `spatial` + `azimuth`/`elevation` on the **input** config model
       (mirrors `denoise` / `eqPreset`), through matrix → control server → JSON persistence.
-- [x] A spatialized strip downmixes to mono, resamples to the render rate, and
-      convolves to a stereo contribution summed into the output — the engine change
-      lives in `AudioMixer::Impl::writeStripSpatial()`. All `Spatializer` state is
-      pre-allocated in `setupStripDsp()` before the RT thread; wider-than-stereo
-      outputs get the binaural pair in channels 0/1.
+- [x] A spatialized strip keeps its left/right channels and virtualizes them:
+      each channel is convolved as its own virtual speaker (left at azimuth+30°,
+      right at azimuth-30°) and the two binaural results are summed — this preserves
+      the stereo image and externalizes it instead of collapsing to a mono point.
+      The engine change lives in `AudioMixer::Impl::writeStripSpatial()` (two
+      `Spatializer` instances per strip). All state is pre-allocated in
+      `setupStripDsp()` before the RT thread; wider-than-stereo outputs get the
+      binaural pair in channels 0/1. (A future mono point-source mode can place a
+      single source at an exact azimuth for callouts/voices.)
 - [x] Live, glitch-free direction changes: `setStripDirection()` queues an atomic
       request applied on the audio thread between blocks (no HRIR-swap race); the
       overlap tail is kept so a moving source cross-fades instead of clicking.
