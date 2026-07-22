@@ -8,11 +8,20 @@ audio itself; every action is a REST call, and every state update flows back in
 over Server-Sent Events, so this window always mirrors whatever the mixer
 process (and any other connected client) is actually doing.
 
-Threading model:
+Threading model (hardened for reliable sync):
     - The main thread owns curses and only ever reads `state`/`endpoints`/etc.
       under `state_lock` before drawing a frame; it never blocks on the network.
+      Each frame it layers an optimistic overlay (apply_overlay) so an action is
+      visible within one frame instead of waiting for the ~200 ms SSE echo.
     - `sse_worker` holds a long-lived GET to /api/events and replaces `state`
-      wholesale each time a `data:` event arrives, reconnecting on drop.
+      wholesale on each `data:` event. It has a BOUNDED read timeout, so a
+      half-open socket (e.g. after the mixer restarts) is detected instead of
+      wedging the stream forever; every (re)connect re-seeds full state via
+      GET /api/state, and reconnects use exponential backoff.
+    - Long-lived workers run under `_run_supervised`, which relaunches them if
+      they ever crash -- background sync can't stay dead for the session.
+    - Polling (`fetch_applications`/`fetch_endpoints`) keeps the last good list
+      on a transient error rather than blanking the pickers.
     - `api_worker` drains `api_queue` and fires the PATCH/POST/DELETE calls
       queued by `api_call()`, so a slow request (e.g. one that opens/closes a
       WASAPI device) never freezes the UI.
@@ -107,6 +116,11 @@ _route_running = threading.Event()
 status_text = "Connecting..."
 last_error = ""
 last_success = ""
+# Monotonic time of the last byte (event or heartbeat) received on the SSE
+# stream. The render loop uses it to show a "stale" warning when the stream
+# goes quiet, so a silently-wedged connection is visible instead of looking live.
+last_event_ts = 0.0
+sse_connected = False
 
 # Fire-and-forget PATCH/POST/DELETE requests, drained by api_worker().
 api_queue = queue.Queue()
@@ -199,6 +213,74 @@ def run_job(fn):
     job_queue.put(fn)
 
 
+def _run_supervised(name, target, *args):
+    """Run a long-lived worker and restart it if it ever crashes.
+
+    Background sync must survive transient faults, so a worker that raises out of
+    its own loop is logged and relaunched after a short delay rather than staying
+    dead for the rest of the session. Daemon threads are torn down with the
+    process on quit, so no explicit stop path is needed here.
+    """
+    global last_error
+    while True:
+        try:
+            target(*args)
+        except Exception as e:
+            try:
+                with state_lock:
+                    last_error = f"{name} restarting: {e}"
+            except Exception:
+                pass
+        time.sleep(1.0)  # never hot-loop on a persistent failure
+
+
+# ---------------------------------------------------------------------------
+# Optimistic overlay (main-thread only -- written by key handlers, read by the
+# render loop, so no lock is needed). After a mutating keypress the new value is
+# stamped here and drawn immediately, so the UI reflects the action within one
+# frame instead of waiting for the ~200 ms SSE echo. Entries expire, so a write
+# the server rejects falls back to the server's truth on its own.
+# ---------------------------------------------------------------------------
+OVERLAY_SECONDS = 1.5
+pending_overlay = {}  # (kind, ident, field) -> (value, monotonic_ts)
+
+
+def overlay_put(kind, ident, field, value):
+    pending_overlay[(kind, ident, field)] = (value, time.monotonic())
+
+
+def overlay_get(kind, ident, field, cur):
+    e = pending_overlay.get((kind, ident, field))
+    if e and time.monotonic() - e[1] < OVERLAY_SECONDS:
+        return e[0]
+    return cur
+
+
+def apply_overlay(st):
+    """Return state with fresh optimistic values layered on (originals untouched)."""
+    now = time.monotonic()
+    for k in [k for k, (_v, ts) in list(pending_overlay.items())
+              if now - ts >= OVERLAY_SECONDS]:
+        pending_overlay.pop(k, None)
+    if not pending_overlay:
+        return st
+    groups = [dict(g,
+                   volume=overlay_get("group", g.get("id"), "volume", g.get("volume")),
+                   muted=overlay_get("group", g.get("id"), "muted", g.get("muted")))
+              for g in st.get("groups", [])]
+    inputs = [dict(i,
+                   denoise=overlay_get("input", i.get("id"), "denoise", i.get("denoise")),
+                   eqPreset=overlay_get("input", i.get("id"), "eqPreset", i.get("eqPreset")),
+                   spatial=overlay_get("input", i.get("id"), "spatial", i.get("spatial")),
+                   azimuth=overlay_get("input", i.get("id"), "azimuth", i.get("azimuth")))
+              for i in st.get("inputs", [])]
+    outputs = [dict(o,
+                    master=overlay_get("output", o.get("name"), "master", o.get("master")),
+                    muted=overlay_get("output", o.get("name"), "muted", o.get("muted")))
+               for o in st.get("outputs", [])]
+    return dict(st, groups=groups, inputs=inputs, outputs=outputs)
+
+
 def _pid_alive(pid):
     """True if a process with this id currently exists (best effort, Windows)."""
     if not pid:
@@ -284,40 +366,85 @@ def _route_worker(port):
 # SSE / polling worker
 # ---------------------------------------------------------------------------
 
+def _seed_state(port):
+    """One-shot GET /api/state so the UI is populated immediately at startup and
+    after every SSE reconnect -- never left showing stale data while waiting for
+    the first pushed event."""
+    global state
+    try:
+        r = requests.get(BASE.format(port=port) + "/api/state", timeout=(5, 10))
+        if r.ok:
+            payload = r.json()
+            if isinstance(payload, dict):
+                with state_lock:
+                    state = payload
+                return True
+    except Exception:
+        pass
+    return False
+
+
+# Read timeout for the SSE stream. The server sends a heartbeat every ~5 s, so a
+# healthy idle connection always delivers a line well inside this window; if the
+# socket half-opens (e.g. the mixer was restarted) the read raises ReadTimeout
+# and we reconnect instead of blocking forever. This was the main sync bug.
+_SSE_READ_TIMEOUT = 20
+
+
 def sse_worker(port):
-    """Background thread: keep `state` in sync via /api/events, reconnecting on drop."""
-    global status_text, state
+    """Background thread: keep `state` in sync via /api/events.
+
+    Robust by construction: a bounded read timeout detects a dead/half-open
+    stream, every (re)connect re-seeds full state via /api/state, reconnects use
+    exponential backoff, and no exception can kill the thread -- the outermost
+    loop always retries.
+    """
+    global status_text, state, last_event_ts, sse_connected, last_error
     base = BASE.format(port=port)
     session = requests.Session()
+    backoff = 1.0
     while True:
         try:
             with state_lock:
-                status_text = "SSE connecting..."
-            r = session.get(base + "/api/events", stream=True, timeout=(5, None))
+                status_text = "Connecting..."
+                sse_connected = False
+            _seed_state(port)  # populate/refresh before the stream even opens
+            r = session.get(base + "/api/events", stream=True,
+                            timeout=(5, _SSE_READ_TIMEOUT))
             if r.status_code != 200:
                 with state_lock:
                     status_text = f"SSE {r.status_code}"
-                time.sleep(2)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 10.0)
                 continue
+            backoff = 1.0
             with state_lock:
                 status_text = "Connected"
+                sse_connected = True
+                last_event_ts = time.monotonic()
             for line in r.iter_lines():
-                if line is None:
+                with state_lock:
+                    last_event_ts = time.monotonic()
+                if not line:
                     continue
                 if line.startswith(b":"):
-                    continue
-                if line.startswith(b"data: "):
+                    continue  # heartbeat -- liveness only
+                if line.startswith(b"data:"):
                     try:
-                        payload = json.loads(line[6:])
-                        with state_lock:
-                            state = payload
-                    except Exception as e:
-                        with state_lock:
-                            status_text = f"SSE parse error: {e}"
+                        payload = json.loads(line[5:].lstrip())
+                        if isinstance(payload, dict):
+                            with state_lock:
+                                state = payload
+                    except Exception:
+                        pass  # ignore one bad frame; keep the last good state
         except Exception as e:
             with state_lock:
-                status_text = f"SSE error: {e}"
-            time.sleep(2)
+                status_text = "Reconnecting..."
+                sse_connected = False
+                if not isinstance(e, requests.exceptions.RequestException):
+                    last_error = f"SSE worker: {e}"
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 10.0)
 
 
 def fetch_endpoints(port):
@@ -330,11 +457,11 @@ def fetch_endpoints(port):
     try:
         r = requests.get(BASE.format(port=port) + "/api/endpoints", timeout=15)
         if r.ok:
+            eps = r.json().get("endpoints", [])
             with state_lock:
-                endpoints = r.json().get("endpoints", [])
+                endpoints = eps
     except Exception:
-        with state_lock:
-            endpoints = []
+        pass  # keep the last good list; a transient error must not blank the picker
 
 
 def fetch_applications(port):
@@ -343,11 +470,11 @@ def fetch_applications(port):
     try:
         r = requests.get(BASE.format(port=port) + "/api/applications", timeout=15)
         if r.ok:
+            apps = r.json().get("applications", [])
             with state_lock:
-                applications = r.json().get("applications", [])
+                applications = apps
     except Exception:
-        with state_lock:
-            applications = []
+        pass  # keep the last good list; a transient error must not blank the picker
 
 
 def _rules_path():
@@ -441,7 +568,7 @@ def _scan_new_apps(port):
 
 
 def apps_refresh_worker(port):
-    """Background thread: keep the application list fresh (every 5 seconds).
+    """Background thread: keep the application list fresh (every ~2.5 seconds).
 
     The route-mismatch warnings compare against this list; refreshing it
     automatically means they clear on their own after an app restarts, instead
@@ -455,7 +582,7 @@ def apps_refresh_worker(port):
         except Exception as e:
             with state_lock:
                 last_error = f"App scan failed: {e}"
-        for _ in range(10):
+        for _ in range(5):
             if not _route_running.is_set():
                 return
             time.sleep(0.5)
@@ -1132,12 +1259,12 @@ def main(stdscr, port):
 
     t_api = threading.Thread(target=api_worker, args=(port,), daemon=True)
     t_api.start()
-    t_sse = threading.Thread(target=sse_worker, args=(port,), daemon=True)
+    t_sse = threading.Thread(target=_run_supervised, args=("sse", sse_worker, port), daemon=True)
     t_sse.start()
     t_job = threading.Thread(target=job_worker, daemon=True)
     t_job.start()
     _route_running.set()
-    t_route = threading.Thread(target=_route_worker, args=(port,), daemon=True)
+    t_route = threading.Thread(target=_run_supervised, args=("route", _route_worker, port), daemon=True)
     t_route.start()
 
     def _startup_restore():
@@ -1157,7 +1284,8 @@ def main(stdscr, port):
     # immediately and fills in as these complete. Applications refresh on
     # their own every 5s (apps_refresh_worker); endpoints only on demand (R).
     threading.Thread(target=_startup_restore, daemon=True).start()
-    threading.Thread(target=apps_refresh_worker, args=(port,), daemon=True).start()
+    threading.Thread(target=_run_supervised, args=("apps", apps_refresh_worker, port),
+                     daemon=True).start()
     run_job(lambda: fetch_endpoints(port))
 
     # The most recent status message and when it appeared. Messages are consumed
@@ -1186,29 +1314,22 @@ def main(stdscr, port):
     MISMATCH_GRACE_SECONDS = 8.0
     mismatch_since = {}  # input id -> first time the mismatch was seen
 
-    # Optimistic volumes: rapid +/- presses would otherwise each be computed
-    # from the last server-confirmed value (broadcast at most every 200 ms), so
-    # three quick presses move the fader once and then it snaps around. The
-    # pending value is used as the base for the next nudge and for display
-    # until the server catches up (or the entry expires).
-    PENDING_SECONDS = 1.5
-    pending_group_vol = {}   # group id -> (volume, timestamp)
-    pending_out_vol = {}     # output name -> (volume, timestamp)
-
+    # Volume/mute/toggle actions all feed the shared optimistic overlay (see
+    # overlay_put/apply_overlay), so rapid +/- presses nudge from the pending
+    # value instead of the last ~200 ms-old server echo, and every action shows
+    # immediately.
     def set_group_volume(g, delta=None, absolute=None):
         gid = g.get("id")
-        pv = pending_group_vol.get(gid)
-        base = pv[0] if pv and time.time() - pv[1] < PENDING_SECONDS else g.get("volume", 100)
+        base = overlay_get("group", gid, "volume", g.get("volume", 100))
         new_vol = clamp_vol(absolute if absolute is not None else base + delta)
-        pending_group_vol[gid] = (new_vol, time.time())
+        overlay_put("group", gid, "volume", new_vol)
         api_call("PATCH", f"/api/groups/{gid}", {"volume": new_vol})
 
     def set_output_volume(out, delta=None, absolute=None):
         name = out.get("name")
-        pv = pending_out_vol.get(name)
-        base = pv[0] if pv and time.time() - pv[1] < PENDING_SECONDS else out.get("master", 100)
+        base = overlay_get("output", name, "master", out.get("master", 100))
         new_vol = clamp_vol(absolute if absolute is not None else base + delta)
-        pending_out_vol[name] = (new_vol, time.time())
+        overlay_put("output", name, "master", new_vol)
         api_call("POST", "/api/outputs/master", {"name": name, "volume": new_vol})
 
     while True:
@@ -1221,8 +1342,14 @@ def main(stdscr, port):
             local_apps = applications
             local_busy = busy_jobs > 0
             local_pending = list(pending_new_apps)
+            local_evt_age = (time.monotonic() - last_event_ts) if last_event_ts else None
+            local_connected = sse_connected
             last_error = ""
             last_success = ""
+
+        # Layer optimistic values over the server snapshot so actions show up
+        # instantly (originals are left untouched for the background threads).
+        local_state = apply_overlay(local_state)
 
         if local_err:
             msg_text, msg_is_err, msg_ts = local_err, True, time.time()
@@ -1237,7 +1364,12 @@ def main(stdscr, port):
         # Header
         busy = "  |  working..." if local_busy else ""
         newapps = f"  |  {len(local_pending)} new app(s): press n" if local_pending else ""
-        header = f" AnniAudio Mixer TUI  |  port {port}  |  {local_status}{busy}{newapps} "
+        # Surface a wedged/quiet stream: if we think we're connected but no line
+        # (event or heartbeat) has arrived for a while, say so rather than lying.
+        conn = local_status
+        if local_connected and local_evt_age is not None and local_evt_age > 8:
+            conn = f"STALE {int(local_evt_age)}s (reconnecting)"
+        header = f" AnniAudio Mixer TUI  |  port {port}  |  {conn}{busy}{newapps} "
         try:
             stdscr.addstr(0, 0, header.ljust(w), curses.color_pair(HEADER_PAIR) | curses.A_BOLD)
         except curses.error:
@@ -1300,10 +1432,7 @@ def main(stdscr, port):
                 expanded = gid in expanded_groups
                 arrow = "▼" if expanded else "▶"
                 name = g.get("name", "?")[:18]
-                vol = g.get("volume", 100)
-                pv = pending_group_vol.get(gid)
-                if pv and time.time() - pv[1] < PENDING_SECONDS:
-                    vol = pv[0]
+                vol = g.get("volume", 100)   # already optimistic (apply_overlay)
                 muted = g.get("muted", False)
                 peak = max(g.get("peak", 0.0), g.get("rms", 0.0))
                 pct = level_to_pct(peak)
@@ -1413,10 +1542,7 @@ def main(stdscr, port):
             out = outputs[line]
             is_sel = pane == 1 and line == sel_output_idx
             name = out.get("name", "?")[:22]
-            vol = out.get("master", 100)
-            pv = pending_out_vol.get(out.get("name"))
-            if pv and time.time() - pv[1] < PENDING_SECONDS:
-                vol = pv[0]
+            vol = out.get("master", 100)   # already optimistic (apply_overlay)
             peak = max(out.get("masterPeak", 0.0), out.get("masterRms", 0.0))
             pct = level_to_pct(peak)
             bar = meter_bar(pct, 8)
@@ -1517,11 +1643,15 @@ def main(stdscr, port):
                 item = group_rows[sel_group_idx]
                 if item[0] == "group":
                     g = item[1]
-                    api_call("PATCH", f"/api/groups/{g['id']}", {"muted": not g.get("muted", False)})
+                    newmute = not g.get("muted", False)
+                    overlay_put("group", g.get("id"), "muted", newmute)
+                    api_call("PATCH", f"/api/groups/{g['id']}", {"muted": newmute})
             elif pane == 1 and outputs:
                 out = outputs[sel_output_idx]
+                newmute = not out.get("muted", False)
+                overlay_put("output", out.get("name"), "muted", newmute)
                 api_call("POST", "/api/outputs/master",
-                         {"name": out["name"], "muted": not out.get("muted", False)})
+                         {"name": out["name"], "muted": newmute})
         elif ch in (ord('e'), ord('E'), 10, 13, curses.KEY_ENTER):
             if pane == 0 and group_rows:
                 item = group_rows[sel_group_idx]
@@ -1810,8 +1940,10 @@ def main(stdscr, port):
                 inp = item[2]
                 if ch == ord('N'):
                     body = {"denoise": not inp.get("denoise", False)}
+                    overlay_put("input", inp.get("id"), "denoise", body["denoise"])
                 else:
                     body = {"eqPreset": "" if inp.get("eqPreset") else "voice"}
+                    overlay_put("input", inp.get("id"), "eqPreset", body["eqPreset"])
                 api_call("PATCH", f"/api/inputs/{inp['id']}", body)
         elif ch == ord('H'):
             # Toggle HRTF binaural spatialization on the selected INPUT row.
@@ -1822,8 +1954,9 @@ def main(stdscr, port):
                         last_error = "Expand a cable and select a source row first"
                     continue
                 inp = item[2]
-                api_call("PATCH", f"/api/inputs/{inp['id']}",
-                         {"spatial": not inp.get("spatial", False)})
+                newspatial = not inp.get("spatial", False)
+                overlay_put("input", inp.get("id"), "spatial", newspatial)
+                api_call("PATCH", f"/api/inputs/{inp['id']}", {"spatial": newspatial})
         elif ch == ord('Y'):
             # Aim a spatialized input: azimuth (0=front, +90=left, -90=right),
             # optionally elevation. Sent live via the direction endpoint.
@@ -1842,8 +1975,10 @@ def main(stdscr, port):
                                    str(int(inp.get("azimuth", 0))))
                 if val:
                     try:
+                        az = float(val)
+                        overlay_put("input", inp.get("id"), "azimuth", az)
                         api_call("POST", f"/api/inputs/{inp['id']}/direction",
-                                 {"azimuth": float(val)})
+                                 {"azimuth": az})
                     except ValueError:
                         with state_lock:
                             last_error = f"Not a number: {val}"
