@@ -219,6 +219,68 @@ int main(int argc, char** argv) {
         check(left.itd  < 0, "source on the right reaches the right ear first");
     }
 
+    // ── Diagnostic: how strong is each spatial cue in THIS dataset? ──
+    // Front/back and up/down have no ILD/ITD — they live entirely in the spectral
+    // difference between HRIRs. This quantifies how much signal is actually there,
+    // which is exactly what governs whether a listener can hear those directions.
+    std::printf("Diagnostic — relative HRIR difference between directions\n");
+    {
+        auto irDiff = [&](float az1, float el1, float az2, float el2) {
+            std::vector<float> l1, r1, l2, r2;
+            sp.setDirection(az1, el1); captureIR(sp, sp.irLength() + 128, l1, r1);
+            sp.setDirection(az2, el2); captureIR(sp, sp.irLength() + 128, l2, r2);
+            double dn = 0, en = 0;
+            for (size_t i = 0; i < l1.size(); ++i) {
+                dn += (l1[i]-l2[i])*(l1[i]-l2[i]) + (r1[i]-r2[i])*(r1[i]-r2[i]);
+                en += l1[i]*l1[i] + r1[i]*r1[i] + l2[i]*l2[i] + r2[i]*r2[i];
+            }
+            return 100.0 * std::sqrt(dn / (en + 1e-12));
+        };
+        std::printf("  left  vs right  (az +90 vs -90): %6.1f%%   <- the strong cue\n", irDiff(90,0,-90,0));
+        std::printf("  front vs back   (az   0 vs 180): %6.1f%%   <- the weak one you noticed\n", irDiff(0,0,180,0));
+        std::printf("  ear   vs above  (el   0 vs +60): %6.1f%%   <- elevation cue\n", irDiff(0,0,0,60));
+    }
+
+    // ── Human gate 2: discrete anchored positions (incl. elevation) ──
+    // A held position gives the ear far longer to judge front/back and height than
+    // a fast sweep does. Listen for whether Front and Behind sound different at all.
+    std::printf("Test 5 — render discrete anchored positions\n");
+    {
+        struct Anchor { const char* name; float az, el; };
+        const Anchor anchors[] = {
+            {"FRONT",   0.f,   0.f}, {"RIGHT",  -90.f,  0.f},
+            {"BEHIND",180.f,   0.f}, {"LEFT",    90.f,  0.f},
+            {"ABOVE",   0.f,  60.f}, {"BELOW",   0.f, -30.f},
+            {"FRONT",   0.f,   0.f},
+        };
+        const double hold = 1.3, gap = 0.35;
+        const uint32_t block = 256;
+        std::vector<float> out;
+        for (const Anchor& a : anchors) {
+            std::printf("    %5.1fs  %s\n", out.size() / (2.0 * kSampleRate), a.name);
+            sp.setDirection(a.az, a.el);
+            uint32_t hn = (uint32_t)(hold * kSampleRate);
+            auto burst = makeNoise(hn, 4242);
+            for (uint32_t i = 0; i < hn; ++i) {
+                double t = i / kSampleRate;
+                double env = 0.5 * (1.0 - std::cos(2.0 * M_PI * std::fmod(t, 0.325) / 0.325));
+                burst[i] *= (float)(0.3 * env);
+            }
+            std::vector<float> stereo(block * 2);
+            for (uint32_t i = 0; i < hn; i += block) {
+                uint32_t f = std::min(block, hn - i);
+                sp.process(burst.data() + i, stereo.data(), f);
+                out.insert(out.end(), stereo.begin(), stereo.begin() + f * 2);
+            }
+            out.insert(out.end(), (size_t)(gap * kSampleRate) * 2, 0.0f);   // silence gap
+        }
+        float pk = 1e-9f;
+        for (float s : out) pk = std::max(pk, std::fabs(s));
+        for (float& s : out) s *= 0.708f / pk;
+        writeWavStereo16("hrtf_anchors_48k.wav", out, (uint32_t)kSampleRate);
+        std::printf("  ^ each position is held ~1.3s. Can you tell FRONT from BEHIND?\n");
+    }
+
     // ── Human gate: binaural orbit for listening ──
     std::printf("Test 4 — render a binaural orbit for listening\n");
     {
