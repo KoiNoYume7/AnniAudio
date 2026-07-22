@@ -39,8 +39,9 @@ Keybindings:
     x            set the selected virtual cable's send level to one of its
                  outputs (e.g. 100% on headphones, 15% on speakers)
     Enter/e      expand/collapse a cable: shows its capture input and, for a
-                 cabled cable, the apps LIVE-routed into that VAC right now
-                 (from each app's real playback endpoint -- always truthful)
+                 cabled cable, the apps routed into that VAC (by each app's real
+                 Windows per-app output setting). An app whose live session is
+                 still elsewhere is flagged "restart app to apply"
     i            add a device source (from a device picker) to the selected virtual cable
     a            add an application (from a running app picker) to the selected virtual cable
     g            add a new virtual cable
@@ -110,6 +111,11 @@ state_lock = threading.Lock()
 state = {"running": False, "inputs": [], "groups": [], "outputs": []}
 endpoints = []
 applications = []
+# pid -> the app's CONFIGURED per-app output device name (what Windows persists
+# and Sound Settings shows), polled by _app_route_worker. Group membership keys
+# on this, not the transient session endpoint, so re-routing shows up correctly
+# even before the app recreates its stream. Guarded by state_lock.
+app_routes = {}
 # input_id -> (pid, cable, group_id) for app inputs that were routed to a VAC.
 # Used to clear the per-app route when the input is removed, re-route inputs
 # when a group's cable changes, and to repair routes that Windows overrides
@@ -602,6 +608,44 @@ def apps_refresh_worker(port):
         except Exception as e:
             with state_lock:
                 last_error = f"App scan failed: {e}"
+        for _ in range(5):
+            if not _route_running.is_set():
+                return
+            time.sleep(0.5)
+
+
+def _app_route_worker(port):
+    """Background thread: poll each running app's CONFIGURED output device.
+
+    /api/applications reports where an app's audio session is playing *right now*,
+    which lags the per-app routing until the app recreates its stream. This worker
+    asks winappaudiorouter what each app is actually *routed* to (the persistent
+    Windows setting), so the TUI can group apps by their real destination and flag
+    when the live session hasn't caught up yet.
+    """
+    global app_routes
+    if not _HAS_ROUTER or not winappaudiorouter:
+        return
+    while _route_running.is_set():
+        with state_lock:
+            pids = [a.get("processId") for a in applications
+                    if a.get("processId") and not a.get("isInput") and not a.get("isSystem")]
+        routes = {}
+        try:
+            with winappaudiorouter.com.com_initialized():
+                id2name = {d.id: d.name for d in winappaudiorouter.list_output_devices()}
+                for pid in pids:
+                    try:
+                        cur = winappaudiorouter.get_app_output_device(process_id=pid)
+                        did = cur.get(pid) if cur else None
+                        if did and did in id2name:
+                            routes[pid] = id2name[did]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        with state_lock:
+            app_routes = routes
         for _ in range(5):
             if not _route_running.is_set():
                 return
@@ -1335,6 +1379,8 @@ def main(stdscr, port):
     threading.Thread(target=_startup_restore, daemon=True).start()
     threading.Thread(target=_run_supervised, args=("apps", apps_refresh_worker, port),
                      daemon=True).start()
+    threading.Thread(target=_run_supervised, args=("routes", _app_route_worker, port),
+                     daemon=True).start()
     run_job(lambda: fetch_endpoints(port))
 
     # The most recent status message and when it appeared. Messages are consumed
@@ -1436,13 +1482,18 @@ def main(stdscr, port):
 
         outputs = local_state.get("outputs", [])
         apps_by_pid = {a.get("processId"): a for a in local_apps}
-        # Live per-VAC membership: which apps are actually playing into each cable
-        # right now. Drives the truthful "app under group" rows below.
+        with state_lock:
+            local_routes = dict(app_routes)
+        # Per-VAC membership keyed on each app's CONFIGURED route (what it's
+        # actually assigned to), falling back to the live session endpoint when we
+        # have no routing info. So a re-routed app shows under its new group even
+        # before its audio session moves there.
         apps_by_endpoint = {}
         for a in local_apps:
             if a.get("isInput") or a.get("isSystem"):
                 continue
-            ep = a.get("endpoint")
+            pid = a.get("processId")
+            ep = local_routes.get(pid) or a.get("endpoint")
             if ep:
                 apps_by_endpoint.setdefault(ep, []).append(a)
         group_rows = build_group_rows(local_state, expanded_groups, apps_by_endpoint)
@@ -1584,14 +1635,28 @@ def main(stdscr, port):
                             stdscr.addstr(y, 4 + len(prefix), warn[:avail], wattr)
                 except curses.error:
                     pass
-            else:  # ("app", g, app): a live member of a cabled group
+            else:  # ("app", g, app): a member of a cabled group (by configured route)
                 app = item[2]
                 is_sel = pane == 0 and line == sel_group_idx
                 attr = curses.color_pair(SELECTED_PAIR) if is_sel else curses.A_DIM
                 aname = app.get("name", "?")[:24]
                 marker = "♪" if app.get("isActive") else "·"
+                # The app is listed under its configured route (this group's cable).
+                # If its live session is still on a different endpoint, the route
+                # hasn't taken effect yet -- Windows only moves a running app when
+                # it recreates its stream.
+                sess = app.get("endpoint")
+                cable = g.get("cable", "")
+                pending = bool(sess and cable and sess != cable)
                 try:
-                    stdscr.addstr(y, 6, f"{marker} {aname}  (routed here)"[:mid - 8], attr)
+                    stdscr.addstr(y, 6, f"{marker} {aname}"[:mid - 8], attr)
+                    if pending:
+                        note = f"  ! still on {short_cable(sess)} - restart app to apply"
+                        wattr = (curses.color_pair(ERROR_PAIR)
+                                 | (curses.A_REVERSE if is_sel else 0))
+                        avail = mid - 2 - (6 + len(aname) + 2)
+                        if avail > 4:
+                            stdscr.addstr(y, 6 + len(aname) + 2, note[:avail], wattr)
                 except curses.error:
                     pass
 
