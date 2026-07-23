@@ -79,7 +79,6 @@ start-mixer.bat / mixer-tui.bat for the usual two-step launch).
 import argparse
 import fnmatch
 import json
-import math
 import os
 import queue
 import sys
@@ -102,6 +101,18 @@ try:
 except Exception:
     winappaudiorouter = None
     _HAS_ROUTER = False
+
+from tui_utils import (
+    SELECTED_PAIR, METER_PAIR, MUTED_PAIR, HEADER_PAIR,
+    SUCCESS_PAIR, ERROR_PAIR,
+    level_to_pct, meter_bar, vol_bar, clamp_vol,
+    group_color_attr, app_label,
+    input_for_id, group_for_id,
+)
+from tui_ui import (
+    list_dialog, input_dialog, confirm_dialog,
+    short_cable, build_group_rows,
+)
 
 BASE = "http://127.0.0.1:{port}"
 
@@ -149,13 +160,6 @@ app_rules = {"rules": [], "ignore": []}
 pending_new_apps = []   # guarded by state_lock
 _auto_handled = set()   # pids already auto-routed, queued, or ignored this run
 
-SELECTED_PAIR = 1
-METER_PAIR = 2
-MUTED_PAIR = 3
-HEADER_PAIR = 4
-SUCCESS_PAIR = 5
-ERROR_PAIR = 6
-GROUP_PAIR_START = 10
 
 # ---------------------------------------------------------------------------
 # API worker
@@ -1038,329 +1042,6 @@ def _assign_app_to_group(port, group, app):
         else:
             with state_lock:
                 last_error = f"Could not add {name}"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def level_to_pct(v):
-    """Map a linear 0-1 peak/RMS sample to a 0-100 meter-bar percentage.
-
-    Uses a 60 dB display range (-60 dBFS -> 0%, 0 dBFS -> 100%); this is a
-    display curve for the meter bars, not a calibrated loudness measurement.
-    """
-    if v <= 0.00001:
-        return 0
-    db = 20 * math.log10(min(v, 1.0))
-    return max(0, min(100, (db + 60) / 60 * 100))
-
-
-def meter_bar(pct, width=10):
-    """Render a 0-100 percentage as a filled/empty block-character bar."""
-    filled = int(round(pct / 100 * width))
-    return "█" * filled + "░" * (width - filled)
-
-
-def vol_bar(vol, width=16):
-    """Render a 0-200 volume percentage as a filled/empty block-character bar."""
-    filled = int(round(vol / 200 * width))
-    return "█" * filled + "░" * (width - filled)
-
-
-def clamp_vol(v):
-    """Clamp a volume percentage to the 0-200% range the mixer API accepts."""
-    return max(0, min(200, v))
-
-
-def hex_to_curses_color(hexstr):
-    """Map a '#rrggbb' group color to the nearest of curses' 8 base colors.
-
-    Most terminals only reliably support 8 (or 16) colors, so this picks the
-    closest match by squared RGB distance rather than assuming 256-color support.
-    """
-    hexstr = hexstr.lstrip("#")
-    if len(hexstr) != 6:
-        return curses.COLOR_WHITE
-    try:
-        r = int(hexstr[0:2], 16)
-        g = int(hexstr[2:4], 16)
-        b = int(hexstr[4:6], 16)
-    except Exception:
-        return curses.COLOR_WHITE
-    candidates = [
-        (curses.COLOR_BLACK, 0, 0, 0),
-        (curses.COLOR_RED, 255, 0, 0),
-        (curses.COLOR_GREEN, 0, 255, 0),
-        (curses.COLOR_YELLOW, 255, 255, 0),
-        (curses.COLOR_BLUE, 0, 0, 255),
-        (curses.COLOR_MAGENTA, 255, 0, 255),
-        (curses.COLOR_CYAN, 0, 255, 255),
-        (curses.COLOR_WHITE, 255, 255, 255),
-    ]
-    best = curses.COLOR_WHITE
-    best_d = 1e9
-    for cid, cr, cg, cb in candidates:
-        d = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
-        if d < best_d:
-            best_d = d
-            best = cid
-    return best
-
-
-def group_color_attr(color, pair_cache, selected=False):
-    """Return a curses attr for a group's color, lazily allocating a color pair.
-
-    Curses has a limited number of color pairs, so pair_cache (keyed by hex
-    color, shared across a single run() call) allocates one pair per distinct
-    color the first time it's seen and reuses it afterward.
-    """
-    if not curses.has_colors():
-        return curses.A_REVERSE if selected else curses.A_NORMAL
-    pair_id = pair_cache.get(color)
-    if pair_id is None:
-        pair_id = GROUP_PAIR_START + len(pair_cache)
-        fg = hex_to_curses_color(color)
-        try:
-            curses.init_pair(pair_id, fg, -1)
-        except Exception:
-            pass
-        pair_cache[color] = pair_id
-    attr = curses.color_pair(pair_id)
-    if selected:
-        attr |= curses.A_REVERSE
-    return attr
-
-
-def app_label(a):
-    """Picker label for an application: exe, window title (id helper), endpoint."""
-    name = a.get('name', '?')
-    title = (a.get('windowTitle') or '').strip()
-    ep = a.get('endpoint', '?')
-    if title and title.lower() != name.lower():
-        return f"{name} - \"{title[:48]}\" ({ep})"
-    return f"{name} ({ep})"
-
-
-def input_for_id(iid, local_state):
-    """Look up an input dict by id within a state snapshot; O(n), state is small."""
-    for inp in local_state.get("inputs", []):
-        if inp.get("id") == iid:
-            return inp
-    return None
-
-
-def group_for_id(gid, local_state):
-    """Look up a group dict by id within a state snapshot; O(n), state is small."""
-    for g in local_state.get("groups", []):
-        if g.get("id") == gid:
-            return g
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Dialogs
-#
-# Each of these owns a modal curses window and blocks (via win.getch(), which
-# defaults to blocking mode unlike stdscr's 50ms timeout) until the user
-# confirms or cancels. The main render loop is paused for the duration.
-# ---------------------------------------------------------------------------
-
-def draw_box(win, title=""):
-    """Draw a bordered box with an optional centered title on a curses window."""
-    h, w = win.getmaxyx()
-    try:
-        win.box()
-    except curses.error:
-        pass
-    if title:
-        try:
-            win.addstr(0, 2, f" {title} ", curses.A_BOLD)
-        except curses.error:
-            pass
-
-
-def list_dialog(stdscr, title, items, start_idx=0):
-    """Modal scrollable picker with type-to-filter.
-
-    Typing narrows the list (case-insensitive substring match); Backspace edits
-    the filter, Up/Down navigate, Enter confirms, Esc cancels. Returns the
-    selected index into the ORIGINAL items list, or None if cancelled.
-    """
-    if not items:
-        return None
-    h, w = stdscr.getmaxyx()
-    max_h = min(h - 4, max(10, len(items) + 5))
-    max_w = min(w - 4, max(44, max(len(str(x)) for x in items) + 8))
-    y = (h - max_h) // 2
-    x = (w - max_w) // 2
-    win = curses.newwin(max_h, max_w, y, x)
-    win.keypad(True)
-    idx = start_idx
-    offset = 0
-    filt = ""
-    while True:
-        if filt:
-            matches = [i for i, it in enumerate(items) if filt.lower() in str(it).lower()]
-        else:
-            matches = list(range(len(items)))
-        if matches:
-            idx = min(idx, len(matches) - 1)
-        win.erase()
-        draw_box(win, title)
-        prompt = f"filter: {filt}" if filt else "type to filter, ↑↓ navigate"
-        try:
-            win.addstr(1, 2, prompt[:max_w - 4], curses.A_DIM if not filt else curses.A_BOLD)
-        except curses.error:
-            pass
-        visible = max_h - 5
-        # Keep the selection inside the visible window without recentering it
-        # on every keypress (a moving offset makes the list feel jumpy).
-        if idx < offset:
-            offset = idx
-        elif idx >= offset + visible:
-            offset = idx - visible + 1
-        for i in range(visible):
-            line = offset + i
-            if line >= len(matches):
-                break
-            attr = curses.A_NORMAL
-            if line == idx:
-                attr = curses.color_pair(SELECTED_PAIR) | curses.A_BOLD
-            try:
-                win.addstr(3 + i, 2, str(items[matches[line]])[:max_w - 4], attr)
-            except curses.error:
-                pass
-        if not matches:
-            try:
-                win.addstr(3, 2, "(no matches)", curses.A_DIM)
-            except curses.error:
-                pass
-        try:
-            win.refresh()
-        except curses.error:
-            pass
-        ch = win.getch()
-        if ch == curses.KEY_UP:
-            if matches:
-                idx = (idx - 1) % len(matches)
-        elif ch == curses.KEY_DOWN:
-            if matches:
-                idx = (idx + 1) % len(matches)
-        elif ch in (curses.KEY_ENTER, 10, 13):
-            if matches:
-                return matches[idx]
-        elif ch == 27:
-            return None
-        elif ch == curses.KEY_BACKSPACE or ch == 127 or ch == 8:
-            filt = filt[:-1]
-            idx = 0
-        elif 32 <= ch <= 126:
-            filt += chr(ch)
-            idx = 0
-
-
-def input_dialog(stdscr, title, default=""):
-    """Modal single-line text prompt. Returns the entered text, or None if cancelled.
-
-    Only accepts printable ASCII (32-126); there is no Unicode input support.
-    """
-    h, w = stdscr.getmaxyx()
-    height = 5
-    width = min(w - 4, max(50, len(title) + 10))
-    y = (h - height) // 2
-    x = (w - width) // 2
-    win = curses.newwin(height, width, y, x)
-    win.keypad(True)
-    text = default
-    try:
-        curses.curs_set(1)
-    except curses.error:
-        pass
-    try:
-        while True:
-            win.erase()
-            draw_box(win, title)
-            shown = text[:width - 4]
-            try:
-                win.addstr(2, 2, shown)
-                win.move(2, 2 + len(shown))
-                win.refresh()
-            except curses.error:
-                pass
-            ch = win.getch()
-            if ch in (curses.KEY_ENTER, 10, 13):
-                return text
-            elif ch in (27,):
-                return None
-            elif ch == curses.KEY_BACKSPACE or ch == 127 or ch == 8:
-                text = text[:-1]
-            elif 32 <= ch <= 126:
-                text += chr(ch)
-    finally:
-        try:
-            curses.curs_set(0)
-        except curses.error:
-            pass
-
-
-def confirm_dialog(stdscr, text):
-    """Modal y/n prompt. Returns True/False; Esc counts as No."""
-    h, w = stdscr.getmaxyx()
-    height = 5
-    width = min(w - 4, max(40, len(text) + 10))
-    y = (h - height) // 2
-    x = (w - width) // 2
-    win = curses.newwin(height, width, y, x)
-    win.keypad(True)
-    while True:
-        win.erase()
-        draw_box(win, "Confirm")
-        try:
-            win.addstr(2, 2, text[:width - 4])
-            win.refresh()
-        except curses.error:
-            pass
-        ch = win.getch()
-        if ch in (ord('y'), ord('Y'), 10, 13):
-            return True
-        elif ch in (ord('n'), ord('N'), 27):
-            return False
-
-
-# ---------------------------------------------------------------------------
-# Main TUI
-# ---------------------------------------------------------------------------
-
-def short_cable(name):
-    """Trim the boilerplate off a VAC endpoint name for display."""
-    return (name or "").replace(" (Virtual Audio Cable)", "").strip() or name
-
-
-def build_group_rows(local_state, expanded_ids, apps_by_endpoint=None):
-    """Flatten groups (and, for expanded ones, their inputs and live app members)
-    into one linear row list of ("group", g) / ("input", g, inp) / ("app", g, app)
-    tuples, so the groups pane's keyboard navigation treats them uniformly.
-
-    For a cabled group the "app" rows come straight from which applications are
-    *actually* playing into that VAC right now (their live session endpoint), so
-    the membership is always truthful and self-heals when an app is re-routed --
-    no client-side tracking involved.
-    """
-    apps_by_endpoint = apps_by_endpoint or {}
-    rows = []
-    for g in local_state.get("groups", []):
-        rows.append(("group", g))
-        if g.get("id") in expanded_ids:
-            for iid in g.get("inputIds", []):
-                inp = input_for_id(iid, local_state)
-                if inp:
-                    rows.append(("input", g, inp))
-            cable = g.get("cable", "")
-            if cable:
-                for app in apps_by_endpoint.get(cable, []):
-                    rows.append(("app", g, app))
-    return rows
 
 
 def main(stdscr, port, repair_routes=False):
