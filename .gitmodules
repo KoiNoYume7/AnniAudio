@@ -1,3 +1,4 @@
 [submodule "third_party/rnnoise"]
 	path = third_party/rnnoise
 	url = https://github.com/xiph/rnnoise
+	ignore = untracked

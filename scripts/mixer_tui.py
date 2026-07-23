@@ -330,6 +330,8 @@ def _forget_pid(pid):
     with state_lock:
         for iid in [i for i, (p, _c, _g) in list(routed_apps.items()) if p == pid]:
             routed_apps.pop(iid, None)
+        app_routes.pop(pid, None)
+        _auto_handled.discard(pid)
         _route_fail_counts.pop(pid, None)
         _route_unroutable.discard(pid)
 
@@ -545,12 +547,28 @@ def _rule_group_for(exe):
     return None
 
 
+def _set_app_rule(exe, group_name):
+    """Add or replace the rule for an exe and save app-rules.json.
+
+    Replacing an existing rule instead of appending means assigning a pending
+    app to a new group actually overrides an earlier rule for the same exe.
+    """
+    exe_l = exe.lower()
+    rules = app_rules.setdefault("rules", [])
+    for i in reversed([i for i, r in enumerate(rules)
+                       if str(r.get("match", "")).lower() == exe_l]):
+        rules.pop(i)
+    rules.append({"match": exe_l, "group": group_name})
+    _save_app_rules()
+
+
 def _scan_new_apps(port):
     """Auto-route rule-matched apps off the default device; queue unknown ones.
 
     Runs after every application-list refresh. Only looks at render sessions
-    sitting on the DEFAULT device: an app someone already put on a specific
-    cable (manually or by an earlier rule) is left alone.
+    sitting on the DEFAULT device *and* with no per-app route already configured:
+    an app someone already routed to a specific cable (manually or by an earlier
+    rule) is left alone even if its live session has not moved yet.
     """
     global last_error, last_success
     with state_lock:
@@ -558,6 +576,7 @@ def _scan_new_apps(port):
         local_state = state
         local_eps = list(endpoints)
         routed_pids = {pid for (pid, _c, _g) in routed_apps.values()}
+        configured_for = dict(app_routes)
     default_render = next(
         (e.get("name") for e in local_eps if e.get("isRender") and e.get("isDefault")), None)
     if not default_render:
@@ -574,7 +593,15 @@ def _scan_new_apps(port):
             continue
         if app.get("endpoint") != default_render:
             continue
-        _auto_handled.add(pid)
+        # If the app is already configured to a non-default output, do not
+        # override it -- the live session may still be playing on the default
+        # until the app recreates its stream.
+        if configured_for.get(pid):
+            with state_lock:
+                _auto_handled.add(pid)
+            continue
+        with state_lock:
+            _auto_handled.add(pid)
         if exe.lower() in ignore:
             continue
         gname = _rule_group_for(exe)
@@ -604,6 +631,11 @@ def apps_refresh_worker(port):
     while _route_running.is_set():
         fetch_applications(port)
         try:
+            _refresh_app_routes(port)
+        except Exception as e:
+            with state_lock:
+                last_error = f"App route refresh failed: {e}"
+        try:
             _scan_new_apps(port)
         except Exception as e:
             with state_lock:
@@ -614,38 +646,45 @@ def apps_refresh_worker(port):
             time.sleep(0.5)
 
 
-def _app_route_worker(port):
-    """Background thread: poll each running app's CONFIGURED output device.
+def _refresh_app_routes(port):
+    """Poll winappaudiorouter for every running app's configured output device.
 
     /api/applications reports where an app's audio session is playing *right now*,
-    which lags the per-app routing until the app recreates its stream. This worker
+    which lags the per-app routing until the app recreates its stream. This helper
     asks winappaudiorouter what each app is actually *routed* to (the persistent
-    Windows setting), so the TUI can group apps by their real destination and flag
-    when the live session hasn't caught up yet.
+    Windows setting), so the TUI can group apps by their real destination and
+    _scan_new_apps can avoid overriding a route the user set elsewhere.
     """
     global app_routes
     if not _HAS_ROUTER or not winappaudiorouter:
         return
+    with state_lock:
+        pids = [a.get("processId") for a in applications
+                if a.get("processId") and not a.get("isInput") and not a.get("isSystem")]
+    routes = {}
+    try:
+        with winappaudiorouter.com.com_initialized():
+            id2name = {d.id: d.name for d in winappaudiorouter.list_output_devices()}
+            for pid in pids:
+                try:
+                    cur = winappaudiorouter.get_app_output_device(process_id=pid)
+                    did = cur.get(pid) if cur else None
+                    if did and did in id2name:
+                        routes[pid] = id2name[did]
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    with state_lock:
+        app_routes = routes
+
+
+def _app_route_worker(port):
+    """Background thread: keep app_routes fresh between application-list refreshes."""
+    if not _HAS_ROUTER or not winappaudiorouter:
+        return
     while _route_running.is_set():
-        with state_lock:
-            pids = [a.get("processId") for a in applications
-                    if a.get("processId") and not a.get("isInput") and not a.get("isSystem")]
-        routes = {}
-        try:
-            with winappaudiorouter.com.com_initialized():
-                id2name = {d.id: d.name for d in winappaudiorouter.list_output_devices()}
-                for pid in pids:
-                    try:
-                        cur = winappaudiorouter.get_app_output_device(process_id=pid)
-                        did = cur.get(pid) if cur else None
-                        if did and did in id2name:
-                            routes[pid] = id2name[did]
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        with state_lock:
-            app_routes = routes
+        _refresh_app_routes(port)
         for _ in range(5):
             if not _route_running.is_set():
                 return
@@ -747,10 +786,13 @@ def _reroute_group_apps(port, group, new_cable, state):
     if not group_id:
         return
 
+    with state_lock:
+        local_routed_apps = dict(routed_apps)
     inputs_by_id = {inp["id"]: inp for inp in state.get("inputs", [])}
     re_routed = 0
     failed = 0
     processed = set()
+    routed_apps_updates = {}
 
     def re_route_one(iid, pid, old_cable, inp_name, inp_type, inp_source):
         global last_error
@@ -766,7 +808,7 @@ def _reroute_group_apps(port, group, new_cable, state):
                     timeout=15,
                 )
                 if r.ok:
-                    routed_apps[iid] = (pid, "", group_id)
+                    routed_apps_updates[iid] = (pid, "", group_id)
                     re_routed += 1
                 else:
                     failed += 1
@@ -781,7 +823,7 @@ def _reroute_group_apps(port, group, new_cable, state):
             return
 
         if _reroute_input_to_cable(port, iid, pid, new_cable, inp_name or str(pid)):
-            routed_apps[iid] = (pid, new_cable, group_id)
+            routed_apps_updates[iid] = (pid, new_cable, group_id)
             re_routed += 1
         else:
             failed += 1
@@ -795,8 +837,8 @@ def _reroute_group_apps(port, group, new_cable, state):
 
         pid = None
         old_cable = ""
-        if iid in routed_apps:
-            pid, old_cable, _gid = routed_apps[iid]
+        if iid in local_routed_apps:
+            pid, old_cable, _gid = local_routed_apps[iid]
         elif itype == "application":
             try:
                 pid = int(source)
@@ -810,13 +852,14 @@ def _reroute_group_apps(port, group, new_cable, state):
 
     # Second pass: any tracked apps for this group that may still be pending in
     # api_worker (so they are not in group.get("inputIds") yet).
-    for iid, (pid, old_cable, gid) in list(routed_apps.items()):
+    for iid, (pid, old_cable, gid) in list(local_routed_apps.items()):
         if gid != group_id or iid in processed:
             continue
         inp = inputs_by_id.get(iid, {})
         re_route_one(iid, pid, old_cable, inp.get("name", ""), inp.get("type", ""), inp.get("source", ""))
 
     with state_lock:
+        routed_apps.update(routed_apps_updates)
         if re_routed and not failed:
             last_success = f"Re-routed {re_routed} app(s) to {new_cable}"
         elif failed:
@@ -875,40 +918,33 @@ def _load_tracked_routes(port, state):
     inputs_by_id = {inp["id"]: inp for inp in state.get("inputs", [])}
     groups = {g["id"]: g for g in state.get("groups", [])}
 
+    restored = {}
     for entry in data.get("routes", []):
         iid = entry.get("input_id")
         gid = entry.get("group_id")
-        name = entry.get("name", "")
         pid = entry.get("pid")
         cable = entry.get("cable", "")
 
-        # Exact input id still present in the same group.
+        # Only restore if the exact input id is still present in the same group.
+        # The fallback "group + name" reconcile used to resurrect stale routes
+        # after the user moved an app, so it has been removed.
         if iid in inputs_by_id:
             g = groups.get(gid)
             if g and iid in g.get("inputIds", []):
-                routed_apps[iid] = (pid, cable, gid)
-                continue
-
-        # Reconcile by group + name if the id shifted (config was edited).
-        g = groups.get(gid)
-        if not g:
-            continue
-        for iid2 in g.get("inputIds", []):
-            inp2 = inputs_by_id.get(iid2, {})
-            if inp2.get("name") == name:
-                routed_apps[iid2] = (pid, cable, gid)
-                break
+                restored[iid] = (pid, cable, gid)
 
     # Validate what we restored: drop routes whose process has exited and keep at
     # most one entry per pid, so a stale sidecar can never make the repair loop
     # fight itself (the bounce/reappear bug started here).
     seen_pids = set()
-    for iid in list(routed_apps.keys()):
-        pid = routed_apps[iid][0]
+    for iid in list(restored.keys()):
+        pid = restored[iid][0]
         if not _pid_alive(pid) or pid in seen_pids:
-            routed_apps.pop(iid, None)
+            restored.pop(iid, None)
         else:
             seen_pids.add(pid)
+
+    routed_apps.update(restored)
 
 
 def _save_tracked_routes(port, state):
@@ -950,6 +986,11 @@ def _assign_app_to_group(port, group, app):
     # loop would keep yanking it back to where it used to be.
     _forget_pid(pid)
 
+    # Mark this pid as handled so the auto-scan does not try to route it
+    # elsewhere while the COM/HTTP calls below are in flight.
+    with state_lock:
+        _auto_handled.add(pid)
+
     # Reuse an existing matching input instead of stacking duplicates: repeated
     # 'a' presses used to add a new input every time (five Spotify entries...).
     def existing_group_input(match_type, match_source):
@@ -971,13 +1012,14 @@ def _assign_app_to_group(port, group, app):
         # Capture from the same-named VAC capture endpoint by using the cable
         # name as the source. AudioMixer::findAnyDevice prefers capture when
         # both render and capture share a friendly name.
+        with state_lock:
+            app_routes[pid] = cable
         iid = existing_group_input("device", cable)
         if iid is None:
             iid = _add_input_to_group(port, group, name, "device", cable)
         if iid is not None:
-            if iid not in routed_apps:
-                routed_apps[iid] = (pid, cable, group_id)
             with state_lock:
+                routed_apps[iid] = (pid, cable, group_id)
                 last_success = f"Routed {name} -> {cable} (restart the app if it does not switch)"
         else:
             with state_lock:
@@ -990,11 +1032,11 @@ def _assign_app_to_group(port, group, app):
             return
         iid = _add_input_to_group(port, group, name, "application", str(pid))
         if iid is not None:
-            routed_apps[iid] = (pid, "", group_id)
-        with state_lock:
-            if iid is not None:
+            with state_lock:
+                routed_apps[iid] = (pid, "", group_id)
                 last_success = f"Added {name} via loopback (no cable: double audio)"
-            else:
+        else:
+            with state_lock:
                 last_error = f"Could not add {name}"
 
 
@@ -1321,10 +1363,12 @@ def build_group_rows(local_state, expanded_ids, apps_by_endpoint=None):
     return rows
 
 
-def main(stdscr, port):
+def main(stdscr, port, repair_routes=False):
     """curses.wrapper entry point: sets up the screen, starts the background
     threads, then loops drawing frames from `state` and handling keypresses.
     """
+    # route repair is off by default: some apps (e.g. Spotify) reassert their
+    # own output device, causing the repair loop to flap back and forth.
     global last_error, last_success
     curses.noecho()
     curses.cbreak()
@@ -1357,8 +1401,9 @@ def main(stdscr, port):
     t_job = threading.Thread(target=job_worker, daemon=True)
     t_job.start()
     _route_running.set()
-    t_route = threading.Thread(target=_run_supervised, args=("route", _route_worker, port), daemon=True)
-    t_route.start()
+    if repair_routes:
+        t_route = threading.Thread(target=_run_supervised, args=("route", _route_worker, port), daemon=True)
+        t_route.start()
 
     def _startup_restore():
         # Wait briefly for the first SSE state, then restore persisted routes.
@@ -1439,6 +1484,7 @@ def main(stdscr, port):
             local_apps = applications
             local_busy = busy_jobs > 0
             local_pending = list(pending_new_apps)
+            local_routed = dict(routed_apps)
             local_evt_age = (time.monotonic() - last_event_ts) if last_event_ts else None
             local_connected = sse_connected
             last_error = ""
@@ -1605,7 +1651,7 @@ def main(stdscr, port):
                 # endpoint against the cable this row should be on and say so.
                 warn = ""
                 iid_key = inp.get("id")
-                route = routed_apps.get(iid_key)
+                route = local_routed.get(iid_key)
                 if route:
                     pid, cable, _gid = route
                     live = apps_by_pid.get(pid)
@@ -1989,7 +2035,7 @@ def main(stdscr, port):
                     g = item[1]
                     if confirm_dialog(stdscr, f"Delete virtual cable '{g.get('name')}'?"):
                         for iid in g.get("inputIds", []):
-                            info = routed_apps.get(iid)
+                            info = local_routed.get(iid)
                             if info:
                                 pid = info[0]
                                 _forget_pid(pid)  # clear all tracking so repair can't re-add
@@ -2015,7 +2061,7 @@ def main(stdscr, port):
                     g = item[1]
                     inp = item[2]
                     iid = inp["id"]
-                    info = routed_apps.get(iid)
+                    info = local_routed.get(iid)
                     if info:
                         pid = info[0]
                         _forget_pid(pid)  # clear all tracking so repair can't re-add
@@ -2081,8 +2127,7 @@ def main(stdscr, port):
                 continue
             g = cable_groups[gidx]
             # Save the rule first, so the next launch of this app is automatic.
-            app_rules.setdefault("rules", []).append({"match": exe.lower(), "group": g.get("name")})
-            _save_app_rules()
+            _set_app_rule(exe, g.get("name"))
             run_job(lambda g=g, app=app: _assign_app_to_group(port, g, app))
         elif ch in (ord('N'), ord('E')):
             # Mic processing on the selected INPUT row: N toggles RNNoise
@@ -2164,12 +2209,14 @@ def run():
         description="AnniAudio mixer TUI - curses front-end for the mixer control API.")
     parser.add_argument("--port", type=int, default=8850,
                          help="mixer control API port (must match the running route_cli mixer instance)")
+    parser.add_argument("--repair-routes", action="store_true",
+                         help="re-apply per-app routes that Windows/apps override (can cause flapping with apps that reassert their own device)")
     args = parser.parse_args()
     if not sys.stdin.isatty():
         print("mixer_tui.py must be run in an interactive terminal.")
         sys.exit(1)
     try:
-        curses.wrapper(lambda stdscr: main(stdscr, args.port))
+        curses.wrapper(lambda stdscr: main(stdscr, args.port, args.repair_routes))
     except Exception:
         traceback.print_exc()
         sys.exit(1)

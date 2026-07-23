@@ -31,6 +31,14 @@
     {
       "match": "rustdesk.exe",
       "group": "System"
+    },
+    {
+      "match": "readyornotsteam-win64-shipping.exe",
+      "group": "Game"
+    },
+    {
+      "match": "devin.exe",
+      "group": "System"
     }
   ],
   "ignore": [
