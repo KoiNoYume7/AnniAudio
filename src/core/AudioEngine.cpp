@@ -1,3 +1,6 @@
+// Legacy single-source -> single-output routing engine.
+// Still used by the `route_cli process` / `route` legacy CLI path.
+// The mixer path (route_cli mixer) uses AudioMixer / AudioMixerMatrix instead.
 #include "AudioEngine.hpp"
 #include "audio_utils.hpp"
 

@@ -28,9 +28,13 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # --- Subdirectories ---
-add_subdirectory(src/core)              # Phase 1: routing engine
+add_subdirectory(src/core)              # Phase 1+2: audio engine / control API
 # add_subdirectory(src)   # Full source tree — Phase 1+ (gradual)
-# add_subdirectory(tests) # Enabled from Phase 2 onwards
+
+option(BUILD_TESTS "Build manual verification tools and Phase-0 POCs" OFF)
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
 
 # --- RNNoise static library (Phase 0 POC + production use) ---
 set(RNNOISE_SOURCES
@@ -110,20 +114,6 @@ add_library(audio_dsp STATIC
 target_include_directories(audio_dsp PUBLIC src/dsp third_party/rnnoise/include)
 target_link_libraries(audio_dsp PUBLIC rnnoise kissfft mysofa)
 
-# --- Phase 0 POC targets (standalone, not part of the main build) ---
-# Each POC is a self-contained executable built only when explicitly requested.
-# They live in src/<module>/ alongside the eventual production code.
-#
-# Uncomment each target as you work through Phase 0:
-#
-add_executable(poc_eq src/dsp/poc_eq.cpp)
-add_executable(poc_rnnoise src/noise/poc_rnnoise.cpp)
-target_link_libraries(poc_rnnoise PRIVATE rnnoise)
-add_executable(poc_hrtf src/spatial/poc_hrtf.cpp)
-target_link_libraries(poc_hrtf PRIVATE audio_dsp)
-add_executable(poc_wasapi src/core/poc_wasapi.cpp)
-target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
-
 # Routing CLI — lists endpoints and routes audio between cables / physical devices
 #
 # MixerControlServer.cpp (the mixer's local HTTP+SSE control API, built on the
@@ -135,12 +125,5 @@ target_include_directories(route_cli PRIVATE src/core include src/dsp)
 target_link_libraries(route_cli PRIVATE audio_core audio_dsp ole32 avrt ws2_32)
 # add_executable(poc_nvidia src/noise/poc_nvidia.cpp)
 
-# Manual verification tool for AudioMixer's live add/remove/rename path (not
-# part of the default test suite; run by hand against live devices).
-add_executable(test_mixer_live_edit src/core/test_mixer_live_edit.cpp)
-target_link_libraries(test_mixer_live_edit PRIVATE audio_core)
-
-
-
-message(STATUS "AnniAudio ${PROJECT_VERSION} — Phase 0 (Research)")
+message(STATUS "AnniAudio ${PROJECT_VERSION} — Phase 2 (Mixer + DSP)")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
