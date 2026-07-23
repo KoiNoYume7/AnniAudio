@@ -1,8 +1,8 @@
-# Multi-Cable Architecture (v0.3.0)
+# Multi-Cable Architecture
 
 ## Overview
 
-AnniAudio v0.3.0 introduces the ability to create **N independent virtual audio cables**, each with its own render/capture endpoint pair, isolated buffers, and independent device node in Windows.
+The AnniAudio virtual driver can create **N independent virtual audio cables**, each with its own render/capture endpoint pair, isolated buffers, and independent device node in Windows.
 
 ## Design Principles
 

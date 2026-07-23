@@ -23,7 +23,7 @@ What works today:
 - **Mic processing**: RNNoise suppression and a "voice" EQ preset run engine-side per input, so the cleaned signal follows the mic through every route (e.g. into Discord via a Mic cable).
 - **Scenes**: named level snapshots (volumes, mutes, send gains, output masters) applied instantly by name.
 - **Loupedeck plugin** (`AnniAudioMixerPlugin/`): a real Logi Actions C# SDK plugin with dials and touch buttons for group/output volume, mute, and scene recall, driven entirely through the control API.
-- **Autostart at logon**, a curses **TUI** front-end, and Phase 0 POCs (`poc_eq`, `poc_rnnoise`, `poc_wasapi`) all still pass.
+- **Autostart at logon** (HKCU Run registry key), a curses **TUI** front-end, and Phase-0 POCs in `tests/` all still pass.
 
 Not yet finished:
 
@@ -61,7 +61,7 @@ tar -xzf rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe
 cd ../..
 ```
 
-### Build the user-mode core and POCs
+### Build the user-mode core
 
 ```powershell
 cmake -B build -G "Visual Studio 17 2022" -A x64
@@ -69,6 +69,15 @@ cmake --build build --config Release
 ```
 
 Built binaries will be in `build/bin/Release/`.
+
+### Build the Phase-0 POCs / manual test tools
+
+The POCs and manual verification tools live in `tests/` and are not built by default.
+
+```powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTS=ON
+cmake --build build --config Release
+```
 
 ### Run the POCs
 
@@ -99,20 +108,19 @@ The driver is a separate MSBuild project, not part of the CMake tree.
 # 1. Create a cable config from the example
 copy config\cables.json.example config\cables.json
 
-# 2. Generate the INF from the template
-.\scripts\generate-inf.ps1
-
-# 3. Build the driver with MSBuild
-& 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe' `
-    driver\AnniAudioCable.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+# 2. Build/sign the driver (generate INF, MSBuild, signtool, inf2cat)
+.\scripts\build-driver.ps1
 ```
 
 If the build succeeds you will have:
 
 ```
-driver\build\driver\release\AnniAudioCable.sys
-driver\build\driver\release\AnniAudioCable.inf
+build\driver\release\AnniAudioCable.sys
+build\driver\release\AnniAudioCable.inf
+build\driver\release\AnniAudioCable.cat
 ```
+
+See `driver/README.md` for details and `certs/README.md` for certificate setup.
 
 ---
 
@@ -205,6 +213,7 @@ The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default por
 |---|---|
 | `Tab` | Switch between the Virtual Cables and Outputs panes |
 | `j`/`k`, arrows | Move the selection |
+| `PgUp`/`PgDn` | Page the selection up/down |
 | `+`/`-` | Nudge volume by 5% |
 | `v` | Type an exact volume (0-200%) |
 | `m` | Toggle mute on the selected virtual cable / output |
@@ -228,7 +237,9 @@ The mixer embeds a local HTTP+SSE control API (bound to `127.0.0.1`, default por
 
 When a group has a `cable` set, adding an application with `a` routes that application's Windows output to the cable (via `AudioPolicyConfig` / `winappaudiorouter`) and the mixer captures the cable. This avoids double audio. Without a cable, the application is captured via process loopback and will still be heard on its original device.
 
-Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing; otherwise `python -m pip install windows-curses`). Run it directly with `python scripts/mixer_tui.py [--port 8850]` if you'd rather skip the batch wrapper.
+Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing; otherwise `python -m pip install windows-curses`). Run it directly with `python scripts/mixer_tui.py [--port 8850] [--repair-routes]` if you'd rather skip the batch wrapper.
+
+Route repair is **off by default**. Some apps (e.g. Spotify) reassert their own output device, which makes the repair loop flip back and forth; use `--repair-routes` only if you want the TUI to keep rewriting per-app routes. See `docs/TUI.md` for the full keybinding reference.
 
 #### Autostart at logon
 
@@ -238,7 +249,7 @@ Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing;
 .\stop-mixer.bat           # stop a running mixer (e.g. before rebuilding route_cli)
 ```
 
-This drops a small `.vbs` into the current user's Startup folder that launches `route_cli.exe mixer` with a hidden window. It deliberately is not a Windows service: WASAPI audio endpoints only exist inside the user session, so the mixer has to start at logon, not at boot. Config is loaded from `config/mixers/main.json` (autosaved continuously while running), so a force-stop never loses state.
+This adds an entry to the current user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key that launches `route_cli.exe mixer` with a hidden window at every logon. It deliberately is not a Windows service: WASAPI audio endpoints only exist inside the user session, so the mixer has to start at logon, not at boot. Config is loaded from `config/mixers/main.json` (autosaved continuously while running), so a force-stop never loses state.
 
 #### Loupedeck plugin
 
@@ -311,18 +322,17 @@ Full technical breakdown in `docs/ARCHITECTURE.md`.
 AnniAudio/
 ├── src/
 │   ├── core/        # Engine, mixer matrix, control server, route_cli
-│   ├── dsp/         # EQ chain + RNNoise wrapper (audio_dsp library)
-│   ├── noise/       # RNNoise POC
-│   └── spatial/     # HRTF / convolution (placeholder)
+│   └── dsp/         # EQ chain + RNNoise wrapper (audio_dsp library)
+├── tests/           # Phase-0 POCs and manual verification tools
 ├── AnniAudioMixerPlugin/  # Loupedeck (Logi Actions C#) plugin
 ├── driver/          # WDM PortCls virtual audio driver source + .inf template
 ├── include/         # Public headers
 ├── cli/             # PowerShell control panel (driver install / signing)
-├── scripts/         # mixer_tui.py and build/driver helpers
+├── scripts/         # TUI (mixer_tui.py, tui_*.py) and build/driver helpers
 ├── config/          # mixers/ (matrix configs), scenes/, app-rules.json, presets/, profiles/, cables
-├── docs/            # ARCHITECTURE, ROADMAP, MIXER-CONTROL-API, research
-├── third_party/     # Vendored dependencies (rnnoise)
-├── *.bat            # start/stop mixer, TUI/GUI launchers, autostart install
+├── docs/            # Architecture, API, TUI, scripts, config, roadmap
+├── third_party/     # Vendored dependencies (rnnoise, kissfft, libmysofa, ...)
+├── *.bat            # start/stop mixer, TUI launcher, autostart install
 ├── CMakeLists.txt
 └── README.md
 ```

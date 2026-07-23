@@ -33,19 +33,19 @@
 | Scope | What it covers |
 |---|---|
 | `phase0` | Phase 0 planning artifacts |
-| `driver` | Virtual WDM driver (`src/driver/`) |
-| `wasapi` | WASAPI audio engine (`src/core/`) |
-| `routing` | Routing matrix (`src/routing/`) |
-| `dsp` | DSP chain and EQ (`src/dsp/`) |
-| `noise` | Noise cancellation (`src/noise/`) |
-| `spatial` | HRTF / spatial audio (`src/spatial/`) |
-| `api` | REST + WebSocket API server (`src/api/`) |
-| `config` | Config system |
+| `driver` | Virtual WDM driver (`driver/`) |
+| `core` | WASAPI mixer and audio engine (`src/core/`) |
+| `matrix` | Routing matrix and `AudioMixerMatrix` |
+| `dsp` | DSP chain, EQ, and spatializer (`src/dsp/`) |
+| `tui` | Curses TUI (`scripts/mixer_tui.py`, `scripts/tui_*.py`) |
+| `plugin` | Loupedeck C# plugin (`AnniAudioMixerPlugin/`) |
+| `config` | Config system (`config/` + loading code) |
 | `hotkeys` | Hotkey engine |
-| `ui` | Electron frontend |
+| `ui` | Graphical UI (future; currently TUI / Loupedeck) |
 | `installer` | NSIS/WiX installer and packaging |
 | `ci` | GitHub Actions |
 | `deps` | Third-party dependencies |
+| `tests` | POC and verification tools (`tests/`) |
 
 ---
 
@@ -88,6 +88,7 @@ git push origin --tags
 
 ## Branch Strategy
 
-- `main` — always releasable, tagged at phase boundaries
-- Feature work is done directly on `main` during early phases (no PRs required until Phase 4+)
-- If a POC needs risky experimentation, use a short-lived branch: `poc/driver-sysvad`, etc.
+- `dev` — active development branch. All work lands here.
+- `main` — kept close to releasable, but phase-boundary tags are cut from `dev`.
+- Use short-lived branches for risky experiments or reviewable chunks, then merge into `dev`.
+- PRs are welcome on `dev`.

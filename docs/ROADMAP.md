@@ -8,15 +8,13 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 
 **Goal:** Every major component has a working proof of concept. No unknowns going into Phase 1.
 
-- [x] Finalize the config JSON schema — done, see ARCHITECTURE.md Layer 6
-- [x] Finalize the REST API schema — done, see ARCHITECTURE.md Layer 4
+- [x] Finalize the config JSON schema — done, see `docs/CONFIG.md`
+- [x] Finalize the mixer REST API schema — done, see `docs/MIXER-CONTROL-API.md`
 - [x] Decide Windows version target — **Win11 only**
-- [x] Decide UI stack — **Electron**
-- [x] Decide NVIDIA model distribution — **download on first run**
-- [ ] Read through Microsoft `sysvad` sample driver and understand the structure
-- [ ] Write a minimal WDM virtual audio device that appears in Windows (even if it outputs silence)
+- [x] Decide UI stack — **curses TUI + Loupedeck C# plugin; graphical UI later (Electron is a candidate)**
+- [x] Read through Microsoft `sysvad` sample driver and understand the structure
+- [x] Write a minimal WDM virtual audio device that appears in Windows (driver builds; not signed)
 - [x] Get WASAPI loopback capture working — capture what's playing on a device
-- [ ] Integrate NVIDIA RTX Effects SDK in a test harness — confirm it runs on the GPU
 - [x] Integrate RNNoise in a test harness — confirm it reduces noise on a test signal
 - [x] Load a SOFA HRTF file with libmysofa, apply convolution to a test signal, verify it sounds spatial through headphones — `poc_hrtf` (Phase 3 Stage A)
 - [x] Implement a basic biquad parametric EQ and verify it shapes frequency response correctly
@@ -31,27 +29,29 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 
 **Goal:** AnniAudio appears as an audio device in Windows and audio flows through it end-to-end.
 
-- [ ] Virtual WDM driver built from sysvad, stripped to essentials
-- [ ] Driver installer — handles elevation, test signing, `.inf` + `.sys` packaging
-- [ ] WASAPI engine — capture from virtual device, render to real output
-- [ ] In-memory routing matrix — hardcoded for testing at first
-- [ ] Config file loading and saving
+- [x] Virtual WDM driver built from sysvad, stripped to essentials
+- [x] WASAPI engine — capture from virtual device or loopback, render to real output
+- [x] In-memory routing matrix
+- [x] Config file loading and saving
+- [ ] Driver installer + attestation signing so the driver loads without test signing
 - [ ] Verify: set AnniAudio as output device in any app, hear audio through speakers
 
-**Exit criteria:** You can select AnniAudio Cable 1 as your output device in Windows and audio comes out your headphones.
+**Exit criteria:** You can select AnniAudio Cable 1 as your output device in Windows and audio comes out your headphones (requires signed driver).
 
 ---
 
-## Phase 2 — DSP Chain
+## Phase 2 — DSP Chain + Routing Matrix
 
-**Goal:** Audio flowing through AnniAudio can be processed.
+**Goal:** Audio flowing through AnniAudio can be processed and routed to multiple outputs.
 
-- [ ] DSP chain architecture — ordered list of processing nodes per route
-- [ ] Parametric EQ node — full biquad implementation, all filter types
-- [ ] Noise cancellation node — NVIDIA primary, RNNoise fallback, both behind `INoiseCanceller`
-- [ ] Pre-gain and post-gain nodes
-- [ ] DSP chain configurable via config file
-- [ ] Audio thread is allocation-free and running at `THREAD_PRIORITY_TIME_CRITICAL`
+- [x] `AudioMixer` capture/render engine with real-time mixing loop
+- [x] `AudioMixerMatrix` orchestrating multiple outputs with per-group send gains
+- [x] Parametric EQ node (`EqChain`) — all filter types
+- [x] Noise suppression node (`NoiseSuppressor`) using RNNoise
+- [x] Per-strip volume/mute, per-output master/mute
+- [x] Send gains and scenes (level snapshots)
+- [ ] Audio thread at `THREAD_PRIORITY_TIME_CRITICAL` (currently high priority)
+- [ ] Output safety limiter (hard dB ceiling)
 
 **Exit criteria:** Mic input through AnniAudio has audible noise removed. EQ visibly shapes the frequency response. CPU usage is reasonable.
 
@@ -122,16 +122,16 @@ better than Windows Sonic.
 
 **Goal:** Everything is controllable programmatically, without touching a config file or UI.
 
-- [ ] HTTP REST API server via cpp-httplib
-- [ ] All core operations exposed as endpoints (see ARCHITECTURE.md)
-- [ ] WebSocket event stream — level meters, device state changes
-- [ ] API key auth, loopback-only by default, LAN as explicit opt-in
+- [x] HTTP REST + SSE control API via cpp-httplib (`route_cli mixer`)
+- [x] Mixer core operations exposed as endpoints (see `docs/MIXER-CONTROL-API.md`)
+- [ ] WebSocket event stream (currently SSE; WebSocket for v1 API later)
+- [ ] API key auth, loopback-only by default, LAN as explicit opt-in (current mixer is loopback/no-auth)
 - [ ] Global hotkeys via Win32 `RegisterHotKey`
 - [ ] All hotkey bindings configurable in config JSON
-- [ ] CLI client (`anniaudio-cli`) wrapping the API
+- [ ] Standalone CLI client (`anniaudio-cli`) wrapping the API
 - [ ] CLI: list devices, get/set routes, load preset, toggle features, adjust gain
 
-**Exit criteria:** Every feature can be triggered from a PowerShell one-liner via the CLI.
+**Exit criteria:** Every feature can be triggered from a PowerShell one-liner via a dedicated CLI.
 
 ---
 
@@ -177,7 +177,7 @@ better than Windows Sonic.
 These are not in scope for the initial build but will be added later:
 
 - Compressor and limiter DSP node
-- Per-app routing — detect which app is sending audio and apply different chains
+- [x] Per-app routing — detect which app is sending audio and route to a group cable
 - VST plugin hosting — use third-party DSP plugins in the chain
 - HRTF interpolation — smooth transitions between positions
 - Room simulation and reverb node

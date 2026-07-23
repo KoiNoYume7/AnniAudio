@@ -1,9 +1,9 @@
-# AnniAudio — Mixer Control API & GUI Design
+# AnniAudio — Mixer Control API
 
-Design for turning `route_cli mixer` into a properly controllable service: a local HTTP+SSE
-control API embedded in the mixer process, a dedicated web GUI on top of it, and (later) a real
-Loupedeck Live plugin that talks to the same API. This supersedes the earlier MIDI-CC-binding
-approach that lived directly inside `cmdMixer` (see "Migration notes" at the end).
+The mixer (`route_cli mixer`) exposes a local HTTP+SSE control API on `127.0.0.1` (default port
+`8850`). Any client — the curses TUI, the Loupedeck plugin, a future web GUI, or a manual `curl`
+script — is just another consumer of this API. This supersedes the earlier MIDI-CC-binding approach
+that lived directly inside `cmdMixer` (see "Migration notes" at the end).
 
 ---
 
@@ -225,42 +225,28 @@ worker threads are plain OS threads with no COM initialization by default.
 
 ## TUI
 
-`scripts/mixer_tui.py` is a curses terminal interface:
+`scripts/mixer_tui.py` is a curses terminal interface. It runs three threads: the curses render
+loop, an API worker that drains queued PATCH/POST/DELETE calls so slow requests never freeze the UI,
+and an SSE worker holding `/api/events` (with reconnect-on-drop) so the view stays in sync with any
+other client.
 
-- **Virtual Cables pane** on the left: one header row per virtual cable, color-coded, with its fader,
-  meter, mute indicator and connected outputs. Virtual cables are collapsed by default; expand one
-  to see its applications/sources.
-- **Outputs pane** on the right: one row per render output, with a master fader, meter, and the
-  list of virtual cables feeding it.
-- Keyboard controls: `Tab` switches panes, `j`/`k` navigate, `+`/`-`/`v` adjust volume, `m` mutes a
-  virtual cable, `Enter`/`e` expands/collapses a virtual cable's application list, `i` adds a
-  device source to the selected virtual cable, `a` adds a running application to the selected virtual
-  cable, `g` adds a virtual cable, `o` adds an output, `c` connects/disconnects the selected virtual
-  cable to/from the selected output, `r` renames a virtual cable, `d` deletes the selected virtual
-  cable/application/output, `s` saves the preset, `R` refreshes the endpoint and application lists.
-- Runs three threads: the curses render loop, a worker that drains queued PATCH/POST/DELETE
-  calls so slow requests never freeze the UI, and one holding the `/api/events` SSE connection
-  (with reconnect-on-drop) so the view stays in sync with any other client.
-
-Run `start-mixer.bat` to launch `route_cli mixer`, then `mixer-tui.bat` to start the TUI.
-
-(The web GUI at `scripts/mixer.html` is currently outdated and reflects the older strips/routes API.)
+Run `start-mixer.bat` to launch `route_cli mixer`, then `mixer-tui.bat` to start the TUI. See
+`docs/TUI.md` for the complete keybinding reference and the `--repair-routes` flag.
 
 ---
 
-## Loupedeck Live plugin (future work, not built yet)
+## Loupedeck Live plugin
 
-Once the control API exists, the plugin (C# via the Logi Actions SDK, scaffolded under
-`AnniAudioMixerPlugin/`) is a pure HTTP client:
+`AnniAudioMixerPlugin/` is a C# Logi Actions SDK plugin and a pure HTTP client of the control API.
+It is built with:
 
-- On load, `GET /api/state` to find groups with a `knobIndex`, and subscribes to `/api/events`
-  to stay in sync (e.g. if a group is removed from the GUI while the plugin is running).
-- On knob rotation, `PATCH /api/groups/{id}` with the new volume for whichever group has that
-  `knobIndex`.
-- On knob press, `PATCH /api/groups/{id}` with `{ "muted": !current }`, using its locally
-  cached state (updated via SSE) rather than a `GET` round-trip per press.
-- Displays the group name/level on the Loupedeck's own screen via the SDK's
-  `PluginDynamicAdjustment`/`GetAdjustmentValue`.
+```powershell
+dotnet build AnniAudioMixerPlugin/src/AnniAudioMixerPlugin.csproj -c Release
+```
+
+Actions mirror live mixer state and update automatically when groups/outputs/scenes are renamed,
+added, or removed. The post-build step links the plugin into the Logi Plugin Service and hot-reloads
+it. See `AnniAudioMixerPlugin/README.md` for details.
 
 ---
 

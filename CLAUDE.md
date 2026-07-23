@@ -32,10 +32,15 @@ Audio flows one way: **inputs → groups → outputs**.
   Real-time-safe after `prepare()`.
 - `src/core/AudioEngine.cpp` — the older single source→output engine, used only by
   `route_cli process`. Not part of the mixer path.
+- `tests/` — Phase-0 POCs and manual verification tools. Not built by default; use
+  `-DBUILD_TESTS=ON`.
+- `scripts/mixer_tui.py`, `scripts/tui_utils.py`, `scripts/tui_ui.py` — curses TUI
+  split into entry/utility/ui modules.
 
 Data model note: DSP is a property of an **input** (`denoise`, `eqPreset`), so the
 processed signal follows a mic through every route. Send gain is a property of a
-**group→output** pair. Mute exists on groups and on outputs.
+**group→output** pair. Mute exists on groups and on outputs. See `docs/CONFIG.md`
+for the config file reference.
 
 ## Build
 
@@ -70,7 +75,7 @@ inspect live state read-only with `curl -s http://127.0.0.1:8850/api/state` and
 
 ## Checks before committing
 
-- TUI (Python): `python -m pyflakes scripts/mixer_tui.py && python -m py_compile scripts/mixer_tui.py`
+- TUI (Python): `python -m pyflakes scripts/mixer_tui.py scripts/tui_utils.py scripts/tui_ui.py && python -m py_compile scripts/mixer_tui.py scripts/tui_utils.py scripts/tui_ui.py`
 - C++: a clean *compile* (link may fail on the exe lock — that's fine).
 - Plugin: `dotnet build ... -c Release` (0 warnings/errors).
 

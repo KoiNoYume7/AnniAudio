@@ -8,7 +8,7 @@ Technical reference for how AnniAudio is structured, what each layer does, and w
 
 **One process.** Everything runs in a single background service. No inter-process complexity for the core audio chain.
 
-**Driver-first.** We own a virtual WDM device. Apps see it as real hardware. No dependency on third-party virtual cable software.
+**Driver-first (eventually).** The goal is to own a virtual WDM device so apps see it as real hardware. The driver is built in `driver/` but is not yet Microsoft-signed, so it cannot load on a normal Windows install. Daily use today uses WASAPI loopback plus a third-party virtual cable (e.g. VB-Cable) for app routing.
 
 **Non-destructive.** If AnniAudio crashes or is killed, Windows audio falls back gracefully. We never break the system.
 
@@ -185,13 +185,13 @@ Note: FFTW is faster but GPL licensed. If commercial distribution is ever pursue
 
 ## Layer 4 — API Server
 
-**Technology:** `cpp-httplib` — header-only HTTP + WebSocket server, MIT licensed: https://github.com/yhirose/cpp-httplib
+**Technology:** `cpp-httplib` — header-only HTTP + SSE server, MIT licensed: https://github.com/yhirose/cpp-httplib
 
-**First concrete increment:** the mixer's own local control API (`route_cli mixer`, `AudioMixer`) is the first real implementation of this layer, scoped specifically to the mixer rather than the whole product. See `docs/MIXER-CONTROL-API.md` for its design — it uses the same `cpp-httplib` dependency (vendored under `third_party/httplib/`), a REST + Server-Sent-Events shape (no WebSocket yet), and is loopback-only with no auth, since it only needs to serve this one machine's own GUI and Loupedeck plugin. The broader API described below (device/route CRUD, `X-API-Key` auth, LAN opt-in) remains the long-term target once more of the product exists to expose.
-
-**Auth:** `X-API-Key` header. Key stored in config. Loopback-only by default. LAN exposure is an explicit opt-in.
-
-**All requests require header:** `X-API-Key: <key>`
+**Current implementation:** the mixer (`route_cli mixer`, `AudioMixer`) exposes a local control API
+on `127.0.0.1:8850`. It uses REST + Server-Sent Events (SSE), is loopback-only, and has no auth.
+That is enough for the TUI and Loupedeck plugin. See `docs/MIXER-CONTROL-API.md` for the mixer API
+and `docs/MIXER-CONTROL-API.md` for the long-term `v1` design (broader device/route CRUD,
+`X-API-Key` auth, optional LAN exposure).
 
 **All responses are JSON. Errors:** `{ "error": "<message>" }`
 
