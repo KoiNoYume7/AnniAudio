@@ -127,7 +127,7 @@ void writeWavStereo16(const std::string& path, const std::vector<float>& interle
 
 int main(int argc, char** argv) {
     std::string sofa = (argc > 1) ? argv[1] : "assets/hrtf/mit_kemar.sofa";
-    std::string outWav = (argc > 2) ? argv[2] : "hrtf_orbit_48k.wav";
+    std::string outWav = (argc > 2) ? argv[2] : "assets/hrtf/hrtf_orbit_48k.wav";
 
     std::printf("poc_hrtf — HRTF spatializer verification\n");
     std::printf("  SOFA: %s\n", sofa.c_str());
@@ -370,7 +370,7 @@ int main(int argc, char** argv) {
         float pk = 1e-9f;
         for (float s : out) pk = std::max(pk, std::fabs(s));
         for (float& s : out) s *= 0.708f / pk;
-        writeWavStereo16("hrtf_anchors_48k.wav", out, (uint32_t)kSampleRate);
+        writeWavStereo16("assets/hrtf/hrtf_anchors_48k.wav", out, (uint32_t)kSampleRate);
         std::printf("  ^ each position is held ~1.3s. Can you tell FRONT from BEHIND?\n");
     }
 

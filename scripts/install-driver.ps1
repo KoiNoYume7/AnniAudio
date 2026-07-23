@@ -15,8 +15,10 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot  = "$PSScriptRoot\.."
 $InfPath   = "$RepoRoot\build\driver\release\AnniAudioCable.inf"
-$DevCon    = "C:\Program Files (x86)\Windows Kits\10\Tools\x64\devcon.exe"
 $Config    = "$RepoRoot\config\cables.json"
+
+. "$PSScriptRoot\lib\config.ps1"
+$DevCon = Get-DevConPath
 
 # Read cable configuration
 if (Test-Path $Config) {

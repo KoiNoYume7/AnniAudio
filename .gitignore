@@ -26,7 +26,6 @@ driver/x86/
 # ── Binaries ──
 *.exe
 *.dll
-!scripts/AnniAudio.Audio.dll
 
 # ── Code-signing certificates — never commit private keys ──
 certs/*.pfx
@@ -37,6 +36,9 @@ certs/*.p12
 config/cables.json
 config/cables.local.json
 
+# ── Vendored PowerShell modules (installed, not source) ──
+scripts/modules/
+
 # ── RNNoise generated / downloaded data ──
 third_party/rnnoise/src/rnnoise_data.c
 third_party/rnnoise/src/rnnoise_data.h
@@ -46,6 +48,8 @@ third_party/rnnoise/rnnoise_data*.tar.gz
 
 # ── Dev scratch / throwaway scripts ──
 scripts/_*
+.devin_tmp*.py
+.devin_*.py
 
 # ── Logs ──
 logs/

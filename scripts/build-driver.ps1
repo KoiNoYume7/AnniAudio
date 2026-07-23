@@ -15,12 +15,17 @@
 #>
 param(
     [string]$Config      = "Release",
-    [string]$Thumbprint  = "7D2F96B5B17E0E2959C6E20EEF1ED95822572B2F"
+    [string]$Thumbprint  = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 Import-Module "$PSScriptRoot\lib\AnniLog.psd1" -Force
+. "$PSScriptRoot\lib\config.ps1"
+
+if (-not $Thumbprint) {
+    $Thumbprint = Get-CertificateThumbprint
+}
 
 $RepoRoot   = "$PSScriptRoot\.."
 $DriverDir  = "$RepoRoot\driver"

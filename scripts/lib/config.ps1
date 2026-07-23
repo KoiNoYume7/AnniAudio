@@ -44,13 +44,37 @@ function Get-DevConPath {
 }
 
 function Get-CertificateThumbprint {
-    $thumbFile = Resolve-Path "$PSScriptRoot\..\..\certs\thumbprint.txt" -ErrorAction SilentlyContinue
-    if ($thumbFile) {
+    $RepoRoot = Resolve-Path "$PSScriptRoot\..\.."
+
+    # 1) Explicit environment variable (CI / release builds)
+    if ($env:ANNI_CERT_THUMBPRINT) { return $env:ANNI_CERT_THUMBPRINT }
+
+    # 2) Optional user-local thumbprint file
+    $thumbFile = "$RepoRoot\certs\thumbprint.txt"
+    if (Test-Path $thumbFile) {
         $t = Get-Content $thumbFile -Raw
         if ($t) { return $t.Trim() }
     }
-    # Fallback to hardcoded known thumbprint (keep in sync with build-driver.ps1)
-    return "7D2F96B5B17E0E2959C6E20EEF1ED95822572B2F"
+
+    # 3) Derive from the public certificate
+    $cer = "$RepoRoot\certs\AnniAudio.cer"
+    if (Test-Path $cer) {
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cer)
+        return $cert.Thumbprint
+    }
+
+    # 4) Derive from the PFX (password from env)
+    $pfx = "$RepoRoot\certs\AnniAudio.pfx"
+    if (Test-Path $pfx) {
+        $pw = if ($env:ANNI_CERT_PASSWORD) { (New-Object System.Security.SecureString) } else { $null }
+        if ($env:ANNI_CERT_PASSWORD) {
+            $env:ANNI_CERT_PASSWORD.ToCharArray() | ForEach-Object { $pw.AppendChar($_) }
+        }
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfx, $pw)
+        return $cert.Thumbprint
+    }
+
+    throw "Could not determine certificate thumbprint. Set `$env:ANNI_CERT_THUMBPRINT, create certs/thumbprint.txt, or place certs/AnniAudio.cer (or .pfx with `$env:ANNI_CERT_PASSWORD)."
 }
 
 # Dot-source this file: . $PSScriptRoot\lib\config.ps1

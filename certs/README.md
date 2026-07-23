@@ -13,11 +13,15 @@ This folder holds code-signing certificates for local development builds.
 ## Setup
 
 1. Copy your `.pfx` here and rename it `AnniAudio.pfx`
-2. Set the password as an environment variable (or pass to CMake):
+2. Set the password as an environment variable:
    ```powershell
    $env:ANNI_CERT_PASSWORD = "your-password-here"
    ```
 3. Run the one-time trust store import (see `scripts/install-cert.ps1`)
+
+Build scripts derive the certificate thumbprint from `certs/AnniAudio.cer` (or `.pfx` with
+`$env:ANNI_CERT_PASSWORD`). You can override it with `$env:ANNI_CERT_THUMBPRINT` or by
+creating `certs/thumbprint.txt` containing the SHA-1 thumbprint.
 
 For CI / release builds, attestation signing via the Windows Hardware Dev Center
 is used instead — no local cert needed.

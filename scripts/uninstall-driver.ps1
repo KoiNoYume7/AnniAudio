@@ -11,8 +11,10 @@
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = "$PSScriptRoot\.."
-$DevCon   = "C:\Program Files (x86)\Windows Kits\10\Tools\x64\devcon.exe"
 $Config   = "$RepoRoot\config\cables.json"
+
+. "$PSScriptRoot\lib\config.ps1"
+$DevCon = Get-DevConPath
 
 # Read configured cable HW IDs and endpoint names
 if (Test-Path $Config) {

@@ -1,19 +1,10 @@
 {
 	"folders": [
 		{
-			"name": "AnniAudio (main)",
+			"name": "AnniAudio",
 			"path": "."
-		},
-		{
-			"name": "AnniAudio (backup)",
-			"path": "../AnniAudio.bak"
 		}
 	],
-	"extensions": {
-		"recommendations": [
-			"starlitxiling.bak-syntax-highlighter"
-		]
-	},
 	"settings": {
 		"files.exclude": {
 			"**/.git": false
