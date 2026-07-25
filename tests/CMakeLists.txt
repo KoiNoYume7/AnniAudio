@@ -26,3 +26,6 @@ target_link_libraries(test_routing PRIVATE audio_core)
 
 add_executable(test_mixer_live_edit test_mixer_live_edit.cpp)
 target_link_libraries(test_mixer_live_edit PRIVATE audio_core)
+
+add_executable(test_input_processor test_input_processor.cpp)
+target_link_libraries(test_input_processor PRIVATE audio_core)

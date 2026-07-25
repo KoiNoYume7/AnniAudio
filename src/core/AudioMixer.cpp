@@ -349,33 +349,6 @@ static const CompBand kColorComp[] = {
     { anniaudio::dsp::FilterType::HighShelf, 8000.0,  -4.0, 0.707 }, // calm the top
 };
 
-// Locate the bundled HRTF dataset. The mixer normally runs with the repo root
-// as its working directory (start-mixer.bat), but fall back to a path resolved
-// from the executable location so it also works when launched from elsewhere.
-static std::string resolveHrtfPath()
-{
-    auto exists = [](const std::string& p) {
-        DWORD a = GetFileAttributesA(p.c_str());
-        return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
-    };
-    const char* rel = "assets/hrtf/mit_kemar.sofa";
-    if (exists(rel)) return rel;
-
-    char exePath[MAX_PATH] = {0};
-    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) > 0) {
-        std::string dir(exePath);
-        size_t slash = dir.find_last_of("\\/");
-        if (slash != std::string::npos) dir.resize(slash);
-        // exe lives in build/bin/Release — walk up to the repo root.
-        for (const char* up : {"/assets/hrtf/mit_kemar.sofa",
-                               "/../../../assets/hrtf/mit_kemar.sofa"}) {
-            std::string cand = dir + up;
-            if (exists(cand)) return cand;
-        }
-    }
-    return rel; // best effort; loadHrtf() will log if it can't open it
-}
-
 void AudioMixer::Impl::setupStripDsp(Strip& s, const MixerStripConfig& cfg)
 {
     if (cfg.denoise) {
@@ -541,126 +514,18 @@ bool AudioMixer::Impl::finalizeStripBuffers(Strip& s, uint32_t bufFrames)
     return true;
 }
 
-class ProcessLoopbackActivationHandler :
-    public IActivateAudioInterfaceCompletionHandler,
-    public IAgileObject {
-public:
-    ProcessLoopbackActivationHandler() : m_ref(1), m_event(CreateEvent(nullptr, FALSE, FALSE, nullptr)) {}
-    ~ProcessLoopbackActivationHandler() { if (m_event) CloseHandle(m_event); }
-
-    HANDLE eventHandle() const { return m_event; }
-    HRESULT result() const { return m_result; }
-    IAudioClient* client() const { return m_client.Get(); }
-
-    STDMETHOD(QueryInterface)(REFIID riid, void** ppv) override {
-        if (IsEqualIID(riid, IID_IUnknown) ||
-            IsEqualIID(riid, __uuidof(IActivateAudioInterfaceCompletionHandler))) {
-            *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
-        } else if (IsEqualIID(riid, IID_IAgileObject)) {
-            *ppv = static_cast<IAgileObject*>(this);
-        } else {
-            *ppv = nullptr;
-            return E_NOINTERFACE;
-        }
-        AddRef();
-        return S_OK;
-    }
-
-    STDMETHOD_(ULONG, AddRef)() override { return InterlockedIncrement(&m_ref); }
-    STDMETHOD_(ULONG, Release)() override {
-        ULONG c = InterlockedDecrement(&m_ref);
-        if (c == 0) delete this;
-        return c;
-    }
-
-    STDMETHOD(ActivateCompleted)(IActivateAudioInterfaceAsyncOperation* operation) override {
-        m_result = E_FAIL;
-        if (!operation) {
-            SetEvent(m_event);
-            return S_OK;
-        }
-        HRESULT hrActivate = E_UNEXPECTED;
-        ComPtr<IUnknown> punk;
-        HRESULT hr = operation->GetActivateResult(&hrActivate, &punk);
-        if (SUCCEEDED(hr) && SUCCEEDED(hrActivate) && punk) {
-            punk.As(&m_client);
-            m_result = m_client ? S_OK : E_NOINTERFACE;
-        } else {
-            m_result = FAILED(hrActivate) ? hrActivate : hr;
-        }
-        SetEvent(m_event);
-        return S_OK;
-    }
-
-private:
-    volatile LONG m_ref;
-    HANDLE m_event;
-    HRESULT m_result = E_FAIL;
-    ComPtr<IAudioClient> m_client;
-};
-
-static bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex)
-{
-    wfex.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
-    wfex.Format.nChannels       = 2;
-    wfex.Format.nSamplesPerSec  = 48000;
-    wfex.Format.wBitsPerSample  = 32;
-    wfex.Format.nBlockAlign     = wfex.Format.nChannels * sizeof(float);
-    wfex.Format.nAvgBytesPerSec = wfex.Format.nSamplesPerSec * wfex.Format.nBlockAlign;
-    wfex.Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-    wfex.Samples.wValidBitsPerSample = 32;
-    wfex.dwChannelMask          = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
-    wfex.SubFormat              = KSCONST_SUBTYPE_IEEE_FLOAT;
-    return true;
-}
-
 bool AudioMixer::Impl::openApplicationLoopback(Strip& s, uint32_t pid)
 {
-    AUDIOCLIENT_ACTIVATION_PARAMS params = {};
-    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
-    params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
-    params.ProcessLoopbackParams.TargetProcessId = pid;
-
-    PROPVARIANT activateParams = {};
-    activateParams.vt = VT_BLOB;
-    activateParams.blob.cbSize = sizeof(params);
-    activateParams.blob.pBlobData = reinterpret_cast<BYTE*>(&params);
-
-    // The handler starts with a refcount of 1, so Attach (rather than the
-    // AddRef'ing constructor) keeps the count balanced and lets ComPtr delete
-    // it once the async operation has released its own reference.
-    ComPtr<ProcessLoopbackActivationHandler> handler;
-    handler.Attach(new ProcessLoopbackActivationHandler());
-
-    ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
-    HRESULT hr = ActivateAudioInterfaceAsync(
-        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-        __uuidof(IAudioClient),
-        &activateParams,
-        handler.Get(),
-        &asyncOp);
-    if (FAILED(hr)) {
-        std::fprintf(stderr, "[mixer] ActivateAudioInterfaceAsync failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+    s.captureAC = activateProcessLoopbackClient(pid);
+    if (!s.captureAC) {
         return false;
     }
-
-    DWORD wait = WaitForSingleObject(handler->eventHandle(), 10000);
-    if (wait != WAIT_OBJECT_0) {
-        std::fprintf(stderr, "[mixer] Timeout waiting for process loopback activation (pid %u)\n", pid);
-        return false;
-    }
-    hr = handler->result();
-    if (FAILED(hr) || !handler->client()) {
-        std::fprintf(stderr, "[mixer] Process loopback activation failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
-        return false;
-    }
-    s.captureAC = handler->client();
 
     WAVEFORMATEXTENSIBLE wfex;
     initProcessLoopbackFormat(wfex);
 
     DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
-    hr = s.captureAC->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0,
+    HRESULT hr = s.captureAC->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0,
                                  reinterpret_cast<const WAVEFORMATEX*>(&wfex), nullptr);
     if (FAILED(hr)) {
         std::fprintf(stderr, "[mixer] Process loopback IAudioClient::Initialize failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
@@ -689,7 +554,7 @@ bool AudioMixer::Impl::openApplicationLoopback(Strip& s, uint32_t pid)
 
     UINT32 bufFrames = 0;
     s.captureAC->GetBufferSize(&bufFrames);
-    if (bufFrames == 0) bufFrames = wfex.Format.nSamplesPerSec / 100;
+    if (FAILED(hr) || bufFrames == 0) bufFrames = wfex.Format.nSamplesPerSec / 100;
 
     s.captureCh      = wfex.Format.nChannels;
     s.captureRate    = wfex.Format.nSamplesPerSec;

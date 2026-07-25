@@ -72,7 +72,22 @@ ComPtr<IMMDevice> findAnyDevice(IMMDeviceEnumerator* enumerator,
                                  const std::string& hint,
                                  EDataFlow* foundFlow);
 
-// Format conversion: src (float) -> dst (float), handling channel count
+// Initialize COM as multi-threaded on the current thread once. Safe to call
+// from any worker thread; does nothing after the first call.
+void EnsureComInitializedOnThisThread();
+
+// Activates an IAudioClient for process-loopback capture of `pid`.
+// Waits up to `timeoutMs` for the asynchronous activation to complete.
+ComPtr<IAudioClient> activateProcessLoopbackClient(uint32_t pid, DWORD timeoutMs = 10000);
+
+// Fill `wfex` with the float 48 kHz stereo format used for process loopback.
+bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex);
+
+// Locate the bundled MIT KEMAR SOFA HRTF dataset. Falls back from the repo root
+// to paths relative to the executable so tests and installed builds both work.
+std::string resolveHrtfPath();
+
+// Format conversion: src (float) -> dst (float), handling sample-rate
 // mismatch and sample-rate mismatch via linear interpolation.
 // phase persists between calls.
 uint32_t convertBuffer(

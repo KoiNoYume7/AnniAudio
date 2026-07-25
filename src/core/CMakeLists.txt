@@ -3,6 +3,7 @@ add_library(audio_core STATIC
     AudioEngine.cpp
     AudioMixer.cpp
     AudioMixerMatrix.cpp
+    InputProcessor.cpp
     midi_input.cpp
 )
 target_include_directories(audio_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

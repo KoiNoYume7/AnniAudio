@@ -6,6 +6,8 @@
 #include <unordered_map>
 
 #include <audiopolicy.h>
+#include <audioclientactivationparams.h>
+#include <objidl.h>
 #include <tlhelp32.h>
 
 namespace anniaudio::core {
@@ -164,6 +166,162 @@ ComPtr<IMMDevice> findAnyDevice(IMMDeviceEnumerator* enumerator,
     if (renderDev) { *foundFlow = eRender; return renderDev; }
     *foundFlow = eAll;
     return nullptr;
+}
+
+void EnsureComInitializedOnThisThread()
+{
+    thread_local bool initialized = false;
+    if (initialized) return;
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    initialized = true;
+}
+
+namespace {
+
+class ProcessLoopbackActivationHandler :
+    public IActivateAudioInterfaceCompletionHandler,
+    public IAgileObject {
+public:
+    ProcessLoopbackActivationHandler() : m_ref(1), m_event(CreateEvent(nullptr, FALSE, FALSE, nullptr)) {}
+    ~ProcessLoopbackActivationHandler() { if (m_event) CloseHandle(m_event); }
+
+    HANDLE eventHandle() const { return m_event; }
+    HRESULT result() const { return m_result; }
+    IAudioClient* client() const { return m_client.Get(); }
+
+    STDMETHOD(QueryInterface)(REFIID riid, void** ppv) override {
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, __uuidof(IActivateAudioInterfaceCompletionHandler))) {
+            *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+        } else if (IsEqualIID(riid, IID_IAgileObject)) {
+            *ppv = static_cast<IAgileObject*>(this);
+        } else {
+            *ppv = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+
+    STDMETHOD_(ULONG, AddRef)() override { return InterlockedIncrement(&m_ref); }
+    STDMETHOD_(ULONG, Release)() override {
+        ULONG c = InterlockedDecrement(&m_ref);
+        if (c == 0) delete this;
+        return c;
+    }
+
+    STDMETHOD(ActivateCompleted)(IActivateAudioInterfaceAsyncOperation* operation) override {
+        m_result = E_FAIL;
+        if (!operation) {
+            SetEvent(m_event);
+            return S_OK;
+        }
+        HRESULT hrActivate = E_UNEXPECTED;
+        ComPtr<IUnknown> punk;
+        HRESULT hr = operation->GetActivateResult(&hrActivate, &punk);
+        if (SUCCEEDED(hr) && SUCCEEDED(hrActivate) && punk) {
+            punk.As(&m_client);
+            m_result = m_client ? S_OK : E_NOINTERFACE;
+        } else {
+            m_result = FAILED(hrActivate) ? hrActivate : hr;
+        }
+        SetEvent(m_event);
+        return S_OK;
+    }
+
+private:
+    volatile LONG m_ref;
+    HANDLE m_event;
+    HRESULT m_result = E_FAIL;
+    ComPtr<IAudioClient> m_client;
+};
+
+} // namespace
+
+ComPtr<IAudioClient> activateProcessLoopbackClient(uint32_t pid, DWORD timeoutMs)
+{
+    EnsureComInitializedOnThisThread();
+
+    AUDIOCLIENT_ACTIVATION_PARAMS params = {};
+    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+    params.ProcessLoopbackParams.TargetProcessId = pid;
+
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    pv.vt = VT_BLOB;
+    pv.blob.cbSize = sizeof(params);
+    pv.blob.pBlobData = reinterpret_cast<BYTE*>(&params);
+
+    ComPtr<ProcessLoopbackActivationHandler> handler;
+    handler.Attach(new ProcessLoopbackActivationHandler());
+
+    ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+    HRESULT hr = ActivateAudioInterfaceAsync(
+        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        __uuidof(IAudioClient),
+        &pv,
+        handler.Get(),
+        &asyncOp);
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "[audio_utils] ActivateAudioInterfaceAsync failed 0x%08X\n", (unsigned)hr);
+        return nullptr;
+    }
+
+    DWORD wait = WaitForSingleObject(handler->eventHandle(), timeoutMs);
+    if (wait != WAIT_OBJECT_0) {
+        std::fprintf(stderr, "[audio_utils] Timeout waiting for process loopback activation (pid %u)\n", pid);
+        return nullptr;
+    }
+
+    hr = handler->result();
+    if (FAILED(hr) || !handler->client()) {
+        std::fprintf(stderr, "[audio_utils] Process loopback activation failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        return nullptr;
+    }
+
+    ComPtr<IAudioClient> client;
+    client.Attach(handler->client());
+    client->AddRef();
+    return client;
+}
+
+bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex)
+{
+    wfex.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+    wfex.Format.nChannels       = 2;
+    wfex.Format.nSamplesPerSec  = 48000;
+    wfex.Format.wBitsPerSample  = 32;
+    wfex.Format.nBlockAlign     = wfex.Format.nChannels * sizeof(float);
+    wfex.Format.nAvgBytesPerSec = wfex.Format.nSamplesPerSec * wfex.Format.nBlockAlign;
+    wfex.Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    wfex.Samples.wValidBitsPerSample = 32;
+    wfex.dwChannelMask          = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    wfex.SubFormat              = KSCONST_SUBTYPE_IEEE_FLOAT;
+    return true;
+}
+
+std::string resolveHrtfPath()
+{
+    auto exists = [](const std::string& p) {
+        DWORD a = GetFileAttributesA(p.c_str());
+        return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+    };
+    const char* rel = "assets/hrtf/mit_kemar.sofa";
+    if (exists(rel)) return rel;
+
+    char exePath[MAX_PATH] = {0};
+    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) > 0) {
+        std::string dir(exePath);
+        size_t slash = dir.find_last_of("\\/");
+        if (slash != std::string::npos) dir.resize(slash);
+        for (const char* up : {"/assets/hrtf/mit_kemar.sofa",
+                               "/../../../assets/hrtf/mit_kemar.sofa"}) {
+            std::string cand = dir + up;
+            if (exists(cand)) return cand;
+        }
+    }
+    return rel;
 }
 
 std::vector<EndpointInfo> enumEndpoints(IMMDeviceEnumerator* enumerator)
