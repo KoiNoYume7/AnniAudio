@@ -22,14 +22,6 @@ namespace anniaudio::core {
 
 namespace {
 
-void EnsureComInitializedOnThisThread()
-{
-    thread_local bool initialized = false;
-    if (initialized) return;
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    initialized = true;
-}
-
 nlohmann::json toJson(const InputSnapshot& in)
 {
     nlohmann::json j;
