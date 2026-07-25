@@ -91,7 +91,7 @@ The effective volume of a strip is `group.volume × outputGains[output]`. The ou
 
 ## Layer 3 — DSP Chain
 
-DSP is **per-input (per strip)**, not per-route. Processing happens once at capture time, before resampling and before the signal is routed to multiple outputs. This guarantees that a noise-suppressed, EQ'd, or spatialized input sounds the same through every output.
+DSP is **per strip**. Because the current matrix creates one strip for every (input × output) route, a noise-suppressed, EQ'd, or spatialized input routed to three outputs runs three identical DSP chains today. Processing happens once per strip at capture time, before resampling and mixing, which guarantees that a processed input still sounds the same through every output it feeds. A future shared group bus will move the DSP to a single capture-side pass and mix the processed signal to all outputs.
 
 For each strip, `AudioMixer::Impl::setupStripDsp()` allocates:
 - `NoiseSuppressor` (RNNoise) if `denoise == true` and capture rate is 48 kHz

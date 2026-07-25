@@ -50,7 +50,7 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 - [x] Noise suppression node (`NoiseSuppressor`) using RNNoise
 - [x] Per-strip volume/mute, per-output master/mute
 - [x] Send gains and scenes (level snapshots)
-- [ ] Audio thread at `THREAD_PRIORITY_TIME_CRITICAL` (currently high priority)
+- [x] Audio thread at `THREAD_PRIORITY_TIME_CRITICAL`
 - [ ] Output safety limiter (hard dB ceiling)
 
 **Exit criteria:** Mic input through AnniAudio has audible noise removed. EQ visibly shapes the frequency response. CPU usage is reasonable.
@@ -105,7 +105,7 @@ avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_ke
 - [x] `docs/MIXER-CONTROL-API.md` documents the fields + the direction endpoint.
 - [ ] Loupedeck: an azimuth dial action (a physical knob is the natural fit).
 - [ ] Optional daily-phase polish: HRTF dataset selection, reverb for externalization.
-- [ ] Flip README Phase 3 to "in daily use" once it's had real mileage.
+- [x] Flip README Phase 3 to "in daily use" once it's had real mileage.
 
 ### Stage D — Per-output virtualization (Windows Sonic replacement)
 - [ ] Flag an output as spatial; map a virtual 5.1/7.1 layout to fixed directions and
@@ -159,9 +159,8 @@ better than Windows Sonic.
 
 **Goal:** One installer. One reboot. Done.
 
-- [ ] NSIS or WiX installer
+- [ ] Installer technology not chosen (NSIS, WiX, and Inno Setup are candidates; nothing exists)
 - [ ] Driver signing: test signing instructions for personal use, Microsoft attestation signing for open source distribution
-- [ ] NVIDIA model download script — installer fetches models from NVIDIA on first run, caches in `%APPDATA%\AnniAudio\models\`
 - [ ] AnniAudio registered as a Windows service — starts with Windows, runs in background
 - [ ] Graceful startup and shutdown handling
 - [ ] Uninstaller removes driver cleanly and leaves no trace

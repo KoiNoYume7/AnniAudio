@@ -40,9 +40,9 @@
 | `tui` | Curses TUI (`scripts/mixer_tui.py`, `scripts/tui_*.py`) |
 | `plugin` | Loupedeck C# plugin (`AnniAudioMixerPlugin/`) |
 | `config` | Config system (`config/` + loading code) |
-| `hotkeys` | Hotkey engine |
+| `hotkeys` | Global hotkey engine (future; no `RegisterHotKey` integration yet) |
 | `ui` | Graphical UI (future; currently TUI / Loupedeck) |
-| `installer` | NSIS/WiX installer and packaging |
+| `installer` | Installer and packaging (future; technology not yet chosen) |
 | `ci` | GitHub Actions |
 | `deps` | Third-party dependencies |
 | `tests` | POC and verification tools (`tests/`) |
@@ -71,11 +71,11 @@ A tag is created at the completion of each significant milestone:
 |---|---|
 | `phase0-planning` | All schemas, decisions, and skeleton committed |
 | `phase0-complete` | All Phase 0 POCs passing, ready to build |
-| `phase1-complete` | Virtual driver + WASAPI routing working end-to-end |
-| `phase2-complete` | DSP chain (EQ + noise cancellation) working |
-| `phase3-complete` | Spatial audio / HRTF working |
-| `phase4-complete` | REST API + hotkeys + CLI working |
-| `phase5-complete` | Electron UI complete |
+| `phase1-complete` | Virtual driver builds; WASAPI routing works with loopback |
+| `phase2-complete` | DSP chain (EQ + RNNoise), routing matrix, control API + SSE, TUI, Loupedeck plugin working |
+| `phase3-complete` | Per-input HRTF spatialization live in the mixer |
+| `phase4-complete` | Global hotkeys, standalone CLI client (`anniaudio-cli`) |
+| `phase5-complete` | Graphical UI (Electron or other chosen stack) complete |
 | `phase6-complete` | Installer and packaging complete |
 
 Tag command:
@@ -83,6 +83,30 @@ Tag command:
 git tag -a "phase0-complete" -m "Phase 0 complete — all POCs verified"
 git push origin --tags
 ```
+
+---
+
+## Build and Run Tests
+
+Tests are not built by default. Configure with `-DBUILD_TESTS=ON`:
+
+```powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTS=ON
+cmake --build build --config Release
+```
+
+This produces Phase-0 POCs and verification binaries in `build/bin/Release/`:
+
+| Binary | Type | What it checks | How to run |
+|---|---|---|---|
+| `poc_eq.exe` | Manual/listening | Biquad EQ frequency response | Run and read output |
+| `poc_rnnoise.exe` | Manual/listening | RNNoise suppression on test signal | Run and listen |
+| `poc_wasapi.exe` | Manual/listening | 1 kHz sine loopback capture | Run and listen |
+| `poc_hrtf.exe` | Manual/listening | HRTF convolution against MIT KEMAR; renders `hrtf_orbit_48k.wav` | Run from repo root so `assets/hrtf/mit_kemar.sofa` resolves |
+| `test_routing.exe` | Manual 5-minute harness | Routes audio from a capture endpoint to a render endpoint via `AudioEngine` | `test_routing [capture_hint] [render_hint]`; prints frame counts, stop with Ctrl+C |
+| `test_mixer_live_edit.exe` | Automated | Adds, renames, adjusts volume, and removes `AudioMixer` strips while the mixer is running | `test_mixer_live_edit.exe "<output>" "<source1>" "<source2>"`; exits 0 on success, 1 on failure |
+
+`test_mixer_live_edit` is the closest thing to an automated regression net for the `AudioMixer` strip lifecycle, but it tests `AudioMixer` directly, not `AudioMixerMatrix`. It requires real audio endpoints. None of these are wired into CTest.
 
 ---
 

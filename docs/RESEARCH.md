@@ -1,6 +1,11 @@
-# AnniAudio — Research Notes
+# AnniAudio — Research Notes (Historical Phase 0 Record)
 
-Links, findings, code snippets, and open questions gathered during Phase 0. Updated as we learn things.
+Links, findings, code snippets, and open questions gathered during Phase 0. This
+document is a historical record from the research phase and is **not maintained as
+current architecture**. Many decisions described here (e.g. the UI stack, the noise-
+cancellation backend, the exact config schema) were made or superseded later. For
+the current system, see `docs/ARCHITECTURE.md`, `docs/CONFIG.md`, and
+`docs/MIXER-CONTROL-API.md`.
 
 ---
 
@@ -238,12 +243,13 @@ Single header. Supports GET/POST/DELETE, WebSocket upgrade, chunked responses, a
 
 ---
 
-## Open Questions
+## Open Questions (Phase 0 status)
 
-All major pre-build decisions are now resolved. Remaining items are deferred to the phases where they become relevant.
+These were the major pre-build decisions. They are listed here as originally
+recorded, with a short note on what actually happened.
 
-- [x] **NVIDIA RTX Effects SDK EULA** — **Resolved:** Model files are downloaded on first run via the installer, not bundled with the release. Sidesteps redistribution entirely. The installer checks for the models, downloads them from NVIDIA if missing, and caches them in `%APPDATA%\AnniAudio\models\`. No EULA concern.
+- [x] **NVIDIA RTX Effects SDK EULA** — **Phase 0 decision:** Model files would be downloaded on first run via the installer and cached in `%APPDATA%\AnniAudio\models\`, not bundled. **Current status:** No NVIDIA code was implemented; RNNoise is the only noise-cancellation backend.
 - [x] **Windows version target** — **Resolved: Win11 only.** Simplifies driver signing and testing. No Win10 support.
 - [ ] **IRCAM Listen license** — Attribution required for non-commercial use. **Deferred to Phase 3** (spatial audio). Verify exact attribution text before bundling. MIT KEMAR and SADIE II are clear — start with those.
-- [x] **UI stack decision** — **Resolved: Electron.** REST API backend makes this clean — Electron talks to the same API as the CLI. Phase 5.
+- [x] **UI stack decision** — **Phase 0 decision: Electron** for a graphical control panel. **Current status:** The TUI (`scripts/mixer_tui.py`) and the Loupedeck C# plugin are the current control surfaces. A graphical UI is still future work; the original Electron decision remains the leading candidate but is not implemented.
 - [x] **FFTW vs KissFFT performance delta** — **Resolved: KissFFT.** BSD licensed, sufficient performance for our frame sizes, no GPL risk. If benchmarks show a problem, pffft (also BSD) is the next option.

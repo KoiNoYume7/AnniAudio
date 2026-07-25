@@ -43,6 +43,7 @@ PowerShell scripts under `scripts/`.
 | File | What it does |
 |---|---|
 | `scripts/lib/config.ps1` | Common path helpers used by the build/driver scripts (see `Get-AnniConfigPath`, `Get-AnniBuildDir`, `Get-DevConPath`, `Get-CertificateThumbprint`) |
+| `scripts/lib/AnniLog.psd1` / `scripts/lib/AnniLog.psm1` | Logging module imported by `build-driver.ps1` for structured build output |
 
 ## Certificates
 
