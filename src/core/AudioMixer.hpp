@@ -28,10 +28,11 @@ struct MixerStripConfig {
     // this strip hears the processed signal.
     bool        denoise = false;   // RNNoise suppression (needs 48 kHz capture)
     std::string eqPreset;          // "" = off; "voice" = HPF + mud cut + presence + air
-    // HRTF binaural spatialization. When on, the strip is downmixed to mono and
-    // convolved to a positioned stereo image (see dsp::Spatializer). Requires a
-    // stereo-or-wider output. azimuth: 0 = front, +90 = left, -90 = right;
-    // elevation: 0 = ear level, +90 = above.
+    // HRTF binaural spatialization. When on, the left/right channels are
+    // convolved as two virtual speakers (see dsp::Spatializer) and summed into a
+    // positioned stereo image. Requires a stereo-or-wider output.
+    // azimuth: 0 = front, +90 = left, -90 = right; elevation: 0 = ear level,
+    // +90 = above.
     bool        spatial = false;
     float       azimuth = 0.0f;
     float       elevation = 0.0f;

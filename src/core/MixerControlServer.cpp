@@ -107,10 +107,11 @@ nlohmann::json stateJson(AudioMixerMatrix& matrix)
 {
     auto snap = matrix.snapshot();
     nlohmann::json j;
-    j["running"] = snap.running;
-    j["inputs"]  = nlohmann::json::array();
-    j["groups"]  = nlohmann::json::array();
-    j["outputs"] = nlohmann::json::array();
+    j["running"]    = snap.running;
+    j["controlPort"]= snap.controlPort;
+    j["inputs"]     = nlohmann::json::array();
+    j["groups"]     = nlohmann::json::array();
+    j["outputs"]    = nlohmann::json::array();
     for (const auto& in : snap.inputs) j["inputs"].push_back(toJson(in));
     for (const auto& g  : snap.groups) j["groups"].push_back(toJson(g));
     for (const auto& o  : snap.outputs) j["outputs"].push_back(toJson(o));
