@@ -26,7 +26,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route", "tui", "gui")]
+    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route", "tui")]
     [string]$Command,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -384,19 +384,11 @@ switch ($Command) {
     "version"        { Invoke-AnniVersion }
     "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $CliArgs }
     "route"          { Invoke-AnniRoute -RouteArgs $CliArgs }
-    "tui"            { $exit = Invoke-Script "tui.ps1"; if ($exit -ne 0) { exit $exit } }
-    "gui"            {
-        if ($CliArgs.Count -gt 0 -and $CliArgs[0] -match '^\d+$') {
-            $port = [int]$CliArgs[0]
-        } else {
-            $used = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Select-Object -ExpandProperty Port
-            $port = 18080..18120 | Where-Object { $used -notcontains $_ } | Select-Object -First 1
-            if (!$port) { $port = 18080 }
-        }
-        Write-Host "[gui] Starting web GUI server on port $port..." -ForegroundColor Cyan
-        Start-Process powershell.exe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$REPO_ROOT\scripts\gui-server.ps1", "-Port", $port
-        Start-Sleep -Seconds 1
-        Start-Process "http://localhost:$port/"
+    "tui"            {
+        $bat = "$REPO_ROOT\mixer-tui.bat"
+        if (!(Test-Path $bat)) { Write-Error "mixer-tui.bat not found. Build the project first."; exit 1 }
+        & $bat @CliArgs
+        if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
     default          { Write-Host "Unknown command: $Command" -ForegroundColor Red }
 }

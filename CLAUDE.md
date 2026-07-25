@@ -6,8 +6,8 @@ Operating manual for AnniAudio. Read this before changing anything.
 
 A system-wide audio suite for Windows 11. The part under active development is the
 **mixer**: a live routing matrix (inputs → groups/cables → outputs) with per-app
-routing, DSP (RNNoise + EQ), per-output send gains, scenes, and a REST+SSE control
-API. Three clients drive that API: a Python curses TUI, a Loupedeck C# plugin, and
+routing, DSP (RNNoise + EQ + HRTF spatialization), per-output send gains, scenes,
+and a REST+SSE control API. Three clients drive that API: a Python curses TUI, a Loupedeck C# plugin, and
 any HTTP client. Version: see `VERSION` (0.2.0). Default branch of work: `dev`.
 
 ## Architecture (mixer)
@@ -28,19 +28,26 @@ Audio flows one way: **inputs → groups → outputs**.
 - `src/core/MixerControlServer.cpp` — httplib HTTP + SSE server on `127.0.0.1:8850`.
   SSE broadcasts full state on any `markDirty()`. Full endpoint list in
   `docs/MIXER-CONTROL-API.md` — **keep that doc in sync when you touch routes**.
-- `src/dsp/` (`audio_dsp` lib) — `EqChain` (biquads) and `NoiseSuppressor` (RNNoise).
-  Real-time-safe after `prepare()`.
+- `src/dsp/` (`audio_dsp` lib) — `EqChain` (biquads), `NoiseSuppressor` (RNNoise),
+  and `Spatializer` (HRTF FFT overlap-add convolution). Real-time-safe after
+  `prepare()`.
 - `src/core/AudioEngine.cpp` — the older single source→output engine, used only by
   `route_cli process`. Not part of the mixer path.
-- `tests/` — Phase-0 POCs and manual verification tools. Not built by default; use
-  `-DBUILD_TESTS=ON`.
+- `cli/anniaudio.ps1` — PowerShell driver/signing control panel (`install`, `uninstall`,
+  `dev-mode`, `gaming-mode`, `config`, `status`, `build`, `route`, `tui`). The `tui`
+  subcommand launches `mixer-tui.bat`. This is **not** the Phase 4 standalone
+  `anniaudio-cli` API client.
+- `tests/` — Phase-0 POCs and verification tools. Not built by default; use
+  `-DBUILD_TESTS=ON`. `test_mixer_live_edit` is automated and tests live add/remove/rename
+  of `AudioMixer` strips; `test_routing` is a manual 5-minute harness that uses the legacy
+  `AudioEngine`.
 - `scripts/mixer_tui.py`, `scripts/tui_utils.py`, `scripts/tui_ui.py` — curses TUI
   split into entry/utility/ui modules.
 
-Data model note: DSP is a property of an **input** (`denoise`, `eqPreset`), so the
-processed signal follows a mic through every route. Send gain is a property of a
-**group→output** pair. Mute exists on groups and on outputs. See `docs/CONFIG.md`
-for the config file reference.
+Data model note: DSP is a property of an **input** (`denoise`, `eqPreset`, `spatial`,
+`azimuth`, `elevation`), so the processed signal follows a mic through every route.
+Send gain is a property of a **group→output** pair. Mute exists on groups and on
+outputs. See `docs/CONFIG.md` for the config file reference.
 
 ## Build
 
@@ -122,8 +129,9 @@ inspect live state read-only with `curl -s http://127.0.0.1:8850/api/state` and
 
 ## Roadmap / next candidates
 
-Phase 2 (DSP + matrix + control surfaces) is working end-to-end. Open items, roughly
-ranked: output safety limiter (hard dB ceiling); Loupedeck action artwork/icons;
-global hotkeys; graphical mixer GUI; HRTF into the mixer; driver signing + installer
-(Inno Setup) — the driver-signing cost (EV cert + MS attestation) is the real barrier
-to shipping to other users, not the installer. See `docs/ROADMAP.md`.
+Phase 2 (DSP + matrix + control surfaces) is working end-to-end, including per-input
+HRTF spatialization. Open items, roughly ranked: output safety limiter (hard dB
+ceiling); Loupedeck action artwork/icons; global hotkeys; graphical mixer GUI;
+driver signing + installer — the installer technology has not been chosen (NSIS,
+WiX, and Inno Setup are candidates) and the driver-signing cost (EV cert + MS
+attestation) is the real barrier to shipping to other users. See `docs/ROADMAP.md`.

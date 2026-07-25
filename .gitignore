@@ -17,6 +17,7 @@ _deps/
 !CMakeLists.txt
 
 # ── WDK / Driver build outputs ──
+driver/build/
 driver/x64/
 driver/x86/
 *.cat
