@@ -151,6 +151,8 @@ better than Windows Sonic.
 - [ ] System tray icon — quick mute, preset switch, open UI
 - [ ] Settings page — API port, startup behavior, device defaults
 
+**UX philosophy:** Phase 5 is about building a product for *everyone*, not just enthusiasts. The default experience should be as simple as the Windows 11 Sound settings (pick an output, mute what you don't want, done), with an optional **Advanced** mode that exposes the full routing matrix, per-app sends, DSP chain, and API. The TUI and Loupedeck plugin remain the power-user surfaces.
+
 **Exit criteria:** The UI exposes every feature and is genuinely pleasant to use.
 
 ---
@@ -166,6 +168,7 @@ better than Windows Sonic.
 - [ ] Uninstaller removes driver cleanly and leaves no trace
 - [ ] GitHub Actions CI — builds on push, runs tests
 - [ ] GitHub releases with installer artifacts attached
+- [ ] Auto-updater — check for new releases and install them with minimal user friction
 
 **Exit criteria:** Download installer, run it, reboot. AnniAudio is running. Uninstall leaves the system exactly as it was.
 
@@ -183,3 +186,9 @@ These are not in scope for the initial build but will be added later:
 - AnniWebsite integration — control AnniAudio from the web dashboard
 - Non-NVIDIA noise cancellation improvement — better CPU-side model or Whisper-based approach
 - Preset cloud sync
+
+---
+
+## Product vision
+
+AnniAudio started as a personal power-tool for routing Windows audio anywhere, but the end goal is a consumer-grade mixer that anyone — gamer, streamer, remote worker — can use without reading a manual. Most users should get a simpler, better audio experience than the built-in Windows 11 Sound settings with no virtual-cable setup visible to them. Enthusiasts keep the full matrix, per-app routing, DSP, REST/SSE API, and TUI. This vision is long-term and informs Phase 5 (simple-by-default UI) and Phase 6 (installer, service, auto-updater).

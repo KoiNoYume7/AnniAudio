@@ -123,15 +123,21 @@ inspect live state read-only with `curl -s http://127.0.0.1:8850/api/state` and
 
 - `config/mixers/main.json` — the live autosaved matrix (gitignored; personal).
 - `config/scenes/*.json` — named level overlays (gitignored).
-- `config/app-rules.json` — semi-auto assignment: `rules` (exe→group, wildcards ok)
-  and `ignore`. Tracked; seeded as a base template.
+- `config/app-rules.json` — semi-auto assignment: `rules` (`match` → group,
+  wildcards ok) and `ignore`. Tracked; seeded as a base template.
 - `scripts/.routed_apps_<port>.json` — TUI sidecar tracking per-app routes (gitignored).
 
 ## Roadmap / next candidates
 
 Phase 2 (DSP + matrix + control surfaces) is working end-to-end, including per-input
-HRTF spatialization. Open items, roughly ranked: output safety limiter (hard dB
-ceiling); Loupedeck action artwork/icons; global hotkeys; graphical mixer GUI;
-driver signing + installer — the installer technology has not been chosen (NSIS,
-WiX, and Inno Setup are candidates) and the driver-signing cost (EV cert + MS
-attestation) is the real barrier to shipping to other users. See `docs/ROADMAP.md`.
+HRTF spatialization. The long-term product goal is a consumer-grade Windows 11 audio
+mixer: simple enough for any gamer, streamer, or remote worker, with an optional
+Advanced mode for enthusiasts who want the full routing matrix, per-app sends, DSP
+chain, and API. That drives the UI (simple-by-default, Advanced toggle), installer,
+background service, and auto-updater work in later phases.
+
+Near-term open items, roughly ranked: output safety limiter (hard dB ceiling);
+Loupedeck action artwork/icons; global hotkeys; graphical mixer GUI; driver signing
++ installer — the installer technology has not been chosen (NSIS, WiX, and Inno
+Setup are candidates) and the driver-signing cost (EV cert + MS attestation) is the
+real barrier to shipping to other users. See `docs/ROADMAP.md`.
