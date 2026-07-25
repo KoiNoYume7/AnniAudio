@@ -71,6 +71,13 @@ namespace Loupedeck.AnniAudioMixerPlugin
         public void Dispose()
         {
             this._running = false;
+
+            // Give the background workers a chance to exit before disposing the
+            // HttpClient they use. A missed send or poll is harmless; touching a
+            // disposed client is not.
+            this._pollThread?.Join(1500);
+            this._sendThread?.Join(500);
+
             this._http.Dispose();
         }
 

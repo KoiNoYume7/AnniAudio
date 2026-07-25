@@ -131,9 +131,20 @@ void sendError(httplib::Response& res, int status, const std::string& message)
 bool isSafePresetPath(const std::string& path)
 {
     if (path.empty()) return false;
-    if (path.find("..") != std::string::npos) return false;
-    if (path.size() > 1 && (path[0] == '/' || path[0] == '\\')) return false;
+
+    namespace fs = std::filesystem;
+    fs::path p(path);
+
+    // Reject absolute paths, Windows drive-relative paths (e.g. C:foo), and any
+    // path whose normalized form still contains a parent-directory component.
+    if (p.is_absolute()) return false;
     if (path.size() > 2 && path[1] == ':') return false;
+
+    std::string norm = p.lexically_normal().string();
+    if (norm.empty()) return false;
+    if (norm.find("..") != std::string::npos) return false;
+    if (norm[0] == '/' || norm[0] == '\\') return false;
+
     return true;
 }
 
@@ -298,6 +309,25 @@ void MixerControlServer::Impl::registerRoutes()
         { "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS" },
         { "Access-Control-Allow-Headers", "Content-Type" },
     });
+
+    // Safety net: malformed bodies (wrong JSON types, huge IDs, etc.) must not
+    // terminate the server. Handlers still validate locally where possible; this
+    // catches anything that slips through and returns a controlled 500.
+    svr.set_exception_handler([](const httplib::Request& req, httplib::Response& res, std::exception_ptr ep) {
+        try {
+            if (ep) std::rethrow_exception(ep);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[mixer-api] unhandled exception on %s %s: %s\n",
+                         req.method.c_str(), req.path.c_str(), e.what());
+        } catch (...) {
+            std::fprintf(stderr, "[mixer-api] unhandled non-standard exception on %s %s\n",
+                         req.method.c_str(), req.path.c_str());
+        }
+        nlohmann::json j{ { "error", "internal server error" } };
+        res.status = 500;
+        res.set_content(j.dump(), "application/json");
+    });
+
     svr.Options(R"(.*)", [](const httplib::Request&, httplib::Response& res) {
         res.status = 204;
     });
@@ -348,10 +378,19 @@ void MixerControlServer::Impl::registerRoutes()
                 return sink.write(hb.data(), hb.size());
             },
             [this, client, clientId](bool) {
-                std::lock_guard<std::mutex> lk(client->mutex);
-                client->closed = true;
-                std::lock_guard<std::mutex> clk(clientsMutex);
-                clients.erase(clientId);
+                // Erase under the map lock first, then mark the client closed and
+                // wake its content-provider so it exits promptly. This matches the
+                // clientsMutex -> client->mutex lock order used by pushToAllClients
+                // and avoids a lock-order inversion with the broadcast thread.
+                {
+                    std::lock_guard<std::mutex> clk(clientsMutex);
+                    clients.erase(clientId);
+                }
+                {
+                    std::lock_guard<std::mutex> lk(client->mutex);
+                    client->closed = true;
+                    client->cv.notify_all();
+                }
             }
         );
 
@@ -459,6 +498,7 @@ void MixerControlServer::Impl::registerRoutes()
     });
 
     svr.Delete(R"(/api/inputs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
         InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
         if (!matrix.removeInput(id)) { sendError(res, 404, "input not found"); return; }
         markDirty();
@@ -556,6 +596,7 @@ void MixerControlServer::Impl::registerRoutes()
     });
 
     svr.Delete(R"(/api/groups/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        EnsureComInitializedOnThisThread();
         GroupId id = static_cast<GroupId>(std::stoull(req.matches[1]));
         if (!matrix.removeGroup(id)) { sendError(res, 404, "group not found"); return; }
         markDirty();

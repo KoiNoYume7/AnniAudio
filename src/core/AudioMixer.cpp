@@ -293,6 +293,10 @@ bool AudioMixer::Impl::openOutput(const std::string& outputHint)
     renderAC->GetBufferSize(&renderBufFrames);
     if (renderBufFrames == 0) renderBufFrames = renderRate / 100; // fallback ~10ms
 
+    // Pre-allocate the per-render mix buffer so processRender() never allocates
+    // on the real-time audio thread.
+    mixBuf.resize((size_t)renderBufFrames * renderCh);
+
     std::fprintf(stderr, "[mixer] Output  : %s\n", outputName.c_str());
     std::fprintf(stderr, "[mixer] Output  format : %u Hz, %u ch, %s\n",
                  renderRate, renderCh, renderIsFloat ? "float" : "pcm");
@@ -479,15 +483,27 @@ bool AudioMixer::Impl::openEndpointStrip(Strip& s, const std::string& sourceHint
     if (FAILED(hr)) {
         std::fprintf(stderr, "[mixer] captureAC->Initialize for '%s' failed 0x%08X\n",
                      s.name.empty() ? sourceHint.c_str() : s.name.c_str(), (unsigned)hr);
+        teardownStrip(s);
         return false;
     }
 
     s.captureEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    if (!s.captureEvent) return false;
-    s.captureAC->SetEventHandle(s.captureEvent);
+    if (!s.captureEvent) {
+        teardownStrip(s);
+        return false;
+    }
+    hr = s.captureAC->SetEventHandle(s.captureEvent);
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "[mixer] capture SetEventHandle failed 0x%08X\n", (unsigned)hr);
+        teardownStrip(s);
+        return false;
+    }
 
     hr = s.captureAC->GetService(IID_PPV_ARGS(&s.captureSvc));
-    if (FAILED(hr) || !s.captureSvc) return false;
+    if (FAILED(hr) || !s.captureSvc) {
+        teardownStrip(s);
+        return false;
+    }
 
     UINT32 bufFrames = 0;
     s.captureAC->GetBufferSize(&bufFrames);
@@ -644,19 +660,26 @@ bool AudioMixer::Impl::openApplicationLoopback(Strip& s, uint32_t pid)
                                  reinterpret_cast<const WAVEFORMATEX*>(&wfex), nullptr);
     if (FAILED(hr)) {
         std::fprintf(stderr, "[mixer] Process loopback IAudioClient::Initialize failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
-        s.captureAC.Reset();
+        teardownStrip(s);
         return false;
     }
 
-    hr = s.captureAC->SetEventHandle(s.captureEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr));
+    s.captureEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!s.captureEvent) {
+        teardownStrip(s);
+        return false;
+    }
+    hr = s.captureAC->SetEventHandle(s.captureEvent);
     if (FAILED(hr)) {
         std::fprintf(stderr, "[mixer] SetEventHandle failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        teardownStrip(s);
         return false;
     }
 
     hr = s.captureAC->GetService(IID_PPV_ARGS(&s.captureSvc));
     if (FAILED(hr) || !s.captureSvc) {
         std::fprintf(stderr, "[mixer] GetService(IAudioCaptureClient) failed for pid %u: 0x%08X\n", pid, (unsigned)hr);
+        teardownStrip(s);
         return false;
     }
 
