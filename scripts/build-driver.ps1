@@ -30,10 +30,38 @@ if (-not $Thumbprint) {
 $RepoRoot   = "$PSScriptRoot\.."
 $DriverDir  = "$RepoRoot\driver"
 $ProjFile   = "$DriverDir\AnniAudioCable.vcxproj"
-$SignTool   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-$Inf2Cat   = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x86\Inf2Cat.exe"
 $OutDir     = "$RepoRoot\build\driver\$($Config.ToLower())"
 $LogDir     = "$RepoRoot\build\logs"
+
+# Find the newest Windows Kit install for signtool/Inf2Cat instead of hardcoding
+# a specific SDK version.
+function Find-WindowsKitTool($ToolName, $PreferredArch) {
+    $base = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    if (!(Test-Path $base)) { return $null }
+
+    $candidates = Get-ChildItem $base -Directory | ForEach-Object {
+        $p = Join-Path $_.FullName "$PreferredArch\$ToolName"
+        if (Test-Path $p) { $p }
+        else {
+            $p2 = Join-Path $_.FullName "x86\$ToolName"
+            if (Test-Path $p2) { $p2 }
+        }
+    } | Sort-Object -Descending
+
+    return $candidates | Select-Object -First 1
+}
+
+$SignTool = Find-WindowsKitTool "signtool.exe" "x64"
+$Inf2Cat  = Find-WindowsKitTool "Inf2Cat.exe"  "x86"
+
+if (!$SignTool -or !(Test-Path $SignTool)) {
+    Write-Error "[build-driver] signtool.exe not found. Please install the Windows SDK."
+    exit 1
+}
+if (!$Inf2Cat -or !(Test-Path $Inf2Cat)) {
+    Write-Error "[build-driver] Inf2Cat.exe not found. Please install the Windows Driver Kit or Windows SDK."
+    exit 1
+}
 
 Initialize-AnniLog -LogFilePath "$LogDir\build-driver.log" -LogLevel "INFO" -EnableStopwatch
 

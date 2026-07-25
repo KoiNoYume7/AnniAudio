@@ -7,6 +7,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -165,7 +166,26 @@ std::optional<int> parseOptionalInt(const nlohmann::json& j, const std::string& 
 {
     if (!j.contains(key)) return std::nullopt;
     if (j[key].is_null()) return std::nullopt;
+    if (!j[key].is_number_integer()) return std::nullopt;
     return j[key].get<int>();
+}
+
+template <typename T>
+bool parseRouteId(const std::string& s, T& out, const char* label, httplib::Response& res)
+{
+    try {
+        size_t pos = 0;
+        unsigned long long v = std::stoull(s, &pos);
+        if (pos != s.size() || v > std::numeric_limits<T>::max()) {
+            sendError(res, 400, std::string("invalid ") + label);
+            return false;
+        }
+        out = static_cast<T>(v);
+        return true;
+    } catch (const std::exception&) {
+        sendError(res, 400, std::string("invalid ") + label);
+        return false;
+    }
 }
 
 } // namespace
@@ -313,10 +333,15 @@ void MixerControlServer::Impl::registerRoutes()
 
     // Safety net: malformed bodies (wrong JSON types, huge IDs, etc.) must not
     // terminate the server. Handlers still validate locally where possible; this
-    // catches anything that slips through and returns a controlled 500.
+    // catches anything that slips through and returns a controlled 400/500.
     svr.set_exception_handler([](const httplib::Request& req, httplib::Response& res, std::exception_ptr ep) {
         try {
             if (ep) std::rethrow_exception(ep);
+        } catch (const nlohmann::json::exception& e) {
+            std::fprintf(stderr, "[mixer-api] JSON exception on %s %s: %s\n",
+                         req.method.c_str(), req.path.c_str(), e.what());
+            sendError(res, 400, "invalid request body");
+            return;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "[mixer-api] unhandled exception on %s %s: %s\n",
                          req.method.c_str(), req.path.c_str(), e.what());
@@ -436,7 +461,8 @@ void MixerControlServer::Impl::registerRoutes()
 
     svr.Patch(R"(/api/inputs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         EnsureComInitializedOnThisThread();
-        InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
+        InputId id = 0;
+        if (!parseRouteId(req.matches[1], id, "input id", res)) return;
 
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }
@@ -478,7 +504,8 @@ void MixerControlServer::Impl::registerRoutes()
     // strips), this updates the running spatializer in place — glitch-free and
     // safe to call at knob-turn rates. Body: {"azimuth": deg, "elevation": deg}.
     svr.Post(R"(/api/inputs/(\d+)/direction)", [this](const httplib::Request& req, httplib::Response& res) {
-        InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
+        InputId id = 0;
+        if (!parseRouteId(req.matches[1], id, "input id", res)) return;
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }
         catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
@@ -500,7 +527,8 @@ void MixerControlServer::Impl::registerRoutes()
 
     svr.Delete(R"(/api/inputs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         EnsureComInitializedOnThisThread();
-        InputId id = static_cast<InputId>(std::stoull(req.matches[1]));
+        InputId id = 0;
+        if (!parseRouteId(req.matches[1], id, "input id", res)) return;
         if (!matrix.removeInput(id)) { sendError(res, 404, "input not found"); return; }
         markDirty();
         res.status = 204;
@@ -521,9 +549,20 @@ void MixerControlServer::Impl::registerRoutes()
         cfg.cable  = body.value("cable", std::string{});
         cfg.volume = body.value("volume", 100.0f) / 100.0f;
         cfg.muted  = body.value("muted", false);
-        if (body.contains("inputIds")) cfg.inputIds = body["inputIds"].get<std::vector<InputId>>();
-        if (body.contains("outputIds")) cfg.outputIds = body["outputIds"].get<std::vector<std::string>>();
-        cfg.knobIndex = parseOptionalInt(body, "knobIndex");
+        if (body.contains("inputIds") && body["inputIds"].is_array())
+            cfg.inputIds = body["inputIds"].get<std::vector<InputId>>();
+        if (body.contains("outputIds") && body["outputIds"].is_array())
+            cfg.outputIds = body["outputIds"].get<std::vector<std::string>>();
+
+        if (body.contains("knobIndex")) {
+            if (body["knobIndex"].is_null()) {
+                cfg.knobIndex = std::nullopt;
+            } else if (body["knobIndex"].is_number_integer()) {
+                cfg.knobIndex = body["knobIndex"].get<int>();
+            } else {
+                sendError(res, 400, "knobIndex must be an integer or null"); return;
+            }
+        }
 
         if (cfg.name.empty()) { sendError(res, 400, "missing required field 'name'"); return; }
 
@@ -540,7 +579,8 @@ void MixerControlServer::Impl::registerRoutes()
 
     svr.Patch(R"(/api/groups/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         EnsureComInitializedOnThisThread();
-        GroupId id = static_cast<GroupId>(std::stoull(req.matches[1]));
+        GroupId id = 0;
+        if (!parseRouteId(req.matches[1], id, "group id", res)) return;
 
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); }
@@ -561,28 +601,35 @@ void MixerControlServer::Impl::registerRoutes()
         if (body.contains("cable") && body["cable"].is_string()) {
             if (matrix.setGroupCable(id, body["cable"].get<std::string>())) changed = true;
         }
-        if (body.contains("volume")) {
+        if (body.contains("volume") && body["volume"].is_number()) {
             if (matrix.setGroupVolume(id, body["volume"].get<float>())) changed = true;
         }
-        if (body.contains("muted")) {
+        if (body.contains("muted") && body["muted"].is_boolean()) {
             if (matrix.setGroupMuted(id, body["muted"].get<bool>())) changed = true;
         }
-        if (body.contains("inputIds")) {
+        if (body.contains("inputIds") && body["inputIds"].is_array()) {
             auto ids = body["inputIds"].get<std::vector<InputId>>();
             if (matrix.setGroupInputIds(id, ids)) changed = true;
         }
-        if (body.contains("outputIds")) {
+        if (body.contains("outputIds") && body["outputIds"].is_array()) {
             auto ids = body["outputIds"].get<std::vector<std::string>>();
             if (matrix.setGroupOutputIds(id, ids)) changed = true;
         }
         if (body.contains("outputGains") && body["outputGains"].is_object()) {
             for (const auto& kv : body["outputGains"].items()) {
-                if (matrix.setGroupOutputGain(id, kv.key(), kv.value().get<float>())) changed = true;
+                if (kv.value().is_number() &&
+                    matrix.setGroupOutputGain(id, kv.key(), kv.value().get<float>())) changed = true;
             }
         }
         if (body.contains("knobIndex")) {
             std::optional<int> k;
-            if (!body["knobIndex"].is_null()) k = body["knobIndex"].get<int>();
+            if (body["knobIndex"].is_null()) {
+                k = std::nullopt;
+            } else if (body["knobIndex"].is_number_integer()) {
+                k = body["knobIndex"].get<int>();
+            } else {
+                sendError(res, 400, "knobIndex must be an integer or null"); return;
+            }
             if (matrix.setGroupKnobIndex(id, k)) changed = true;
         }
 
@@ -598,7 +645,8 @@ void MixerControlServer::Impl::registerRoutes()
 
     svr.Delete(R"(/api/groups/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         EnsureComInitializedOnThisThread();
-        GroupId id = static_cast<GroupId>(std::stoull(req.matches[1]));
+        GroupId id = 0;
+        if (!parseRouteId(req.matches[1], id, "group id", res)) return;
         if (!matrix.removeGroup(id)) { sendError(res, 404, "group not found"); return; }
         markDirty();
         res.status = 204;

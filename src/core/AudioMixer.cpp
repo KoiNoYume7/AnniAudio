@@ -285,13 +285,17 @@ bool AudioMixer::Impl::openOutput(const std::string& outputHint)
 
     renderEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!renderEvent) return false;
-    renderAC->SetEventHandle(renderEvent);
+    hr = renderAC->SetEventHandle(renderEvent);
+    if (FAILED(hr)) {
+        std::fprintf(stderr, "[mixer] render SetEventHandle failed 0x%08X\n", (unsigned)hr);
+        return false;
+    }
 
     hr = renderAC->GetService(IID_PPV_ARGS(&renderSvc));
     if (FAILED(hr) || !renderSvc) return false;
 
-    renderAC->GetBufferSize(&renderBufFrames);
-    if (renderBufFrames == 0) renderBufFrames = renderRate / 100; // fallback ~10ms
+    hr = renderAC->GetBufferSize(&renderBufFrames);
+    if (FAILED(hr) || renderBufFrames == 0) renderBufFrames = renderRate / 100; // fallback ~10ms
 
     // Pre-allocate the per-render mix buffer so processRender() never allocates
     // on the real-time audio thread.
