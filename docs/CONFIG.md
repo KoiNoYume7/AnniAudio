@@ -201,6 +201,48 @@ present in the example but is not currently used by the generator.
 
 ---
 
+## Global hotkeys (`config/hotkeys.json`)
+
+`route_cli mixer` loads `config/hotkeys.json` (sibling to `config/mixers/`).
+The file is optional; if it is missing, no hotkeys are registered. Copy
+`config/hotkeys.example.json` to `config/hotkeys.json` and edit the bindings.
+
+```json
+{
+  "hotkeys": [
+    { "keys": "Ctrl+Alt+M",    "action": "toggle_group_mute",    "group": "Music" },
+    { "keys": "Ctrl+Alt+Plus",  "action": "nudge_group_volume",   "group": "Music", "delta": 5 },
+    { "keys": "Ctrl+Alt+Minus", "action": "nudge_group_volume",   "group": "Music", "delta": -5 },
+    { "keys": "Ctrl+Shift+M",  "action": "toggle_output_mute",   "output": "Speakers (Realtek(R) Audio)" },
+    { "keys": "Ctrl+Shift+Plus",  "action": "nudge_output_volume",  "output": "Speakers", "delta": 5 },
+    { "keys": "Ctrl+Shift+Minus", "action": "nudge_output_volume",  "output": "Speakers", "delta": -5 },
+    { "keys": "Ctrl+Alt+Left",  "action": "nudge_input_azimuth",  "input": "Microphone", "delta": -10 },
+    { "keys": "Ctrl+Alt+Right", "action": "nudge_input_azimuth",  "input": "Microphone", "delta": 10 }
+  ]
+}
+```
+
+Supported actions:
+
+| Action | Fields | Description |
+|---|---|---|
+| `toggle_group_mute` | `group` (name) | Toggle mute on the named group. |
+| `nudge_group_volume` | `group`, `delta` | Adjust group volume by `delta` percent (clamped 0–200). |
+| `toggle_output_mute` | `output` (name) | Toggle mute on the named output. |
+| `nudge_output_volume` | `output`, `delta` | Adjust output master by `delta` percent (clamped 0–200). |
+| `nudge_input_azimuth` | `input` (name), `delta` | Adjust the named input's HRTF azimuth by `delta` degrees. |
+| `set_input_direction` | `input`, `delta` | Set the named input's azimuth to `delta` degrees. |
+
+Key names: `a`–`z`, `0`–`9`, `f1`–`f24`, `space`, `tab`, `enter`, `esc`,
+`backspace`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`,
+`down`, `left`, `right`, `plus` (main keyboard), `minus` (main keyboard),
+`add` / `subtract` (numpad), `volume_mute`, `volume_up`, `volume_down`,
+`media_next`, `media_prev`, `media_stop`, `media_play_pause`.
+
+Modifiers: `ctrl`, `alt`, `shift`, `win`. Combine with `+`.
+
+---
+
 ## TUI sidecar (`scripts/.routed_apps_<port>.json`)
 
 Generated at runtime by the TUI to remember which applications have been routed to

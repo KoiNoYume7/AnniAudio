@@ -126,8 +126,8 @@ better than Windows Sonic.
 - [x] Mixer core operations exposed as endpoints (see `docs/MIXER-CONTROL-API.md`)
 - [ ] WebSocket event stream (currently SSE; WebSocket for v1 API later)
 - [ ] API key auth, loopback-only by default, LAN as explicit opt-in (current mixer is loopback/no-auth)
-- [ ] Global hotkeys via Win32 `RegisterHotKey`
-- [ ] All hotkey bindings configurable in config JSON
+- [x] Global hotkeys via Win32 `RegisterHotKey`
+- [x] All hotkey bindings configurable in `config/hotkeys.json`
 - [ ] Standalone CLI client (`anniaudio-cli`) wrapping the API
 - [ ] CLI: list devices, get/set routes, load preset, toggle features, adjust gain
 

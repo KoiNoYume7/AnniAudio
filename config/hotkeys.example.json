@@ -1,0 +1,12 @@
+{
+  "hotkeys": [
+    { "keys": "Ctrl+Alt+M",    "action": "toggle_group_mute",    "group": "Music" },
+    { "keys": "Ctrl+Alt+Plus",  "action": "nudge_group_volume",   "group": "Music", "delta": 5 },
+    { "keys": "Ctrl+Alt+Minus", "action": "nudge_group_volume",   "group": "Music", "delta": -5 },
+    { "keys": "Ctrl+Shift+M",  "action": "toggle_output_mute",   "output": "Speakers (Realtek(R) Audio)" },
+    { "keys": "Ctrl+Shift+Plus",  "action": "nudge_output_volume",  "output": "Speakers (Realtek(R) Audio)", "delta": 5 },
+    { "keys": "Ctrl+Shift+Minus", "action": "nudge_output_volume",  "output": "Speakers (Realtek(R) Audio)", "delta": -5 },
+    { "keys": "Ctrl+Alt+Left",  "action": "nudge_input_azimuth",  "input": "Microphone", "delta": -10 },
+    { "keys": "Ctrl+Alt+Right", "action": "nudge_input_azimuth",  "input": "Microphone", "delta": 10 }
+  ]
+}

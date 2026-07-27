@@ -2,6 +2,7 @@
 #include "AudioMixerMatrix.hpp"
 #include "MixerControlServer.hpp"
 #include "eq.hpp"
+#include "global_hotkeys.hpp"
 #include "midi_input.hpp"
 #include "noise_suppressor.hpp"
 
@@ -20,6 +21,7 @@ using namespace anniaudio::dsp;
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -505,6 +507,61 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         }
     }
 
+    // Optional global hotkeys: config/hotkeys.json next to the mixer config.
+    std::unique_ptr<anniaudio::core::GlobalHotkeys> hotkeys;
+    {
+        std::filesystem::path p(configPath);
+        auto hotkeyPath = (p.parent_path().parent_path() / "hotkeys.json").string();
+        hotkeys = std::make_unique<anniaudio::core::GlobalHotkeys>();
+        if (hotkeys->load(hotkeyPath)) {
+            bool started = hotkeys->start([&matrix](const anniaudio::core::HotkeyConfig& cfg) {
+                auto snap = matrix.snapshot();
+                if (cfg.action == "toggle_group_mute" || cfg.action == "mute_group") {
+                    for (const auto& g : snap.groups) {
+                        if (g.name == cfg.group) { matrix.setGroupMuted(g.id, !g.muted); return; }
+                    }
+                } else if (cfg.action == "nudge_group_volume") {
+                    for (const auto& g : snap.groups) {
+                        if (g.name == cfg.group) {
+                            float v = std::clamp(g.volume + cfg.delta, 0.0f, 200.0f);
+                            matrix.setGroupVolume(g.id, v);
+                            return;
+                        }
+                    }
+                } else if (cfg.action == "toggle_output_mute" || cfg.action == "mute_output") {
+                    for (const auto& o : snap.outputs) {
+                        if (o.name == cfg.output) { matrix.setOutputMuted(o.name, !o.muted); return; }
+                    }
+                } else if (cfg.action == "nudge_output_volume") {
+                    for (const auto& o : snap.outputs) {
+                        if (o.name == cfg.output) {
+                            float v = std::clamp(o.master + cfg.delta, 0.0f, 200.0f);
+                            matrix.setOutputMasterVolume(o.name, v);
+                            return;
+                        }
+                    }
+                } else if (cfg.action == "nudge_input_azimuth") {
+                    for (const auto& in : snap.inputs) {
+                        if (in.name == cfg.input) {
+                            matrix.setInputDirection(in.id, in.azimuth + cfg.delta, in.elevation);
+                            return;
+                        }
+                    }
+                } else if (cfg.action == "set_input_direction") {
+                    for (const auto& in : snap.inputs) {
+                        if (in.name == cfg.input) {
+                            matrix.setInputDirection(in.id, static_cast<float>(cfg.delta), in.elevation);
+                            return;
+                        }
+                    }
+                }
+            });
+            if (started) std::printf("[mixer] Global hotkeys loaded from %s\n", hotkeyPath.c_str());
+        } else {
+            hotkeys.reset();
+        }
+    }
+
     std::printf("[mixer] Running. Commands: v <group> <vol>, m <group>, o <out>, +/=, -, ?, q\n");
     printMixerHelp(matrix);
 
@@ -590,6 +647,7 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
 
     std::printf("[mixer] Stopping...\n");
     if (controlServer) controlServer->stop();
+    if (hotkeys) hotkeys->stop();
     matrix.stop();
     CoUninitialize();
     std::printf("[mixer] Stopped.\n");
