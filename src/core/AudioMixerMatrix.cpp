@@ -35,6 +35,8 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
     nlohmann::json j;
     j["running"] = s.running;
     j["controlPort"] = s.controlPort;
+    j["bindAddress"] = s.bindAddress;
+    j["apiKey"] = s.apiKey;
     j["inputs"] = nlohmann::json::array();
     for (const auto& in : s.inputs) {
         nlohmann::json ij;
@@ -605,6 +607,8 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
 {
     MixerStateSnapshot s;
     s.controlPort = m_controlPort;
+    s.bindAddress = m_bindAddress;
+    s.apiKey = m_apiKey;
 
     for (const auto& kv : m_impl->inputs) {
         InputSnapshot in;
@@ -727,6 +731,8 @@ bool AudioMixerMatrix::load(const std::string& path)
 
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     m_controlPort = j.value("controlPort", m_controlPort);
+    m_bindAddress = j.value("bindAddress", m_bindAddress);
+    m_apiKey = j.value("apiKey", m_apiKey);
     m_impl->inputs.clear();
     m_impl->groups.clear();
     m_impl->groupBuses.clear();

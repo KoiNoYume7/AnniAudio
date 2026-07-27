@@ -1,11 +1,24 @@
 # AnniAudio — Mixer Control API
 
-The mixer (`route_cli mixer`) exposes a local HTTP+SSE control API on `127.0.0.1`
-(default port `8850`). Any client — the curses TUI, the Loupedeck plugin, the
-`anniaudio-cli` standalone CLI, a future graphical UI, or a manual `curl` script —
-is just another consumer of this API.
+The mixer (`route_cli mixer`) exposes an HTTP+SSE control API (default `127.0.0.1:8850`).
+Any client — the curses TUI, the Loupedeck plugin, the `anniaudio-cli` standalone CLI,
+a future graphical UI, or a manual `curl` script — is just another consumer of this API.
+The bind address and API key are configurable in the mixer JSON (`bindAddress`, `apiKey`);
 This supersedes the earlier MIDI-CC-binding approach that lived directly inside
 `cmdMixer`.
+
+## Authentication
+
+By default the server listens on loopback only and requires no authentication.
+If `apiKey` is set in the mixer config, every request must include the header:
+
+```
+X-API-Key: <apiKey>
+```
+
+`anniaudio-cli` accepts `--api-key <key>` for this. Requests without a matching
+key are rejected with `401 Unauthorized`. Binding to `0.0.0.0` (or any non-loopback
+address) without an `apiKey` produces a warning log but is not blocked.
 
 ---
 
@@ -39,11 +52,11 @@ Same principles as `docs/ARCHITECTURE.md`, applied to this layer specifically:
 **API-first.** The TUI and the Loupedeck plugin are equally "just clients."
 Nothing the TUI can do is unavailable to the API, and vice versa.
 
-**Local-only, no auth.** The control server binds to `127.0.0.1` only and is never
-exposed on any other interface. There is no authentication layer, because there is
-nothing to authenticate against — this is a single-user, single-machine tool.
-Binding to loopback only is the security boundary; do not relax this without
-re-thinking the whole model.
+**Loopback by default, opt-in LAN with auth.** The control server binds to
+`127.0.0.1` by default. `bindAddress` can be set to `0.0.0.0` (or a specific interface)
+to allow LAN access, but doing so without an `apiKey` is warned against. When
+`apiKey` is set, every request must carry an `X-API-Key` header matching it; the
+pre-routing handler rejects mismatches with `401`.
 
 **Never glitch audio for a control-plane operation.** Adjusting master/group volume
 or mute is lock-free and glitch-free (`std::atomic<float>`/`std::atomic<bool>`,

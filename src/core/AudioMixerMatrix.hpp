@@ -101,6 +101,8 @@ struct OutputSnapshot {
 struct MixerStateSnapshot {
     bool running = false;
     uint16_t controlPort = 8850;
+    std::string bindAddress = "127.0.0.1";
+    std::string apiKey; // empty = no auth; not broadcast in API state
     std::vector<InputSnapshot> inputs;
     std::vector<GroupSnapshot> groups;
     std::vector<OutputSnapshot> outputs;
@@ -193,6 +195,8 @@ private:
     std::unique_ptr<Impl> m_impl;
     mutable std::string m_autosavePath;
     mutable uint16_t m_controlPort = 8850;
+    mutable std::string m_bindAddress = "127.0.0.1";
+    mutable std::string m_apiKey;
 
     MixerStateSnapshot snapshotNoLock() const;
     bool saveSnapshot(const std::string& path, const MixerStateSnapshot& s) const;

@@ -9,13 +9,12 @@ namespace anniaudio::core {
 
 class AudioMixerMatrix;
 
-// Local HTTP + Server-Sent-Events control API for a running AudioMixerMatrix.
-// See docs/MIXER-CONTROL-API.md for the full design and endpoint list.
+// Local HTTP + Server-Sent-Events (+ optional WebSocket) control API for a
+// running AudioMixerMatrix. See docs/MIXER-CONTROL-API.md for the full design
+// and endpoint list.
 //
-// Always binds to 127.0.0.1 only. There is no authentication layer by
-// design -- this is meant for a single-user, single-machine tool (the mixer
-// GUI and, eventually, a Loupedeck Live plugin), not for exposure beyond
-// the local machine. Do not bind this to any other interface.
+// Defaults to loopback-only (127.0.0.1) with no authentication. Binding to any
+// other interface should always be paired with a non-empty apiKey.
 class MixerControlServer {
 public:
     explicit MixerControlServer(AudioMixerMatrix& matrix);
@@ -24,9 +23,13 @@ public:
     MixerControlServer(const MixerControlServer&) = delete;
     MixerControlServer& operator=(const MixerControlServer&) = delete;
 
-    // Starts listening on 127.0.0.1:port. Returns false if the port couldn't
-    // be bound (e.g. already in use).
-    bool start(uint16_t port);
+    // Starts listening on bindAddress:port. Returns false if the port couldn't
+    // be bound (e.g. already in use or invalid address).
+    // If apiKey is non-empty, every request must carry an "X-API-Key" header
+    // matching it (SSE and WebSocket upgrades included).
+    bool start(uint16_t port,
+               const std::string& bindAddress = "127.0.0.1",
+               const std::string& apiKey = std::string{});
     void stop();
 
     bool     running() const noexcept { return m_running.load(); }

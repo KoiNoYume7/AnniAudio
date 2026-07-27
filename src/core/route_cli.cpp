@@ -497,13 +497,25 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
     }
     matrix.setControlPort(controlPort);
 
+    std::string bindAddress = "127.0.0.1";
+    std::string apiKey;
+    {
+        auto snap = matrix.snapshot();
+        if (!snap.bindAddress.empty()) bindAddress = snap.bindAddress;
+        apiKey = snap.apiKey;
+    }
+
     std::unique_ptr<anniaudio::core::MixerControlServer> controlServer;
     if (controlPort != 0) {
         controlServer = std::make_unique<anniaudio::core::MixerControlServer>(matrix);
         controlServer->setAutosavePath(configPath);
-        if (!controlServer->start(controlPort)) {
-            std::fprintf(stderr, "[mixer] Warning: control API could not bind port %u; continuing without it\n", controlPort);
+        if (!controlServer->start(controlPort, bindAddress, apiKey)) {
+            std::fprintf(stderr, "[mixer] Warning: control API could not bind %s:%u; continuing without it\n",
+                         bindAddress.c_str(), controlPort);
             controlServer.reset();
+        } else if (bindAddress != "127.0.0.1" && apiKey.empty()) {
+            std::fprintf(stderr, "[mixer] Warning: API is bound to %s with no API key. Set apiKey in the config or use --api-key.\n",
+                         bindAddress.c_str());
         }
     }
 

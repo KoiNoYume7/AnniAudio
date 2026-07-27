@@ -206,6 +206,8 @@ struct MixerControlServer::Impl {
     bool dirty = true;
     std::string lastBroadcastState;
 
+    std::string apiKey;
+
     explicit Impl(AudioMixerMatrix& m) : matrix(m) {}
 
     void setAutosavePath(const std::string& path) {
@@ -284,14 +286,31 @@ MixerControlServer::MixerControlServer(AudioMixerMatrix& matrix)
 
 MixerControlServer::~MixerControlServer() { stop(); }
 
-bool MixerControlServer::start(uint16_t port)
+bool MixerControlServer::start(uint16_t port,
+                               const std::string& bindAddress,
+                               const std::string& apiKey)
 {
     m_impl->registerRoutes();
+    m_impl->apiKey = apiKey;
 
     m_impl->svr.new_task_queue = [] { return new httplib::ThreadPool(8); };
 
-    if (!m_impl->svr.bind_to_port("127.0.0.1", port)) {
-        std::fprintf(stderr, "[mixer-api] Could not bind 127.0.0.1:%u\n", port);
+    if (!apiKey.empty()) {
+        m_impl->svr.set_pre_routing_handler([this, apiKey](const httplib::Request& req,
+                                                           httplib::Response& res) {
+            // Health/status checks that should stay open (optional future use) are
+            // excluded from auth for now; all mutating/read endpoints require the key.
+            if (req.get_header_value("X-API-Key") != apiKey) {
+                res.status = 401;
+                res.set_content(R"({"error":"unauthorized"})", "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+    }
+
+    if (!m_impl->svr.bind_to_port(bindAddress, port)) {
+        std::fprintf(stderr, "[mixer-api] Could not bind %s:%u\n", bindAddress.c_str(), port);
         return false;
     }
 

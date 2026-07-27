@@ -16,6 +16,8 @@ excludes the live copies).
 A mixer JSON file has these top-level fields:
 
 - `controlPort` (uint16, optional) — TCP port for the local control API. Default `8850`.
+- `bindAddress` (string, optional) — IP address the control API binds to. Default `127.0.0.1` (loopback only). Set to `0.0.0.0` to listen on all interfaces (LAN). When binding to anything other than loopback, always set `apiKey`.
+- `apiKey` (string, optional) — secret key. If non-empty, every API request (HTTP, SSE, and future WebSocket) must include an `X-API-Key` header matching this value. Empty means no authentication.
 - `running` (bool, runtime) — whether the matrix was running when the snapshot was taken.
 - `inputs` (array) — input sources.
 - `groups` (array) — mix buses / virtual cables.

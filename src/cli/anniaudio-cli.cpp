@@ -1,7 +1,7 @@
 // anniaudio-cli — standalone command-line client for the AnniAudio mixer API.
 //
 // Usage:
-//   anniaudio-cli [--port <port>] <command> [args]
+//   anniaudio-cli [--port <port>] [--api-key <key>] <command> [args]
 //
 // Commands:
 //   state
@@ -39,7 +39,13 @@ struct Ctx {
     nlohmann::json state;
     bool haveState = false;
 
-    Ctx(const std::string& host, int port) : client(host + ":" + std::to_string(port)) {}
+    Ctx(const std::string& host, int port, const std::string& apiKey)
+        : client(host + ":" + std::to_string(port))
+    {
+        if (!apiKey.empty()) {
+            client.set_default_headers({{"X-API-Key", apiKey}});
+        }
+    }
 
     bool fetchState()
     {
@@ -115,7 +121,9 @@ bool parseBool(const std::string& s)
 void printUsage(const char* prog)
 {
     std::printf(R"(
-Usage: %s [--port <port>] <command> [args]
+Usage: %s [--port <port>] [--api-key <key>] <command> [args]
+
+  --api-key is required when the mixer is configured with an API key.
 
 Commands:
   state                          print mixer state summary
@@ -140,8 +148,9 @@ Examples:
   %s mute Music
   %s set-direction Microphone 30 -5
   %s set-hrtf Microphone assets/hrtf/sadie.sofa
+  %s --api-key secret --port 8850 state
 
-)", prog, prog, prog, prog, prog);
+)", prog, prog, prog, prog, prog, prog);
 }
 
 } // namespace
@@ -152,10 +161,13 @@ int main(int argc, char* argv[])
     if (args.size() < 2) { printUsage(args[0].c_str()); return 1; }
 
     int port = 8850;
+    std::string apiKey;
     std::vector<std::string> positional;
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--port" && i + 1 < args.size()) {
             port = std::atoi(args[++i].c_str());
+        } else if (args[i] == "--api-key" && i + 1 < args.size()) {
+            apiKey = args[++i];
         } else if (args[i] == "--help" || args[i] == "-h") {
             printUsage(args[0].c_str()); return 0;
         } else {
@@ -165,7 +177,7 @@ int main(int argc, char* argv[])
 
     if (positional.empty()) { printUsage(args[0].c_str()); return 1; }
 
-    Ctx ctx("http://127.0.0.1", port);
+    Ctx ctx("http://127.0.0.1", port, apiKey);
     ctx.client.set_connection_timeout(2, 0);
 
     const std::string& cmd = positional[0];

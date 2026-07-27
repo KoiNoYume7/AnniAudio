@@ -126,7 +126,7 @@ better than Windows Sonic.
 - [x] HTTP REST + SSE control API via cpp-httplib (`route_cli mixer`)
 - [x] Mixer core operations exposed as endpoints (see `docs/MIXER-CONTROL-API.md`)
 - [ ] WebSocket event stream (currently SSE; WebSocket for v1 API later)
-- [ ] API key auth, loopback-only by default, LAN as explicit opt-in (current mixer is loopback/no-auth)
+- [x] API key auth, loopback-only by default, LAN as explicit opt-in
 - [x] Global hotkeys via Win32 `RegisterHotKey`
 - [x] All hotkey bindings configurable in `config/hotkeys.json`
 - [x] Standalone CLI client (`anniaudio-cli`) wrapping the API
