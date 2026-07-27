@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <thread>
 
 using namespace anniaudio::core;
@@ -32,9 +33,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    GroupBus group;
-    group.addInput(input);
-    group.setGain(0.25f);
+    auto group = std::make_shared<GroupBus>();
+    group->addInput(input);
+    group->setGain(0.25f);
 
     OutputMixer output;
     if (!output.init(outputName)) {

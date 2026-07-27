@@ -1,4 +1,8 @@
 #include "AudioMixerMatrix.hpp"
+
+#include "InputProcessor.hpp"
+#include "GroupBus.hpp"
+#include "OutputMixer.hpp"
 #include "audio_utils.hpp"
 
 #include <algorithm>
@@ -84,20 +88,23 @@ float groupGainFor(const GroupConfig& g, const std::string& outName) {
     return it != g.outputGains.end() ? it->second : 1.0f;
 }
 
-MixerStripConfig stripForRoute(const InputConfig& in, const GroupConfig& g, const std::string& outName) {
-    MixerStripConfig cfg;
-    cfg.name = g.name;
-    cfg.source = in.source;
-    cfg.sourceType = (in.type == "application") ? StripSourceType::Application : StripSourceType::Device;
-    cfg.denoise = in.denoise;
-    cfg.eqPreset = in.eqPreset;
-    cfg.spatial = in.spatial;
-    cfg.azimuth = in.azimuth;
-    cfg.elevation = in.elevation;
-    cfg.volume = g.volume * groupGainFor(g, outName);
-    cfg.muted = g.muted;
-    cfg.knobIndex = g.knobIndex;
-    return cfg;
+InputProcessorConfig toInputProcessorConfig(const InputConfig& in) {
+    InputProcessorConfig ic;
+    ic.name   = in.name;
+    ic.type   = in.type;
+    ic.source = in.source;
+    ic.denoise = in.denoise;
+    ic.eqPreset = in.eqPreset;
+    ic.spatial = in.spatial;
+    ic.azimuth = in.azimuth;
+    ic.elevation = in.elevation;
+    return ic;
+}
+
+bool inputCfgNeedsRestart(const InputConfig& a, const InputConfig& b) {
+    return a.type != b.type || a.source != b.source ||
+           a.denoise != b.denoise || a.eqPreset != b.eqPreset ||
+           a.spatial != b.spatial;
 }
 
 const char* palette[] = {
@@ -114,28 +121,23 @@ std::string nextColor() {
 } // namespace
 
 struct AudioMixerMatrix::Impl {
-    struct RouteInfo {
-        InputId     inputId = 0;
-        GroupId     groupId = 0;
-        std::string output;
-        AudioMixer* mixer = nullptr;
-        StripId     localId = 0;
+    struct InputEntry {
+        InputConfig cfg;
+        std::unique_ptr<InputProcessor> processor;
     };
 
     mutable std::mutex mtx;
-    std::map<std::string, std::unique_ptr<AudioMixer>> outputs;
-    std::map<InputId, InputConfig> inputs;
+    std::map<std::string, std::unique_ptr<OutputMixer>> outputs;
+    std::map<InputId, InputEntry> inputs;
     std::map<GroupId, GroupConfig> groups;
-    std::unordered_map<RouteId, RouteInfo> routes;
-    std::map<std::pair<AudioMixer*, StripId>, RouteId> localToGlobal;
+    std::map<std::pair<GroupId, std::string>, std::shared_ptr<GroupBus>> groupBuses;
 
     std::atomic<InputId> nextInputId{1};
     std::atomic<GroupId> nextGroupId{1};
-    std::atomic<RouteId> nextRouteId{1};
 
     ComPtr<IMMDeviceEnumerator> enumerator;
 
-    AudioMixer* findOutputMixer(const std::string& name) const {
+    OutputMixer* findOutputMixer(const std::string& name) const {
         auto it = outputs.find(name);
         return it != outputs.end() ? it->second.get() : nullptr;
     }
@@ -147,28 +149,61 @@ struct AudioMixerMatrix::Impl {
         return SUCCEEDED(hr);
     }
 
-    void eraseRoutesFor(std::function<bool(const RouteInfo&)> pred) {
-        for (auto it = routes.begin(); it != routes.end(); ) {
-            if (pred(it->second)) {
-                if (it->second.mixer) {
-                    it->second.mixer->removeStrip(it->second.localId);
-                    localToGlobal.erase({ it->second.mixer, it->second.localId });
-                }
-                it = routes.erase(it);
+    InputProcessor* ensureInputProcessorLocked(InputId id, const InputConfig& cfg) {
+        auto it = inputs.find(id);
+        if (it == inputs.end()) return nullptr;
+
+        // If the processor exists and the config still matches, just make sure
+        // its HRTF direction is up to date (setDirection is a no-op when unchanged).
+        if (it->second.processor) {
+            if (inputCfgNeedsRestart(it->second.cfg, cfg)) {
+                it->second.processor.reset();
             } else {
-                ++it;
+                it->second.processor->setDirection(cfg.azimuth, cfg.elevation);
+                return it->second.processor.get();
             }
+        }
+
+        auto proc = std::make_unique<InputProcessor>();
+        InputProcessorConfig ipc = toInputProcessorConfig(cfg);
+        if (!proc->init(ipc)) {
+            std::fprintf(stderr, "[AudioMixerMatrix] input '%s' (%s) failed to open\n",
+                         cfg.name.c_str(), cfg.source.c_str());
+            return nullptr;
+        }
+        if (!proc->start()) {
+            std::fprintf(stderr, "[AudioMixerMatrix] input '%s' failed to start\n", cfg.name.c_str());
+            return nullptr;
+        }
+        proc->setDirection(cfg.azimuth, cfg.elevation);
+        it->second.cfg = cfg;
+        it->second.processor = std::move(proc);
+        return it->second.processor.get();
+    }
+
+    void stopInputProcessorLocked(InputId id) {
+        auto it = inputs.find(id);
+        if (it != inputs.end()) it->second.processor.reset();
+    }
+
+    void pruneUnusedInputProcessorsLocked() {
+        std::set<InputId> used;
+        for (const auto& kv : groupBuses) {
+            for (InputProcessor* p : kv.second->inputProcessors()) {
+                for (const auto& ik : inputs) {
+                    if (ik.second.processor.get() == p) {
+                        used.insert(ik.first);
+                        break;
+                    }
+                }
+            }
+        }
+        for (auto& kv : inputs) {
+            if (!used.count(kv.first)) kv.second.processor.reset();
         }
     }
 
-    // Stop an output mixer when it has no strips.
-    void pruneEmptyOutputs() {
-        for (auto& kv : outputs) {
-            if (kv.second->stripCount() == 0 && kv.second->running()) {
-                kv.second->stop();
-            }
-        }
-    }
+    void rebuildLocked();
 };
 
 AudioMixerMatrix::AudioMixerMatrix() : m_impl(std::make_unique<Impl>()) {}
@@ -176,12 +211,13 @@ AudioMixerMatrix::~AudioMixerMatrix() { stop(); }
 
 bool AudioMixerMatrix::addOutput(const std::string& outputHint)
 {
-    auto mixer = std::make_unique<AudioMixer>();
-    if (!mixer->init(outputHint)) return false;
+    auto out = std::make_unique<OutputMixer>();
+    if (!out->init(outputHint)) return false;
 
     {
         std::lock_guard<std::mutex> lk(m_impl->mtx);
-        m_impl->outputs[mixer->outputName()] = std::move(mixer);
+        m_impl->outputs[out->outputName()] = std::move(out);
+        m_impl->rebuildLocked();
     }
     maybeAutosave();
     return true;
@@ -195,13 +231,14 @@ bool AudioMixerMatrix::removeOutput(const std::string& outputName)
         if (it == m_impl->outputs.end()) return false;
 
         it->second->stop();
-        m_impl->eraseRoutesFor([outputName](const Impl::RouteInfo& r) { return r.output == outputName; });
         m_impl->outputs.erase(it);
 
+        // Remove from all group output lists and drop any buses for this output.
         for (auto& gkv : m_impl->groups) {
             auto& outs = gkv.second.outputIds;
             outs.erase(std::remove(outs.begin(), outs.end(), outputName), outs.end());
         }
+        m_impl->rebuildLocked();
     }
     maybeAutosave();
     return true;
@@ -251,27 +288,28 @@ std::optional<InputId> AudioMixerMatrix::addInput(const InputConfig& cfg)
 
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     InputId id = m_impl->nextInputId.fetch_add(1);
-    m_impl->inputs[id] = cfg;
+    m_impl->inputs[id] = { cfg, nullptr };
     maybeAutosave();
     return id;
 }
 
 bool AudioMixerMatrix::removeInput(InputId id)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
-    auto it = m_impl->inputs.find(id);
-    if (it == m_impl->inputs.end()) return false;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        auto it = m_impl->inputs.find(id);
+        if (it == m_impl->inputs.end()) return false;
 
-    m_impl->eraseRoutesFor([id](const Impl::RouteInfo& r) { return r.inputId == id; });
+        // Remove from all groups first so rebuildLocked() stops the processor
+        // and removes it from all buses before we delete the entry.
+        for (auto& gkv : m_impl->groups) {
+            auto& ins = gkv.second.inputIds;
+            ins.erase(std::remove(ins.begin(), ins.end(), id), ins.end());
+        }
 
-    // Remove from all groups.
-    for (auto& gkv : m_impl->groups) {
-        auto& ins = gkv.second.inputIds;
-        ins.erase(std::remove(ins.begin(), ins.end(), id), ins.end());
+        m_impl->rebuildLocked();
+        m_impl->inputs.erase(it);
     }
-
-    m_impl->inputs.erase(it);
-    m_impl->pruneEmptyOutputs();
     maybeAutosave();
     return true;
 }
@@ -284,15 +322,12 @@ bool AudioMixerMatrix::updateInput(InputId id, const InputConfig& cfg)
     auto it = m_impl->inputs.find(id);
     if (it == m_impl->inputs.end()) return false;
 
-    it->second = cfg;
-
-    // Rebuild routes for all groups that use this input.
-    std::set<GroupId> affected;
-    for (const auto& kv : m_impl->routes) {
-        if (kv.second.inputId == id) affected.insert(kv.second.groupId);
+    if (inputCfgNeedsRestart(it->second.cfg, cfg)) {
+        m_impl->stopInputProcessorLocked(id);
     }
-    for (GroupId gid : affected) rebuildGroupRoutesLocked(gid);
 
+    it->second.cfg = cfg;
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -303,15 +338,10 @@ bool AudioMixerMatrix::setInputDirection(InputId id, float azimuth, float elevat
     auto it = m_impl->inputs.find(id);
     if (it == m_impl->inputs.end()) return false;
 
-    // Persist on the input, and if it isn't spatial there's nothing live to push.
-    it->second.azimuth = azimuth;
-    it->second.elevation = elevation;
-    if (!it->second.spatial) { maybeAutosave(); return true; }
-
-    // Push into every live strip this input feeds — no route rebuild.
-    for (const auto& kv : m_impl->routes) {
-        const auto& r = kv.second;
-        if (r.inputId == id && r.mixer) r.mixer->setStripDirection(r.localId, azimuth, elevation);
+    it->second.cfg.azimuth = azimuth;
+    it->second.cfg.elevation = elevation;
+    if (it->second.processor) {
+        it->second.processor->setDirection(azimuth, elevation);
     }
     maybeAutosave();
     return true;
@@ -319,25 +349,28 @@ bool AudioMixerMatrix::setInputDirection(InputId id, float azimuth, float elevat
 
 std::optional<GroupId> AudioMixerMatrix::addGroup(const GroupConfig& cfg)
 {
+    if (cfg.name.empty()) return std::nullopt;
+
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     GroupId id = m_impl->nextGroupId.fetch_add(1);
     GroupConfig gc = cfg;
     if (gc.color.empty()) gc.color = nextColor();
     m_impl->groups[id] = std::move(gc);
-    rebuildGroupRoutesLocked(id);
+    m_impl->rebuildLocked();
     maybeAutosave();
     return id;
 }
 
 bool AudioMixerMatrix::removeGroup(GroupId id)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
-    auto it = m_impl->groups.find(id);
-    if (it == m_impl->groups.end()) return false;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        auto it = m_impl->groups.find(id);
+        if (it == m_impl->groups.end()) return false;
 
-    m_impl->eraseRoutesFor([id](const Impl::RouteInfo& r) { return r.groupId == id; });
-    m_impl->groups.erase(it);
-    m_impl->pruneEmptyOutputs();
+        m_impl->groups.erase(it);
+        m_impl->rebuildLocked();
+    }
     maybeAutosave();
     return true;
 }
@@ -349,12 +382,6 @@ bool AudioMixerMatrix::setGroupName(GroupId id, const std::string& name)
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.name = name;
-
-    for (auto& kv : m_impl->routes) {
-        if (kv.second.groupId == id) {
-            kv.second.mixer->renameStrip(kv.second.localId, name);
-        }
-    }
     maybeAutosave();
     return true;
 }
@@ -387,11 +414,24 @@ bool AudioMixerMatrix::setGroupVolume(GroupId id, float vol)
     if (it == m_impl->groups.end()) return false;
     it->second.volume = vol;
 
-    for (const auto& kv : m_impl->routes) {
-        if (kv.second.groupId == id) {
-            kv.second.mixer->setStripVolume(kv.second.localId,
-                vol * groupGainFor(it->second, kv.second.output));
+    for (auto& kv : m_impl->groupBuses) {
+        if (kv.first.first == id) {
+            kv.second->setGain(vol * groupGainFor(it->second, kv.first.second));
         }
+    }
+    maybeAutosave();
+    return true;
+}
+
+bool AudioMixerMatrix::setGroupMuted(GroupId id, bool muted)
+{
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    auto it = m_impl->groups.find(id);
+    if (it == m_impl->groups.end()) return false;
+    it->second.muted = muted;
+
+    for (auto& kv : m_impl->groupBuses) {
+        if (kv.first.first == id) kv.second->setMuted(muted);
     }
     maybeAutosave();
     return true;
@@ -404,15 +444,12 @@ bool AudioMixerMatrix::setGroupOutputGain(GroupId id, const std::string& output,
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
 
-    if (gain == 1.0f) {
-        it->second.outputGains.erase(output); // unity entries stay implicit
-    } else {
-        it->second.outputGains[output] = gain;
-    }
-    for (const auto& kv : m_impl->routes) {
-        if (kv.second.groupId == id && kv.second.output == output) {
-            kv.second.mixer->setStripVolume(kv.second.localId, it->second.volume * gain);
-        }
+    if (gain == 1.0f) it->second.outputGains.erase(output);
+    else it->second.outputGains[output] = gain;
+
+    auto busIt = m_impl->groupBuses.find({ id, output });
+    if (busIt != m_impl->groupBuses.end()) {
+        busIt->second->setGain(it->second.volume * gain);
     }
     maybeAutosave();
     return true;
@@ -435,33 +472,12 @@ bool AudioMixerMatrix::outputMuted(const std::string& outputName) const
     return m != nullptr && m->masterMuted();
 }
 
-bool AudioMixerMatrix::setGroupMuted(GroupId id, bool muted)
-{
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
-    auto it = m_impl->groups.find(id);
-    if (it == m_impl->groups.end()) return false;
-    it->second.muted = muted;
-
-    for (const auto& kv : m_impl->routes) {
-        if (kv.second.groupId == id) {
-            kv.second.mixer->setStripMuted(kv.second.localId, muted);
-        }
-    }
-    maybeAutosave();
-    return true;
-}
-
 bool AudioMixerMatrix::setGroupKnobIndex(GroupId id, std::optional<int> knobIndex)
 {
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.knobIndex = knobIndex;
-    for (const auto& kv : m_impl->routes) {
-        if (kv.second.groupId == id) {
-            kv.second.mixer->setStripKnobIndex(kv.second.localId, knobIndex);
-        }
-    }
     maybeAutosave();
     return true;
 }
@@ -472,14 +488,11 @@ bool AudioMixerMatrix::setGroupInputIds(GroupId id, std::vector<InputId> ids)
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
 
-    // Validate inputs exist.
     for (InputId iid : ids) {
         if (m_impl->inputs.find(iid) == m_impl->inputs.end()) return false;
     }
     it->second.inputIds = std::move(ids);
-    if (!rebuildGroupRoutesLocked(id)) {
-        // If rebuild failed (e.g. no routes possible), leave empty.
-    }
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -490,14 +503,11 @@ bool AudioMixerMatrix::setGroupOutputIds(GroupId id, std::vector<std::string> id
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
 
-    // Validate outputs exist.
     for (const auto& n : ids) {
         if (m_impl->outputs.find(n) == m_impl->outputs.end()) return false;
     }
     it->second.outputIds = std::move(ids);
-    if (!rebuildGroupRoutesLocked(id)) {
-        // Leave empty if nothing to route.
-    }
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -512,7 +522,7 @@ bool AudioMixerMatrix::addGroupInput(GroupId groupId, InputId inputId)
     auto& ids = git->second.inputIds;
     if (std::find(ids.begin(), ids.end(), inputId) != ids.end()) return true;
     ids.push_back(inputId);
-    rebuildGroupRoutesLocked(groupId);
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -525,7 +535,7 @@ bool AudioMixerMatrix::removeGroupInput(GroupId groupId, InputId inputId)
 
     auto& ids = git->second.inputIds;
     ids.erase(std::remove(ids.begin(), ids.end(), inputId), ids.end());
-    rebuildGroupRoutesLocked(groupId);
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -540,7 +550,7 @@ bool AudioMixerMatrix::addGroupOutput(GroupId groupId, const std::string& output
     auto& ids = git->second.outputIds;
     if (std::find(ids.begin(), ids.end(), outputName) != ids.end()) return true;
     ids.push_back(outputName);
-    rebuildGroupRoutesLocked(groupId);
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -553,7 +563,7 @@ bool AudioMixerMatrix::removeGroupOutput(GroupId groupId, const std::string& out
 
     auto& ids = git->second.outputIds;
     ids.erase(std::remove(ids.begin(), ids.end(), outputName), ids.end());
-    rebuildGroupRoutesLocked(groupId);
+    m_impl->rebuildLocked();
     maybeAutosave();
     return true;
 }
@@ -561,9 +571,14 @@ bool AudioMixerMatrix::removeGroupOutput(GroupId groupId, const std::string& out
 bool AudioMixerMatrix::start()
 {
     std::lock_guard<std::mutex> lk(m_impl->mtx);
+    m_impl->rebuildLocked();
     bool any = false;
     for (auto& kv : m_impl->outputs) {
-        if (kv.second->start()) any = true;
+        if (!kv.second->running()) {
+            if (kv.second->start()) any = true;
+        } else {
+            any = true;
+        }
     }
     return any;
 }
@@ -572,6 +587,7 @@ void AudioMixerMatrix::stop()
 {
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     for (auto& kv : m_impl->outputs) kv.second->stop();
+    for (auto& kv : m_impl->inputs) kv.second.processor.reset();
 }
 
 bool AudioMixerMatrix::running() const
@@ -588,23 +604,25 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
     MixerStateSnapshot s;
     s.controlPort = m_controlPort;
 
-    // Inputs
     for (const auto& kv : m_impl->inputs) {
         InputSnapshot in;
         in.id = kv.first;
-        in.name = kv.second.name;
-        in.type = kv.second.type;
-        in.source = kv.second.source;
-        in.denoise = kv.second.denoise;
-        in.eqPreset = kv.second.eqPreset;
-        in.spatial = kv.second.spatial;
-        in.azimuth = kv.second.azimuth;
-        in.elevation = kv.second.elevation;
+        in.name = kv.second.cfg.name;
+        in.type = kv.second.cfg.type;
+        in.source = kv.second.cfg.source;
+        in.denoise = kv.second.cfg.denoise;
+        in.eqPreset = kv.second.cfg.eqPreset;
+        in.spatial = kv.second.cfg.spatial;
+        in.azimuth = kv.second.cfg.azimuth;
+        in.elevation = kv.second.cfg.elevation;
+        if (kv.second.processor) {
+            in.peak = kv.second.processor->peak();
+            in.rms = kv.second.processor->rms();
+        }
         s.inputs.push_back(in);
     }
     std::sort(s.inputs.begin(), s.inputs.end(), [](const InputSnapshot& a, const InputSnapshot& b) { return a.id < b.id; });
 
-    // Groups
     for (const auto& kv : m_impl->groups) {
         GroupSnapshot g;
         g.id = kv.first;
@@ -617,11 +635,17 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         g.volume = linToPct(kv.second.volume);
         g.muted = kv.second.muted;
         g.knobIndex = kv.second.knobIndex;
+
+        for (const auto& bkv : m_impl->groupBuses) {
+            if (bkv.first.first == kv.first) {
+                g.peak = std::max(g.peak, bkv.second->peak());
+                g.rms = std::max(g.rms, bkv.second->rms());
+            }
+        }
         s.groups.push_back(g);
     }
     std::sort(s.groups.begin(), s.groups.end(), [](const GroupSnapshot& a, const GroupSnapshot& b) { return a.id < b.id; });
 
-    // Outputs
     for (const auto& kv : m_impl->outputs) {
         OutputSnapshot o;
         o.name = kv.first;
@@ -633,45 +657,6 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
     }
     std::sort(s.outputs.begin(), s.outputs.end(), [](const OutputSnapshot& a, const OutputSnapshot& b) { return a.name < b.name; });
 
-    // Aggregate route levels into inputs and groups.
-    std::map<GroupId, std::vector<std::pair<float,float>>> groupLevels;
-    std::map<InputId, std::vector<std::pair<float,float>>> inputLevels;
-
-    for (const auto& kv : m_impl->routes) {
-        const auto& r = kv.second;
-        auto snap = r.mixer->stripSnapshot(r.localId);
-        if (!snap) continue;
-        groupLevels[r.groupId].push_back({ snap->peak, snap->rms });
-        inputLevels[r.inputId].push_back({ snap->peak, snap->rms });
-    }
-
-    auto maxPair = [](const std::vector<std::pair<float,float>>& v, std::pair<float,float>& out) {
-        out = {0.0f, 0.0f};
-        for (const auto& p : v) {
-            out.first = std::max(out.first, p.first);
-            out.second = std::max(out.second, p.second);
-        }
-    };
-
-    std::pair<float,float> p;
-    for (auto& g : s.groups) {
-        auto it = groupLevels.find(g.id);
-        if (it != groupLevels.end()) {
-            maxPair(it->second, p);
-            g.peak = p.first;
-            g.rms = p.second;
-        }
-    }
-    for (auto& in : s.inputs) {
-        auto it = inputLevels.find(in.id);
-        if (it != inputLevels.end()) {
-            maxPair(it->second, p);
-            in.peak = p.first;
-            in.rms = p.second;
-        }
-    }
-
-    // Build output groupIds from groups referencing each output.
     for (auto& o : s.outputs) {
         for (const auto& g : s.groups) {
             if (std::find(g.outputIds.begin(), g.outputIds.end(), o.name) != g.outputIds.end()) {
@@ -741,8 +726,7 @@ bool AudioMixerMatrix::load(const std::string& path)
     m_controlPort = j.value("controlPort", m_controlPort);
     m_impl->inputs.clear();
     m_impl->groups.clear();
-    m_impl->routes.clear();
-    m_impl->localToGlobal.clear();
+    m_impl->groupBuses.clear();
     m_impl->outputs.clear();
 
     // Legacy: single output + strips.
@@ -762,7 +746,7 @@ bool AudioMixerMatrix::load(const std::string& path)
                 if (ic.name.empty()) ic.name = ic.source;
                 ic.type = "device";
                 InputId iid = m_impl->nextInputId.fetch_add(1);
-                m_impl->inputs[iid] = ic;
+                m_impl->inputs[iid] = { ic, nullptr };
 
                 GroupConfig gc;
                 gc.name = item.value("name", ic.name);
@@ -806,7 +790,7 @@ bool AudioMixerMatrix::load(const std::string& path)
             if (ic.name.empty()) ic.name = ic.source;
             ic.type = "device";
             InputId iid = m_impl->nextInputId.fetch_add(1);
-            m_impl->inputs[iid] = ic;
+            m_impl->inputs[iid] = { ic, nullptr };
 
             std::string outName = r.value("output", std::string{});
             if (outName.empty() && j.contains("output") && j["output"].is_string()) {
@@ -860,7 +844,7 @@ bool AudioMixerMatrix::load(const std::string& path)
                 InputId iid = i.value("id", 0);
                 if (iid == 0) iid = m_impl->nextInputId.fetch_add(1);
                 else m_impl->nextInputId.store(std::max(m_impl->nextInputId.load(), (InputId)(iid + 1)));
-                m_impl->inputs[iid] = ic;
+                m_impl->inputs[iid] = { ic, nullptr };
             }
         }
 
@@ -892,16 +876,10 @@ bool AudioMixerMatrix::load(const std::string& path)
         }
     }
 
-    // Rebuild routes for all groups.
-    std::vector<GroupId> gids;
-    for (const auto& kv : m_impl->groups) gids.push_back(kv.first);
-    for (GroupId gid : gids) rebuildGroupRoutesLocked(gid);
-
-    // Start any output that has strips.
+    m_impl->rebuildLocked();
     for (auto& kv : m_impl->outputs) {
-        if (!kv.second->running() && kv.second->stripCount() > 0) kv.second->start();
+        if (!kv.second->running()) kv.second->start();
     }
-
     return true;
 }
 
@@ -930,51 +908,88 @@ void AudioMixerMatrix::maybeAutosave() const
     }
 }
 
-// Rebuild all AudioMixer strips for a group. Must be called with mtx held.
-bool AudioMixerMatrix::rebuildGroupRoutesLocked(GroupId id)
+void AudioMixerMatrix::Impl::rebuildLocked()
 {
-    auto git = m_impl->groups.find(id);
-    if (git == m_impl->groups.end()) return false;
-    const auto& g = git->second;
-
-    // Remove existing routes for this group.
-    m_impl->eraseRoutesFor([id](const Impl::RouteInfo& r) { return r.groupId == id; });
-
-    bool any = false;
-    for (InputId iid : g.inputIds) {
-        auto iit = m_impl->inputs.find(iid);
-        if (iit == m_impl->inputs.end()) continue;
-
-        for (const auto& outName : g.outputIds) {
-            AudioMixer* mixer = m_impl->findOutputMixer(outName);
-            if (!mixer) continue;
-
-            MixerStripConfig cfg = stripForRoute(iit->second, g, outName);
-            auto local = mixer->addStrip(cfg);
-            if (!local) {
-                std::fprintf(stderr, "[AudioMixerMatrix] failed to open input '%s' for group '%s' -> '%s'\n",
-                             iit->second.source.c_str(), g.name.c_str(), outName.c_str());
-                continue;
-            }
-
-            RouteId rid = m_impl->nextRouteId.fetch_add(1);
-            m_impl->routes[rid] = { iid, id, outName, mixer, *local };
-            m_impl->localToGlobal[{ mixer, *local }] = rid;
-            if (!mixer->running() && mixer->stripCount() > 0) mixer->start();
-            any = true;
+    // Build the desired set of (group, output) buses.
+    std::set<std::pair<GroupId, std::string>> desired;
+    for (const auto& gkv : groups) {
+        for (const auto& outName : gkv.second.outputIds) {
+            if (outputs.find(outName) != outputs.end()) desired.insert({ gkv.first, outName });
         }
     }
 
-    m_impl->pruneEmptyOutputs();
-    return any;
+    // Drop group buses that are no longer desired.
+    for (auto it = groupBuses.begin(); it != groupBuses.end(); ) {
+        if (!desired.count(it->first)) {
+            auto outIt = outputs.find(it->first.second);
+            if (outIt != outputs.end()) outIt->second->removeGroupBus(it->second.get());
+            it = groupBuses.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Create or update each desired group bus.
+    for (const auto& key : desired) {
+        auto git = groups.find(key.first);
+        auto outIt = outputs.find(key.second);
+        if (git == groups.end() || outIt == outputs.end()) continue;
+        const GroupConfig& g = git->second;
+
+        std::shared_ptr<GroupBus> bus;
+        auto it = groupBuses.find(key);
+        if (it == groupBuses.end()) {
+            bus = std::make_shared<GroupBus>();
+            groupBuses[key] = bus;
+            outIt->second->addGroupBus(bus);
+        } else {
+            bus = it->second;
+        }
+
+        bus->setGain(g.volume * groupGainFor(g, key.second));
+        bus->setMuted(g.muted);
+
+        // Determine the set of InputProcessor pointers this bus should mix.
+        std::set<InputProcessor*> desiredProcs;
+        for (InputId iid : g.inputIds) {
+            auto iit = inputs.find(iid);
+            if (iit == inputs.end()) continue;
+            InputProcessor* proc = ensureInputProcessorLocked(iid, iit->second.cfg);
+            if (proc) desiredProcs.insert(proc);
+        }
+
+        // Remove inputs no longer in the group.
+        for (InputProcessor* p : bus->inputProcessors()) {
+            if (!desiredProcs.count(p)) bus->removeInput(*p);
+        }
+
+        // Add new inputs.
+        for (InputProcessor* p : desiredProcs) {
+            bus->addInput(*p);
+        }
+    }
+
+    pruneUnusedInputProcessorsLocked();
+
+    // Stop outputs that no longer have buses; start outputs that do.
+    for (auto& kv : outputs) {
+        bool hasBus = false;
+        for (const auto& bkv : groupBuses) {
+            if (bkv.first.second == kv.first) { hasBus = true; break; }
+        }
+        if (hasBus) {
+            if (!kv.second->running()) kv.second->start();
+        } else {
+            if (kv.second->running()) kv.second->stop();
+        }
+    }
 }
 
-// Used during load before start(); must be called with mtx held.
 bool AudioMixerMatrix::addOutputLocked(const std::string& outputHint)
 {
-    auto mixer = std::make_unique<AudioMixer>();
-    if (!mixer->init(outputHint)) return false;
-    m_impl->outputs[mixer->outputName()] = std::move(mixer);
+    auto out = std::make_unique<OutputMixer>();
+    if (!out->init(outputHint)) return false;
+    m_impl->outputs[out->outputName()] = std::move(out);
     return true;
 }
 

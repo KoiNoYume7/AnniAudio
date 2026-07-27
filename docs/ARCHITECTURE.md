@@ -23,14 +23,14 @@ long-term design that is not yet implemented, see `docs/DESIGN-FUTURE.md`.
 
 | Directory | What it is | Status |
 |---|---|---|
-| `src/core/` | `audio_core` static library: `AudioMixer`, `AudioMixerMatrix`, `MixerControlServer`, `AudioEngine`, `audio_utils`, `midi_input` | Active |
+| `src/core/` | `audio_core` static library: `AudioMixerMatrix`, `InputProcessor`, `GroupBus`, `OutputMixer`, `MixerControlServer`, `AudioEngine`, `audio_utils`, `midi_input` | Active |
 | `src/dsp/` | `audio_dsp` static library: `EqChain`, `NoiseSuppressor`, `Spatializer` | Active |
 
 | `cli/` | `anniaudio.ps1` PowerShell control panel for driver install/signing/config (`tui` launches `mixer-tui.bat`). Not the Phase 4 API-wrapping CLI | Active |
 | `AnniAudioMixerPlugin/` | Loupedeck / Logi Actions C# plugin that talks to the control API | Active |
 | `scripts/` | TUI (`mixer_tui.py`), build/driver helpers, PowerShell mode toggles | Active |
 | `driver/` | WDM PortCls virtual audio driver source and `.inf` template | Built but unsigned |
-| `tests/` | Phase-0 POCs (`poc_*`) and verification tools (`test_routing`, `test_mixer_live_edit`) | Not built by default; see `docs/CONTRIBUTING.md` |
+| `tests/` | Phase-0 POCs (`poc_*`) and verification tools (`test_routing`, `test_mixer_matrix`, `test_new_pipeline`) | Not built by default; see `docs/CONTRIBUTING.md` |
 | `config/` | Mixer configs, scenes, app-rules, presets, profiles, cables | Runtime state |
 
 ---
@@ -63,56 +63,63 @@ long-term design that is not yet implemented, see `docs/DESIGN-FUTURE.md`.
 **Key concepts:**
 - Capture side: a physical microphone, a render endpoint via `AUDCLNT_STREAMFLAGS_LOOPBACK`, or a specific process via `ActivateAudioInterfaceAsync` with `PROCESS_LOOPBACK_MODE`.
 - Render side: after processing, we push audio to the selected render endpoint via a WASAPI render client.
-- Each output is managed by one `AudioMixer` instance (`src/core/AudioMixer.cpp`).
+- Each input is captured and processed by one `InputProcessor` instance (`src/core/InputProcessor.cpp`).
+- Each (group, output) pair is mixed by one `GroupBus` instance (`src/core/GroupBus.cpp`).
+- Each output is rendered by one `OutputMixer` instance (`src/core/OutputMixer.cpp`).
 
-**Format handling:** WASAPI devices expose a mix format (typically 48 kHz / 32-bit float). The mixer opens capture clients in that device's preferred format and resamples to the render rate internally using a per-channel fractional-phase resampler. No external resampler library is used today.
+**Format handling:** WASAPI devices expose a mix format (typically 48 kHz / 32-bit float). `InputProcessor` opens capture clients in the device's preferred format and resamples to a fixed 48 kHz processing rate. `OutputMixer` renders at 48 kHz float and uses `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM` so WASAPI converts to the endpoint's native format. No external resampler library is used.
 
 ---
 
 ## Layer 2 — Routing Matrix
 
-**Implementation:** `AudioMixerMatrix` (`src/core/AudioMixerMatrix.cpp`) orchestrates one `AudioMixer` per physical output.
+**Implementation:** `AudioMixerMatrix` (`src/core/AudioMixerMatrix.cpp`) orchestrates `InputProcessor`, `GroupBus`, and `OutputMixer` instances.
 
 Audio flows one way: **inputs → groups → outputs**.
 
-- An **input** is a single capture source (device or application). It gets stable `InputId` and carries capture-side DSP flags.
+- An **input** is a single capture source (device or application). It gets a stable `InputId` and carries capture-side DSP flags.
 - A **group** is a mix bus (virtual cable). It has one fader/mute, a colour, an optional `cable` for per-app routing, a list of `inputIds`, and a list of `outputIds`.
 - An **output** is a render endpoint with a master fader/mute.
 
-For each `(input, output)` pair that a group's `outputIds` demands, `AudioMixerMatrix` opens a strip on that output's `AudioMixer`. Sending a group with one input to two outputs therefore opens the input twice; a future shared group bus may collapse that, but the model, API, and TUI already treat groups as the single entity.
+For each input in a group, `AudioMixerMatrix` ensures one `InputProcessor` is running and adds it to every `GroupBus` for that group. For each output in a group's `outputIds`, it creates a `GroupBus` and attaches it to the corresponding `OutputMixer`. Sending a group with one input to two outputs therefore mixes the input once and feeds two separate group buses; the capture-side DSP runs only once per input.
 
-**Cost.** Because each `(input, output)` route is a separate strip, the capture-side DSP described in Layer 3 — RNNoise, EQ, and the two-FFT HRTF spatializer — is instantiated and run once per route, not once per input. A microphone with noise suppression, voice EQ, and HRTF enabled that is sent to three outputs will run three RNNoise instances, three EQ chains, and six HRTF convolutions. CPU cost therefore scales with `inputs × outputs` for routed audio.
+**Cost.** Capture-side DSP described in Layer 3 — RNNoise, EQ, and the two-FFT HRTF spatializer — is now instantiated and run once per input, not once per `(input, output)` route. A microphone with noise suppression, voice EQ, and HRTF enabled that is sent to three outputs runs one RNNoise instance, one EQ chain, and two HRTF convolutions total. CPU cost now scales with `inputs` for routed audio, regardless of how many outputs a group feeds.
 
-**Consistency.** Running DSP per-route instead of per-input is expensive, but it guarantees that every output hears the same processed signal (the same cleaned/EQ'd/spatialized input), and it lets per-output format differences (sample rate, channel count) be handled independently. A shared group bus would move the DSP to a single capture-side pass and mix the processed signal to all outputs; that is the intended future shape.
+**Consistency.** `InputProcessor` writes the processed 48 kHz stereo signal to a `MultiReaderRingBuffer`. Every `GroupBus` that consumes that input reads from the same ring with its own cursor, so all outputs hear the same cleaned/EQ'd/spatialized signal.
 
-The effective volume of a strip is `group.volume × outputGains[output]`. The output then applies its own `master` volume/mute. All level changes use atomics and do not glitch audio.
+The effective volume of a group into an output is `group.volume × outputGains[output]`. The `OutputMixer` then applies its own `master` volume/mute. All level changes use atomics and do not glitch audio.
 
 ---
 
 ## Layer 3 — DSP Chain
 
-DSP is **per strip**. Because the current matrix creates one strip for every (input × output) route, a noise-suppressed, EQ'd, or spatialized input routed to three outputs runs three identical DSP chains today. Processing happens once per strip at capture time, before resampling and mixing, which guarantees that a processed input still sounds the same through every output it feeds. A future shared group bus will move the DSP to a single capture-side pass and mix the processed signal to all outputs.
+DSP is **per input**. `InputProcessor` runs the capture-side DSP once and writes the processed 48 kHz stereo signal to a ring buffer. Every `GroupBus` that consumes that input reads from the same ring with its own cursor, so a noise-suppressed, EQ'd, or spatialized input routed to multiple outputs still sounds the same through every output it feeds.
 
-For each strip, `AudioMixer::Impl::setupStripDsp()` allocates:
+For each input, `InputProcessor::Impl::init()` allocates:
 - `NoiseSuppressor` (RNNoise) if `denoise == true` and capture rate is 48 kHz
 - `EqChain` if `eqPreset == "voice"`
-- Two `dsp::Spatializer` instances plus a colour-compensation EQ if `spatial == true` and the output has at least two channels
+- Two `dsp::Spatializer` instances plus a colour-compensation EQ if `spatial == true`
 
-The runtime order in `AudioMixer::Impl::processStrip()` is:
+The runtime order in `InputProcessor::Impl::processPacket()` is:
 
 ```
 captured frame (source rate)
     -> RNNoise denoise (source rate)
     -> EQ (source rate)
-    -> [if spatial] split to L/R, resample to render rate,
+    -> split to front-left / front-right
+    -> [if spatial] resample to 48 kHz,
         convolve each channel as its own virtual speaker, sum,
         apply colour-compensation EQ
-    -> [otherwise] resample/convert to render rate
-    -> write to ring buffer
+    -> [otherwise] resample/convert to 48 kHz stereo
+    -> write to MultiReaderRingBuffer
 
-render loop (per output):
-    -> read each strip's ring buffer
-    -> apply strip volume/mute
+GroupBus mix (per output, driven by OutputMixer render callback):
+    -> read each input's ring buffer
+    -> sum and apply group volume/mute
+    -> resample to the output rate/channel count
+
+OutputMixer render loop (per output):
+    -> call each GroupBus into a scratch buffer
     -> sum into mix buffer
     -> apply output master volume/mute
     -> clamp and write to render device
@@ -188,11 +195,12 @@ The server runs a thread pool for HTTP handlers and a dedicated broadcast thread
 | Thread | Responsibility |
 |---|---|
 | Main / CLI thread | Parses config, creates `AudioMixerMatrix`, calls `start()`, runs the blocking HTTP server |
-| Audio thread (one per `AudioMixer` output) | WASAPI capture/render loops, per-strip DSP, mixing |
+| Capture thread (one per `InputProcessor`) | WASAPI capture, per-input DSP, writes to `MultiReaderRingBuffer` |
+| Render thread (one per `OutputMixer` output) | Calls `GroupBus::mix()`, sums group signals, applies master volume/mute, writes to render device |
 | HTTP worker pool | cpp-httplib request handlers (call into `AudioMixerMatrix` under its mutex) |
 | SSE broadcast thread | Pushes state events to connected clients |
 
-Each `AudioMixer` audio thread calls `SetThreadPriority(..., THREAD_PRIORITY_TIME_CRITICAL)` and `AvSetMmThreadCharacteristics(L"Audio", ...)`. The DSP hot path is allocation-free: all DSP state, ring buffers, and mix buffers are allocated before the thread starts. Structural changes (add/remove/rename strip) are queued and applied at the top of the audio thread's main loop before `WaitForMultipleObjects`, so they never interrupt another strip's render chain.
+Each audio thread calls `AvSetMmThreadCharacteristics(L"Pro Audio", ...)` (and `SetThreadPriority` where appropriate). The DSP hot path is allocation-free: all DSP state, ring buffers, and mix buffers are allocated before the thread starts. Structural changes in `AudioMixerMatrix` are applied on the control thread under one mutex; `OutputMixer` and `GroupBus` snapshot their source/bus lists under short locks on each render pass.
 
 ---
 

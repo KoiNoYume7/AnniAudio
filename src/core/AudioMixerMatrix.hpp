@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AudioMixer.hpp"
+#include "audio_utils.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -106,11 +106,9 @@ struct MixerStateSnapshot {
 
 // Mixer routing matrix: inputs -> groups -> outputs.
 //
-// For Stage 1 each (input, output) pair that a group touches is still opened
-// as a separate strip on the per-output AudioMixer. This means sending a
-// microphone group to two outputs opens the microphone twice. A future shared
-// group bus will collapse that, but the model, API, and TUI already treat
-// groups as the single entity.
+// Inputs are captured and processed once by an InputProcessor, then mixed into
+// per-(group, output) GroupBus instances, and finally rendered by per-output
+// OutputMixers. The public API and persistence format are unchanged.
 class AudioMixerMatrix {
 public:
     using RouteId = uint64_t; // internal only; not exposed through the API

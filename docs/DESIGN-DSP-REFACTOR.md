@@ -1,6 +1,6 @@
 # AnniAudio — Per-Input DSP Refactor Design
 
-**Status:** design / not implemented  
+**Status:** implemented and running in `route_cli mixer` (Stage 1–3 complete; Stage 4 cleanup and final merge pending)  
 **Author:** Devin (with project context from `CLAUDE.md` and `docs/ARCHITECTURE.md`)
 
 ---
@@ -62,8 +62,8 @@ ProcessedInputs ──► GroupBus("Music") ──► per-output send gains ─�
 | Component | Responsibility |
 |---|---|
 | `InputProcessor` | One per `InputConfig`. Captures the source once, runs denoise/EQ/spatial at a common processing rate, exposes a `ProcessedInput` ring buffer at that rate. |
-| `GroupBus` | One per group. Sums the `ProcessedInput` streams of its member inputs. Applies group volume, mute, and per-output send gains. Produces one interleaved stream per connected output. |
-| `OutputMixer` | One per output. Sums group contributions already resampled to the output rate. Applies output master volume/mute and renders to WASAPI. |
+| `GroupBus` | One per (group, output) pair. Sums the `ProcessedInput` streams of its member inputs. Applies group volume, mute, and the send gain for that output. Produces an interleaved stream at 48 kHz. |
+| `OutputMixer` | One per output. Sums group contributions and resamples to the output rate. Applies output master volume/mute and renders to WASAPI. |
 
 ### 5.2 Data flow
 
@@ -73,9 +73,9 @@ ProcessedInputs ──► GroupBus("Music") ──► per-output send gains ─�
 4. Run RNNoise (48 kHz) → EQ → optional HRTF spatialization.
 5. Write processed stereo interleaved frames to `ProcessedInput::ring`.
 6. **Render thread / output mixer thread** wakes on render event.
-7. For each group connected to this output, read the group's contribution from `GroupBus::outputRing(output)`.
+7. For each group connected to this output, call `GroupBus::mix()` into a scratch buffer.
 8. Sum, apply master, clamp, release WASAPI buffer.
-9. **Group bus thread or inline in output thread:** a group can either be mixed inline by each output or maintain its own per-output rings. The design below picks per-output rings owned by the `GroupBus` and filled by a worker that wakes whenever any of its inputs has new data.
+9. **Group bus mixing is output-driven.** Each `GroupBus` is owned by `AudioMixerMatrix` and called directly from the `OutputMixer` render thread. This avoids extra worker threads and keeps latency low; the trade-off is that each output re-sums the same group inputs, which is cheap compared to the per-input DSP savings.
 
 ## 6. Sample-rate strategy
 
@@ -113,26 +113,25 @@ Reasoning:
 
 - One thread per `InputProcessor`.
 - Owns its `IAudioClient`, capture event, capture buffers, DSP state.
-- Writes to a single-producer, single-consumer ring buffer consumed by group buses.
+- Writes to a single-producer, multi-reader `MultiReaderRingBuffer` consumed by group buses.
 - Volume/mute/denoise/EQ/spatial/azimuth/elevation are atomic toggles read each callback.
 
-### 7.2 Group bus mixing
+### 7.2 Group bus mixing (inline in output mixer thread)
 
-Option A: **Inline in output mixer thread**
-- Each `OutputMixer`, on its render callback, reads from every `GroupBus`'s input rings, applies send gains, and sums.
-- No extra thread, but every output re-reads and re-sums the same group inputs.
-
-Option B: **Dedicated group bus worker**
-- `GroupBus` has its own thread that waits on a condition signaled by any of its input processors.
-- It produces per-output rings at 48 kHz.
-- Output mixers only read their pre-mixed group contribution.
-- This is the preferred design because it centralizes group mixing and keeps `OutputMixer` cheap.
+- `GroupBus::mix()` is called directly from each `OutputMixer` render callback.
+- The bus reads from each input's `MultiReaderRingBuffer` with its own cursor,
+  sums, applies group volume/mute and the per-output send gain, and writes to a
+  caller-provided scratch buffer.
+- No extra worker thread; each output re-sums the same group inputs, which is cheap
+  compared to the saved per-input DSP work.
 
 ### 7.3 Output mixer thread
 
 - One thread per `OutputMixer`.
 - Waits on render event.
-- Reads from group per-output rings, resamples to `renderRate`, sums, applies master, clamps, renders.
+- Snapshots its list of `GroupBus` instances, calls `GroupBus::mix()` into a scratch
+  buffer for each, sums, resamples to `renderRate` if needed, applies master, clamps,
+  renders.
 
 ### 7.4 Lock-free volume/mute
 
@@ -163,45 +162,43 @@ The internal mapping changes:
 
 ### Stage 1: Add new abstractions alongside the old ones
 
-1. Implement `InputProcessor` class in `src/core/InputProcessor.{hpp,cpp}`.
-   - Capture from device or application loopback.
-   - Resample to 48 kHz.
-   - Run denoise/EQ/spatial/colorEq.
-   - Write to `RingBuffer` at 48 kHz stereo.
-2. Implement `GroupBus` class in `src/core/GroupBus.{hpp,cpp}`.
-   - Own a list of `ProcessedInput` rings.
-   - Mix to per-output rings at 48 kHz.
-   - Apply group volume/mute/send gains atomically.
-3. Implement `OutputMixer` class in `src/core/OutputMixer.{hpp,cpp}`.
-   - Resample from 48 kHz to `renderRate`.
-   - Sum group contributions.
-   - Apply output master and render.
-4. Add unit/poc test: `tests/test_input_processor.cpp` feeds a sine wave, verifies denoise/EQ/spatial run once and the output is correct.
+- [x] Implement `InputProcessor` class in `src/core/InputProcessor.{hpp,cpp}`.
+- [x] Capture from device or application loopback, resample to 48 kHz, run denoise/EQ/spatial/colorEq, write to `MultiReaderRingBuffer`.
+- [x] Implement `GroupBus` class in `src/core/GroupBus.{hpp,cpp}`.
+- [x] Mix processed inputs, apply group volume/mute/send gains atomically, called from `OutputMixer`.
+- [x] Implement `OutputMixer` class in `src/core/OutputMixer.{hpp,cpp}`.
+- [x] Sum group contributions, resample from 48 kHz to `renderRate`, apply master and render.
+- [x] Add verification tests: `tests/test_input_processor.cpp`, `tests/test_new_pipeline.cpp`.
 
 ### Stage 2: New matrix backend
 
-1. Create `AudioMixerMatrix2` or refactor `AudioMixerMatrix` behind a flag.
-2. Map `InputConfig` → `InputProcessor`.
-3. Map `GroupConfig` → `GroupBus`.
-4. Map `OutputConfig` → `OutputMixer`.
-5. Hook control API methods to the new backend.
+- [x] Refactor `AudioMixerMatrix` to use `InputProcessor`, `GroupBus`, and `OutputMixer`.
+- [x] Map `InputConfig` → `InputProcessor`.
+- [x] Map `GroupConfig` → per-(group,output) `GroupBus`.
+- [x] Map `OutputConfig` → `OutputMixer`.
+- [x] Hook all control API methods to the new backend.
 
 ### Stage 3: Feature parity + A/B testing
 
-- Run `test_mixer_live_edit` against the new backend.
-- Run the TUI and Loupedeck plugin against the new backend for a real session.
-- Compare CPU usage with `route_cli` + Task Manager or a built-in `mixer` stats endpoint.
+- [x] `route_cli mixer` runs the new pipeline against the user's real `config/mixers/main.json`.
+- [x] Live state and control via `/api/state` and `PATCH /api/groups/{id}` verified.
+- [x] `tests/test_mixer_matrix.cpp` exercises add/output/input/group/start/snapshot/stop.
+- [ ] Full TUI and Loupedeck plugin session.
+- [ ] CPU comparison with the old `AudioMixer`/`Strip` path.
 
 ### Stage 4: Remove legacy `AudioMixer`/`Strip` path
 
-- Delete `AudioMixer.cpp/hpp`, `AudioMixerMatrix` old route logic, and `AudioEngine.cpp` if it is still unused.
-- Rename `OutputMixer` → `AudioMixer` if desired, or keep the clearer names.
+- [ ] Delete `AudioMixer.cpp/hpp` and strip-based route logic from `AudioMixerMatrix`.
+- [ ] Remove or port `tests/test_mixer_live_edit.cpp`.
+- [ ] Decide whether to rename `OutputMixer` → `AudioMixer` (keep the clearer names for now).
 
 ### Stage 5: Document and merge
 
-- Update `docs/ARCHITECTURE.md` and `docs/CONFIG.md`.
-- Update `CLAUDE.md` architecture notes.
-- Merge to `dev`, then `main`.
+- [x] Update `docs/ARCHITECTURE.md`.
+- [x] Update `docs/MIXER-CONTROL-API.md`.
+- [x] Update `CLAUDE.md` architecture notes.
+- [ ] Update `docs/CONFIG.md` if needed.
+- [ ] Final merge `dev` → `main`.
 
 ## 10. Risks and open questions
 

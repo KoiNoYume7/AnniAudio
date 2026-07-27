@@ -73,6 +73,9 @@ public:
         dirDirty_.store(true);
     }
 
+    float peak() const { return peak_.load(); }
+    float rms() const { return rms_.load(); }
+
 private:
     struct DspState {
         std::unique_ptr<anniaudio::dsp::NoiseSuppressor> denoiser;
@@ -90,6 +93,7 @@ private:
     void run();
     void processPacket();
     void applyDirectionIfNeeded();
+    void updateLevels(const float* data, size_t n);
 
     InputProcessorConfig cfg_;
 
@@ -132,6 +136,9 @@ private:
     std::atomic<float> reqEl_{0.0f};
     float appliedAz_ = 0.0f;
     float appliedEl_ = 0.0f;
+
+    std::atomic<float> peak_{0.0f};
+    std::atomic<float> rms_{0.0f};
 };
 
 InputProcessor::InputProcessor() : p(std::make_unique<Impl>()) {}
@@ -143,6 +150,8 @@ void InputProcessor::stop() { p->stop(); }
 bool InputProcessor::running() const { return p->running(); }
 MultiReaderRingBuffer& InputProcessor::outputRing() { return p->outputRing(); }
 void InputProcessor::setDirection(float az, float el) { p->setDirection(az, el); }
+float InputProcessor::peak() const { return p->peak(); }
+float InputProcessor::rms() const { return p->rms(); }
 
 bool InputProcessor::Impl::init(const InputProcessorConfig& cfg)
 {
@@ -516,6 +525,7 @@ void InputProcessor::Impl::processPacket()
 
         if (dsp_.colorEq) dsp_.colorEq->process(mixTmp_.data(), outFrames, kProcessingChannels);
 
+        updateLevels(mixTmp_.data(), static_cast<size_t>(outFrames) * kProcessingChannels);
         ring_.write(mixTmp_.data(), static_cast<size_t>(outFrames) * kProcessingChannels);
     } else {
         // Non-spatial: resample the stereo L/R pair directly into mixTmp.
@@ -534,10 +544,24 @@ void InputProcessor::Impl::processPacket()
             }
         }
 
+        updateLevels(mixTmp_.data(), static_cast<size_t>(outFrames) * kProcessingChannels);
         ring_.write(mixTmp_.data(), static_cast<size_t>(outFrames) * kProcessingChannels);
     }
 
     captureSvc_->ReleaseBuffer(frames);
+}
+
+void InputProcessor::Impl::updateLevels(const float* data, size_t n)
+{
+    float maxAbs = 0.0f;
+    float sumSq = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        float a = std::fabs(data[i]);
+        if (a > maxAbs) maxAbs = a;
+        sumSq += data[i] * data[i];
+    }
+    peak_.store(maxAbs);
+    rms_.store(n > 0 ? std::sqrt(sumSq / static_cast<float>(n)) : 0.0f);
 }
 
 } // namespace anniaudio::core

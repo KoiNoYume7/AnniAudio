@@ -14,17 +14,22 @@ any HTTP client. Version: see `VERSION` (0.2.0). Default branch of work: `dev`.
 
 Audio flows one way: **inputs → groups → outputs**.
 
-- `src/core/AudioMixer.cpp` (`audio_core` lib) — one instance **per output**. Sums N
-  capture *strips* into one WASAPI render endpoint. A strip captures a device, a
-  render endpoint (loopback), or a process (process loopback via
-  `ActivateAudioInterfaceAsync`). Owns per-strip volume/mute, master volume/mute, and
-  capture-side DSP (`NoiseSuppressor`, `EqChain`). The audio thread is real-time;
-  all allocation happens before a strip reaches it.
-- `src/core/AudioMixerMatrix.cpp` — orchestrates multiple `AudioMixer` outputs.
-  Holds `inputs`, `groups` (a.k.a. cables), `outputs`, and `routes` (one strip per
-  input×output). A group's effective volume into an output = `group.volume ×
-  outputGains[output]`. Everything is guarded by one `mtx`; `maybeAutosave()` writes
-  after every mutation.
+- `src/core/InputProcessor.cpp` (`audio_core` lib) — one instance **per input**.
+  Captures a device or application loopback, runs the capture-side DSP chain
+  (`NoiseSuppressor`, `EqChain`, optional HRTF spatialization), and writes the
+  processed 48 kHz stereo interleaved result to a `MultiReaderRingBuffer`.
+- `src/core/GroupBus.cpp` — one instance per **(group, output)** pair. Mixes the
+  processed inputs of a group, applies the group volume/mute, and resamples to the
+  output's sample rate and channel count. It is driven from the `OutputMixer` render
+  callback, so each output has its own read cursor and send gain.
+- `src/core/OutputMixer.cpp` — one instance **per output**. WASAPI render endpoint;
+  sums the `GroupBus` signals feeding it, applies master volume/mute, and writes to
+  the device. It renders at a fixed 48 kHz float format and relies on
+  `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM` for device format conversion.
+- `src/core/AudioMixerMatrix.cpp` — orchestrates the above. Holds `inputs`,
+  `groups`, `outputs`, and the `groupBuses` map. A group's effective volume into an
+  output = `group.volume × outputGains[output]`. Structural changes are guarded by
+  one `mtx`; `maybeAutosave()` writes after every mutation.
 - `src/core/MixerControlServer.cpp` — httplib HTTP + SSE server on `127.0.0.1:8850`.
   SSE broadcasts full state on any `markDirty()`. Full endpoint list in
   `docs/MIXER-CONTROL-API.md` — **keep that doc in sync when you touch routes**.
@@ -38,9 +43,10 @@ Audio flows one way: **inputs → groups → outputs**.
   subcommand launches `mixer-tui.bat`. This is **not** the Phase 4 standalone
   `anniaudio-cli` API client.
 - `tests/` — Phase-0 POCs and verification tools. Not built by default; use
-  `-DBUILD_TESTS=ON`. `test_mixer_live_edit` is automated and tests live add/remove/rename
-  of `AudioMixer` strips; `test_routing` is a manual 5-minute harness that uses the legacy
-  `AudioEngine`.
+  `-DBUILD_TESTS=ON`. `test_mixer_matrix` loads and runs the new `AudioMixerMatrix`
+  pipeline end-to-end; `test_new_pipeline` tests `InputProcessor → GroupBus →
+  OutputMixer` in isolation. `test_mixer_live_edit` still exercises the legacy
+  per-output `AudioMixer` path (pending removal in the Stage 5 cleanup).
 - `scripts/mixer_tui.py`, `scripts/tui_utils.py`, `scripts/tui_ui.py` — curses TUI
   split into entry/utility/ui modules.
 
@@ -73,7 +79,7 @@ cmake --build build --target route_cli --config Release
 .\start-mixer.bat            # mixer + control API on 8850 (loads config/mixers/main.json)
 .\mixer-tui.bat              # curses TUI client (separate terminal)
 .\stop-mixer.bat             # stop it (before rebuilding)
-.\install-autostart.bat      # hidden-at-logon launcher (user session, not a service)
+.\install-autostart.bat      # hidden-at-logon launcher via Task Scheduler task (user session, not a service; no admin). `uninstall` arg removes it
 ```
 
 The mixer is usually already running on 8850 with the user's real audio. You can

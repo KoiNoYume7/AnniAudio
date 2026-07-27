@@ -44,11 +44,11 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 
 **Goal:** Audio flowing through AnniAudio can be processed and routed to multiple outputs.
 
-- [x] `AudioMixer` capture/render engine with real-time mixing loop
+- [x] `InputProcessor`/`GroupBus`/`OutputMixer` pipeline — per-input capture/DSP, shared group buses, per-output render
 - [x] `AudioMixerMatrix` orchestrating multiple outputs with per-group send gains
 - [x] Parametric EQ node (`EqChain`) — all filter types
 - [x] Noise suppression node (`NoiseSuppressor`) using RNNoise
-- [x] Per-strip volume/mute, per-output master/mute
+- [x] Per-input/per-group volume/mute, per-output master/mute
 - [x] Send gains and scenes (level snapshots)
 - [x] Audio thread at `THREAD_PRIORITY_TIME_CRITICAL`
 - [ ] Output safety limiter (hard dB ceiling)
@@ -63,7 +63,7 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 and is a first-class node in the live mixer (not just a standalone POC).
 
 Built once as a reusable `Spatializer` DSP class (`src/dsp/spatializer.{hpp,cpp}`),
-then wired into the matrix in two phases: per-input positioning first (daily value),
+then wired into the pipeline in two phases: per-input positioning first (daily value),
 per-output virtualization second (the Windows Sonic replacement). The engine — FFT
 overlap-add convolution on KissFFT, HRIRs from libmysofa — is shared by both.
 
@@ -86,18 +86,18 @@ avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_ke
 ### Stage B — Per-input positioning (mixer integration) — **DONE**
 - [x] `spatial` + `azimuth`/`elevation` on the **input** config model
       (mirrors `denoise` / `eqPreset`), through matrix → control server → JSON persistence.
-- [x] A spatialized strip keeps its left/right channels and virtualizes them:
+- [x] A spatialized input keeps its left/right channels and virtualizes them:
       each channel is convolved as its own virtual speaker (left at azimuth+30°,
       right at azimuth-30°) and the two binaural results are summed — this preserves
       the stereo image and externalizes it instead of collapsing to a mono point.
-      The engine change lives in `AudioMixer::Impl::writeStripSpatial()` (two
-      `Spatializer` instances per strip). All state is pre-allocated in
-      `setupStripDsp()` before the RT thread; wider-than-stereo outputs get the
-      binaural pair in channels 0/1. (A future mono point-source mode can place a
-      single source at an exact azimuth for callouts/voices.)
-- [x] Live, glitch-free direction changes: `setStripDirection()` queues an atomic
-      request applied on the audio thread between blocks (no HRIR-swap race); the
-      overlap tail is kept so a moving source cross-fades instead of clicking.
+      The engine change lives in `InputProcessor` (two `Spatializer` instances per
+      input). All state is pre-allocated before the capture thread starts; the
+      binaural pair is written as stereo interleaved frames. (A future mono
+      point-source mode can place a single source at an exact azimuth for
+      callouts/voices.)
+- [x] Live, glitch-free direction changes: `InputProcessor::setDirection()` queues an
+      atomic request applied on the capture thread between blocks (no HRIR-swap race);
+      the overlap tail is kept so a moving source cross-fades instead of clicking.
       `POST /api/inputs/{id}/direction` is the live path; `PATCH` toggles spatial on/off.
 
 ### Stage C — Surface + document

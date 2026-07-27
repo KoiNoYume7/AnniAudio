@@ -11,8 +11,8 @@ This supersedes the earlier MIDI-CC-binding approach that lived directly inside
 ## Why not MIDI-in-the-mixer-config
 
 The first pass wired MIDI CC/note messages directly into `route_cli mixer` (a
-`"midi"` block in the mixer JSON, parsed and bound to strips at startup). It
-worked, but it was the wrong shape:
+`"midi"` block in the mixer JSON, parsed and bound to mixer controls at startup).
+It worked, but it was the wrong shape:
 
 - It only worked while `route_cli mixer` itself was running with stdin attached —
   no GUI, no multi-client access, no way for a Logitech/Loupedeck **plugin** (which
@@ -44,14 +44,14 @@ nothing to authenticate against — this is a single-user, single-machine tool.
 Binding to loopback only is the security boundary; do not relax this without
 re-thinking the whole model.
 
-**Never glitch audio for a control-plane operation.** Adjusting master/strip volume
+**Never glitch audio for a control-plane operation.** Adjusting master/group volume
 or mute is lock-free and glitch-free (`std::atomic<float>`/`std::atomic<bool>`,
-read directly by the audio thread). Adding, removing, renaming, or re-sourcing a
-strip is a *structural* change and is queued for the audio thread; it never causes
-a dropout on any *other* strip's audio or on the render output.
+read directly by the audio thread). Adding, removing, renaming, or re-sourcing an
+input or group is a *structural* change handled on the control thread; it never
+causes a dropout on any *other* input's audio or on the render output.
 
-**IDs, not positions.** A strip's index in a list is not a safe identifier once
-strips can be added or removed while running. Every input and group gets a stable,
+**IDs, not positions.** A group's index in a list is not a safe identifier once
+groups can be added or removed while running. Every input and group gets a stable,
 opaque, monotonically increasing `id` at creation time. All control-API and public
 `AudioMixerMatrix` calls address inputs and groups by `id`.
 
@@ -59,74 +59,60 @@ opaque, monotonically increasing `id` at creation time. All control-API and publ
 
 ## Threading model: seamless structural changes
 
-The render path is decoupled from each strip's capture path by a per-strip
-`RingBuffer` (see `src/core/audio_utils.hpp`): `processRender()` only ever reads
-from ring buffers via `readOrSilence()`, which never blocks — it silence-pads if a
-strip is momentarily behind. This means the render output is already immune to
-hiccups on any individual strip's capture side. Structural strip changes build on
-top of that guarantee.
+The audio graph is decoupled by ring buffers:
 
-**Command queue.** Add/remove/rename/set-knob strip operations are represented as
-`AudioMixer::Impl::Command` values pushed onto a mutex-protected queue:
+- Each `InputProcessor` writes its processed 48 kHz stereo signal to a
+  `MultiReaderRingBuffer`.
+- Each `GroupBus` (one per group+output pair) reads from each input's ring with its
+  own cursor; `readOrSilence()` never blocks and silence-pads if an input is
+  momentarily behind.
+- Each `OutputMixer` render thread calls `GroupBus::mix()` into a scratch buffer,
+  sums the results, applies master volume/mute, and writes to the render device.
 
-```cpp
-struct Command {
-    enum class Kind { Add, Remove, Rename, SetKnobIndex } kind;
-    std::shared_ptr<Strip> strip;       // Add only
-    StripId                targetId = 0; // Remove, Rename, SetKnobIndex
-    std::string            text;         // Rename: new name
-    std::optional<int>     knobIndex;    // SetKnobIndex
-};
-```
+This means the render output is already immune to hiccups on any individual input's
+capture side. Structural changes build on top of that guarantee.
 
-The **caller thread** (an HTTP request handler, or `AudioMixerMatrix`) does all
-the work that can fail or block *before* touching the queue:
+**Control thread.** All mutating `AudioMixerMatrix` operations (`addOutput`,
+`addInput`, `addGroup`, `setGroupInputIds`, `setGroupOutputIds`, `updateInput`,
+`removeInput`, etc.) run on the HTTP/CLI thread under one `std::mutex` and call
+`rebuildLocked()`. `rebuildLocked()`:
 
-- `Add`: resolve the source endpoint, activate the `IAudioClient`, negotiate
-  format, allocate buffers — i.e. everything `Impl::openStrip()` does. If any of
-  this fails, return an error immediately; nothing is queued and the audio thread
-  is never involved. Only a fully-prepared, ready-to-run `Strip` is handed to the
-  queue.
-- `Remove` / `Rename` / `SetKnobIndex`: these can't fail in a way that matters
-  (unknown id → HTTP 404 before queueing), so there's nothing to prepare.
+1. Builds the desired set of `(group, output)` buses from the current `groups` and
+   `outputs` maps.
+2. Removes any `GroupBus` no longer desired and detaches it from its `OutputMixer`.
+3. Creates missing `GroupBus` instances and attaches them to the corresponding
+   `OutputMixer`.
+4. For each bus, ensures each configured input has a running `InputProcessor`,
+   adding or removing inputs from the bus as needed.
+5. Prunes `InputProcessor` instances that are no longer referenced by any bus.
+6. Stops `OutputMixer` instances with no buses and starts ones that have buses.
 
-The **audio thread**, at the top of every iteration of its main loop (immediately
-before the blocking `WaitForMultipleObjects` call), does a quick
-`std::lock_guard` + `std::vector::swap` to grab any pending commands, then applies
-them:
+The audio paths are reconfigured between render callbacks; a running `OutputMixer`
+snapshots its bus list under a short lock at the start of each `processRender()`
+call, and each `GroupBus` snapshots its source list under a short lock at the start
+of each `mix()` call. Shared pointers keep buses alive if they are removed while a
+render pass is still using them.
 
-- `Add`: `strips.push_back(std::move(cmd.strip))`, calls `IAudioClient::Start()`
-  on it, marks the handle array dirty.
-- `Remove`: calls `IAudioClient::Stop()`, closes the strip's event handle, erases
-  it from `strips`, marks the handle array dirty.
-- `Rename`: just updates the strip's `name`.
-- `SetKnobIndex`: just updates the strip's `knobIndex`.
+Volume, mute, and HRTF direction changes are atomic and do not require a rebuild:
+- `InputProcessor` `setDirection()` stores the requested azimuth/elevation atomically;
+  the capture thread applies it before the next processed packet.
+- `GroupBus` `setGain()` / `setMuted()` update atomics read directly in `mix()`.
+- `OutputMixer` `setMasterVolume()` / `setMasterMuted()` update atomics read directly
+  in `processRender()`.
 
-If the handle array is marked dirty, it's rebuilt from `strips` before the next
-`WaitForMultipleObjects` call. This is a handful of pointer copies — negligible
-next to the 200 ms wait timeout already in the loop.
-
-This queue is a plain mutex, not a lock-free SPSC/MPSC structure. That is a
-deliberate choice: lock-free queues earn their complexity when messages are
-per-sample or otherwise very high-frequency. Strip edits happen a handful of times
-per session, driven by a human clicking "add strip" in a UI. A mutex held for a
-`vector::swap` is not a professional risk here; a hand-rolled lock-free queue for
-this frequency would be over-engineering that adds bug surface for no real benefit.
-
-**Net effect:** every *other* strip's capture → ring buffer → render chain is
-completely unaffected by an add/remove/rename happening concurrently. The strip
-being removed obviously stops (that's the point), and the operation itself
-completes within one audio-thread loop iteration (≤ tens of milliseconds).
+Because structural edits happen at human time scales (a handful of times per
+session), the short mutex held during `rebuildLocked()` is not a real-time risk. A
+lock-free queue for this frequency would be over-engineering that adds bug surface
+for no real benefit.
 
 ---
 
 ## Public API
 
-`AudioMixer` (`src/core/AudioMixer.hpp`) is the per-output mixer. It operates on
-strips identified by `StripId`.
-
-`AudioMixerMatrix` (`src/core/AudioMixerMatrix.hpp`) owns multiple `AudioMixer`
-outputs and exposes the matrix-level identifiers `InputId` and `GroupId`.
+`AudioMixerMatrix` (`src/core/AudioMixerMatrix.hpp`) is the routing matrix. It owns
+`InputProcessor` capture/DSP instances (one per input), `GroupBus` mix instances
+(one per group+output pair), and `OutputMixer` render instances (one per output).
+It exposes the matrix-level identifiers `InputId` and `GroupId`.
 
 ```cpp
 using InputId  = uint32_t;
@@ -279,7 +265,7 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a
 | `GET`    | `/api/events`           | —                                               | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
 | `POST`   | `/api/inputs`           | `{ name, type, source, denoise?, eqPreset?, spatial?, azimuth?, elevation? }` | Add an input source (type = `device` or `application`). `denoise` enables RNNoise suppression (48 kHz captures); `eqPreset` = `"voice"` enables the built-in voice EQ. `spatial` enables HRTF binaural positioning at `azimuth`/`elevation` (degrees; azimuth 0 = front, +90 = left, -90 = right; elevation 0 = ear level, +90 = above) — requires a stereo-or-wider output. All run engine-side before mixing |
 | `PATCH`  | `/api/inputs/{id}`      | `{ name?, type?, source?, denoise?, eqPreset?, spatial?, azimuth?, elevation? }`| Partial update of an input (omitted fields keep their value); re-creates routes for any groups that use it. Use this to toggle `spatial` on/off; for smooth live direction changes prefer `POST /api/inputs/{id}/direction` |
-| `POST`   | `/api/inputs/{id}/direction` | `{ azimuth?, elevation? }`                 | Live HRTF direction change for a spatialized input. Updates the running spatializer in place without rebuilding its strips — glitch-free and safe at knob-turn rates. No-op on the audio if the input isn't spatial (value is still stored) |
+| `POST`   | `/api/inputs/{id}/direction` | `{ azimuth?, elevation? }`                 | Live HRTF direction change for a spatialized input. Updates the running spatializer in place without rebuilding its routes — glitch-free and safe at knob-turn rates. No-op on the audio if the input isn't spatial (value is still stored) |
 | `DELETE` | `/api/inputs/{id}`      | —                                               | Remove an input and remove it from all groups |
 | `POST`   | `/api/groups`           | `{ name, color?, cable?, inputIds?, outputIds?, volume?, muted?, knobIndex? }` | Add a group (mix bus). Set per-output send gains with `PATCH /api/groups/{id}` after creation |
 | `PATCH`  | `/api/groups/{id}`      | `{ name?, color?, cable?, inputIds?, outputIds?, outputGains?, volume?, muted?, knobIndex? }` | Partial update of a group. `outputGains` is `{ "<output name>": percent }` — the group's send level towards that output (100 = unity); effective route volume is group volume × send gain |
@@ -305,7 +291,7 @@ If a group has no `cable`, adding an `application` input falls back to process l
 
 **SSE, not polling.** `/api/events` is the source of truth for "did anything change" for both the TUI and the Loupedeck plugin. Every structural or volume/mute change broadcasts a `state` event to all connected listeners.
 
-**COM/WASAPI threading note.** HTTP worker threads that touch `IMMDeviceEnumerator`/`IMMDevice` (e.g. `/api/endpoints`, or preparing a new input for `POST /api/inputs`) must call `CoInitializeEx(nullptr, COINIT_MULTITHREADED)` once per thread before doing so, matching the apartment model already used by `AudioEngine`/`AudioMixer`'s own audio thread. cpp-httplib's worker threads are plain OS threads with no COM initialization by default.
+**COM/WASAPI threading note.** HTTP worker threads that touch `IMMDeviceEnumerator`/`IMMDevice` (e.g. `/api/endpoints`, or preparing a new input for `POST /api/inputs`) must call `CoInitializeEx(nullptr, COINIT_MULTITHREADED)` once per thread before doing so, matching the apartment model already used by `InputProcessor` and `OutputMixer` audio threads. cpp-httplib's worker threads are plain OS threads with no COM initialization by default.
 
 ---
 
@@ -345,6 +331,7 @@ Plugin Service and hot-reloads it. See `AnniAudioMixerPlugin/README.md` for deta
   `outputs` + `routes`) may still be accepted and converted automatically on load.
 - Kept: `route_cli midi list` / `route_cli midi <device-hint>` as a standalone
   diagnostic with no relationship to the mixer.
-- `AudioMixer` uses a `StripId`-based strip API, and `route_cli mixer` now drives
-  an `AudioMixerMatrix` that owns one `AudioMixer` per output. The interactive text
-  commands resolve position → group/output at the point of use.
+- `route_cli mixer` drives `AudioMixerMatrix`, which owns `InputProcessor`
+  (one per input), `GroupBus` (one per group+output pair), and `OutputMixer` (one
+  per output). The interactive text commands resolve position → group/output at the
+  point of use.

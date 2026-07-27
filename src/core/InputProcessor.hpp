@@ -56,6 +56,11 @@ public:
     // Live direction change, glitch-free. No-op if spatial is not enabled.
     void setDirection(float azimuthDeg, float elevationDeg);
 
+    // Peak and RMS level from the last processed packet (linear, same scale as
+    // the existing AudioMixer strip meters).
+    float peak() const;
+    float rms() const;
+
     // Runtime toggles and source changes are not live; they require stop/init/start.
     // The owning matrix should recreate the InputProcessor when those change.
 

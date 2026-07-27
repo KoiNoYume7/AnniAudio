@@ -1,6 +1,7 @@
 #include "OutputMixer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -33,14 +34,16 @@ public:
     void stop();
     bool running() const { return running_.load(); }
 
-    void addGroupBus(GroupBus& bus) {
+    void addGroupBus(std::shared_ptr<GroupBus> bus) {
         std::lock_guard<std::mutex> lk(busesMutex_);
-        if (std::find(buses_.begin(), buses_.end(), &bus) == buses_.end())
-            buses_.push_back(&bus);
+        if (std::find(buses_.begin(), buses_.end(), bus) == buses_.end())
+            buses_.push_back(bus);
     }
-    void removeGroupBus(GroupBus& bus) {
+    void removeGroupBus(const GroupBus* bus) {
         std::lock_guard<std::mutex> lk(busesMutex_);
-        buses_.erase(std::remove(buses_.begin(), buses_.end(), &bus), buses_.end());
+        buses_.erase(std::remove_if(buses_.begin(), buses_.end(),
+            [bus](const std::shared_ptr<GroupBus>& b) { return b.get() == bus; }),
+            buses_.end());
     }
     void clearGroupBuses() {
         std::lock_guard<std::mutex> lk(busesMutex_);
@@ -51,6 +54,8 @@ public:
     void setMasterMuted(bool muted) { masterMuted_.store(muted); }
     float masterVolume() const { return masterVolume_.load(); }
     bool masterMuted() const { return masterMuted_.load(); }
+    float masterPeak() const { return masterPeak_.load(); }
+    float masterRms() const { return masterRms_.load(); }
 
     const std::string& outputName() const { return outputName_; }
 
@@ -79,12 +84,14 @@ private:
     std::vector<float> groupBuf_;
 
     std::mutex busesMutex_;
-    std::vector<GroupBus*> buses_;
+    std::vector<std::shared_ptr<GroupBus>> buses_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> started_{false};
     std::atomic<float> masterVolume_{1.0f};
     std::atomic<bool> masterMuted_{false};
+    std::atomic<float> masterPeak_{0.0f};
+    std::atomic<float> masterRms_{0.0f};
 };
 
 OutputMixer::OutputMixer() : p(std::make_unique<Impl>()) {}
@@ -94,13 +101,15 @@ bool OutputMixer::init(const std::string& outputHint) { return p->init(outputHin
 bool OutputMixer::start() { return p->start(); }
 void OutputMixer::stop() { p->stop(); }
 bool OutputMixer::running() const { return p->running(); }
-void OutputMixer::addGroupBus(GroupBus& bus) { p->addGroupBus(bus); }
-void OutputMixer::removeGroupBus(GroupBus& bus) { p->removeGroupBus(bus); }
+void OutputMixer::addGroupBus(std::shared_ptr<GroupBus> bus) { p->addGroupBus(bus); }
+void OutputMixer::removeGroupBus(const GroupBus* bus) { p->removeGroupBus(bus); }
 void OutputMixer::clearGroupBuses() { p->clearGroupBuses(); }
 void OutputMixer::setMasterVolume(float v) { p->setMasterVolume(v); }
 void OutputMixer::setMasterMuted(bool muted) { p->setMasterMuted(muted); }
 float OutputMixer::masterVolume() const { return p->masterVolume(); }
 bool OutputMixer::masterMuted() const { return p->masterMuted(); }
+float OutputMixer::masterPeak() const { return p->masterPeak(); }
+float OutputMixer::masterRms() const { return p->masterRms(); }
 const std::string& OutputMixer::outputName() const { return p->outputName(); }
 
 bool OutputMixer::Impl::init(const std::string& outputHint)
@@ -256,14 +265,15 @@ void OutputMixer::Impl::processRender()
     const size_t outSamples = static_cast<size_t>(toWrite) * renderCh_;
     std::fill_n(mixBuf_.data(), outSamples, 0.0f);
 
-    // Snapshot the bus list.
-    std::vector<GroupBus*> localBuses;
+    // Snapshot the bus list. shared_ptr copies keep any bus alive that is removed
+    // while we are mixing it.
+    std::vector<std::shared_ptr<GroupBus>> localBuses;
     {
         std::lock_guard<std::mutex> lk(busesMutex_);
         localBuses = buses_;
     }
 
-    for (auto* bus : localBuses) {
+    for (auto& bus : localBuses) {
         if (!bus) continue;
         std::fill_n(groupBuf_.data(), outSamples, 0.0f);
         bus->mix(groupBuf_.data(), toWrite, renderRate_, renderCh_);
@@ -273,6 +283,9 @@ void OutputMixer::Impl::processRender()
     bool muted = masterMuted_.load();
     float vol = masterVolume_.load();
 
+    float maxAbs = 0.0f;
+    float sumSq = 0.0f;
+
     if (renderIsFloat_) {
         auto* fbuf = reinterpret_cast<float*>(buf);
         for (size_t i = 0; i < outSamples; ++i) {
@@ -280,6 +293,9 @@ void OutputMixer::Impl::processRender()
             if (v >  1.0f) v =  1.0f;
             if (v < -1.0f) v = -1.0f;
             fbuf[i] = v;
+            float a = std::fabs(v);
+            if (a > maxAbs) maxAbs = a;
+            sumSq += v * v;
         }
     } else {
         std::vector<float> tmp(mixBuf_.data(), mixBuf_.data() + outSamples);
@@ -288,8 +304,16 @@ void OutputMixer::Impl::processRender()
         } else {
             std::fill(tmp.begin(), tmp.end(), 0.0f);
         }
+        for (auto s : tmp) {
+            float a = std::fabs(s);
+            if (a > maxAbs) maxAbs = a;
+            sumSq += s * s;
+        }
         floatToPcm16(tmp.data(), outSamples, buf);
     }
+
+    masterPeak_.store(maxAbs);
+    masterRms_.store(outSamples > 0 ? std::sqrt(sumSq / static_cast<float>(outSamples)) : 0.0f);
 
     renderSvc_->ReleaseBuffer(toWrite, 0);
 }

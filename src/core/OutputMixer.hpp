@@ -32,15 +32,18 @@ public:
     bool running() const;
 
     // Group buses feeding this output. Can be changed while running; the list is
-    // snapshotted under a short lock on each render pass.
-    void addGroupBus(GroupBus& bus);
-    void removeGroupBus(GroupBus& bus);
+    // snapshotted on each render pass.
+    void addGroupBus(std::shared_ptr<GroupBus> bus);
+    void removeGroupBus(const GroupBus* bus);
     void clearGroupBuses();
 
     void setMasterVolume(float v); // linear
     void setMasterMuted(bool muted);
     float masterVolume() const;
     bool masterMuted() const;
+
+    float masterPeak() const;
+    float masterRms() const;
 
     const std::string& outputName() const;
 
