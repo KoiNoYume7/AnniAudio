@@ -65,7 +65,7 @@ public:
     void stop();
     bool running() const { return running_.load(); }
 
-    RingBuffer& outputRing() { return ring_; }
+    MultiReaderRingBuffer& outputRing() { return ring_; }
 
     void setDirection(float az, float el) {
         reqAz_.store(az);
@@ -123,7 +123,7 @@ private:
     std::vector<float> spkTmp_;
     std::vector<float> mixTmp_;
 
-    RingBuffer ring_;
+    MultiReaderRingBuffer ring_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> started_{false};
@@ -141,7 +141,7 @@ bool InputProcessor::init(const InputProcessorConfig& cfg) { return p->init(cfg)
 bool InputProcessor::start() { return p->start(); }
 void InputProcessor::stop() { p->stop(); }
 bool InputProcessor::running() const { return p->running(); }
-RingBuffer& InputProcessor::outputRing() { return p->outputRing(); }
+MultiReaderRingBuffer& InputProcessor::outputRing() { return p->outputRing(); }
 void InputProcessor::setDirection(float az, float el) { p->setDirection(az, el); }
 
 bool InputProcessor::Impl::init(const InputProcessorConfig& cfg)

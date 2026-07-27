@@ -29,3 +29,6 @@ target_link_libraries(test_mixer_live_edit PRIVATE audio_core)
 
 add_executable(test_input_processor test_input_processor.cpp)
 target_link_libraries(test_input_processor PRIVATE audio_core)
+
+add_executable(test_new_pipeline test_new_pipeline.cpp)
+target_link_libraries(test_new_pipeline PRIVATE audio_core)

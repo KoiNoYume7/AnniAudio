@@ -128,4 +128,62 @@ private:
     size_t m_head{0}, m_tail{0}, m_cap{0};
 };
 
+// ---------------------------------------------------------------------------
+// Multi-reader ring buffer (float samples)
+// ---------------------------------------------------------------------------
+// One producer writes; each consumer keeps its own absolute read cursor.
+// Slow consumers skip ahead when the producer laps the buffer, so fast
+// consumers are not held back. All operations are lock-free but not wait-free;
+// consumers read from a snapshot of m_head and may see a slightly stale head.
+class MultiReaderRingBuffer {
+public:
+    void init(size_t capacity) {
+        m_buf.assign(capacity, 0.0f);
+        m_cap = capacity;
+        m_head.store(0);
+    }
+
+    size_t capacity() const { return m_cap; }
+
+    size_t write(const float* src, size_t n) {
+        size_t head = m_head.load();
+        for (size_t i = 0; i < n; ++i) {
+            m_buf[(head + i) % m_cap] = src[i];
+        }
+        m_head.store(head + n);
+        return n;
+    }
+
+    // Absolute write index; consumers can use this to initialize their read
+    // cursor at the current head (skipping any data already in the buffer).
+    size_t head() const { return m_head.load(); }
+
+    // Number of samples available to read from `tail`.
+    size_t available(size_t tail) const {
+        return m_head.load() - tail;
+    }
+
+    // Read up to `n` samples into `dst`, advancing `tail`. Missing samples are
+    // zero-filled. Returns the number of non-silent samples read.
+    size_t readOrSilence(float* dst, size_t n, size_t& tail) {
+        size_t head = m_head.load();
+        if (head - tail > m_cap) {
+            // Producer has lapped this consumer; skip the overwritten samples.
+            tail = head - m_cap;
+        }
+        size_t got = std::min(n, head - tail);
+        for (size_t i = 0; i < got; ++i) {
+            dst[i] = m_buf[(tail + i) % m_cap];
+        }
+        for (size_t i = got; i < n; ++i) dst[i] = 0.0f;
+        tail += got;
+        return got;
+    }
+
+private:
+    std::vector<float> m_buf;
+    std::atomic<size_t> m_head{0};
+    size_t m_cap{0};
+};
+
 } // namespace anniaudio::core

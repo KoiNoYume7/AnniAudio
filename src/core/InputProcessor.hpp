@@ -50,8 +50,8 @@ public:
     bool running() const;
 
     // Interleaved stereo ring at 48 kHz. Single producer (this thread); multiple
-    // consumers read via readOrSilence().
-    RingBuffer& outputRing();
+    // consumers read via readOrSilence() with their own cursor.
+    MultiReaderRingBuffer& outputRing();
 
     // Live direction change, glitch-free. No-op if spatial is not enabled.
     void setDirection(float azimuthDeg, float elevationDeg);
