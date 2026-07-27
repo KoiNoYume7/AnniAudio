@@ -11,6 +11,7 @@
 //   mute <group> [on|off|toggle]
 //   output-mute <output> [on|off|toggle]
 //   set-direction <input> <azimuth> [elevation]
+//   set-hrtf <input> <sofa-path>
 //   apply-scene <name>
 //   save-scene <name>
 //   save-preset <path>
@@ -128,6 +129,7 @@ Commands:
   output-mute <output> [on|off|toggle]
 
   set-direction <input> <azimuth> [elevation]  (for spatial inputs)
+  set-hrtf <input> <sofa-path>                  (for spatial inputs)
   apply-scene <name>
   save-scene <name>
   save-preset <path>
@@ -137,8 +139,9 @@ Examples:
   %s --port 8850 set-volume Music 80
   %s mute Music
   %s set-direction Microphone 30 -5
+  %s set-hrtf Microphone assets/hrtf/sadie.sofa
 
-)", prog, prog, prog, prog);
+)", prog, prog, prog, prog, prog);
 }
 
 } // namespace
@@ -283,6 +286,16 @@ int main(int argc, char* argv[])
         if (!ctx.post("/api/inputs/" + std::to_string(in->value("id", 0u)) + "/direction",
                       {{"azimuth", az}, {"elevation", el}})) { std::fprintf(stderr, "failed\n"); return 1; }
         std::printf("input '%s' direction -> az=%.1f el=%.1f\n", positional[1].c_str(), az, el);
+        return 0;
+    }
+
+    if (cmd == "set-hrtf") {
+        if (positional.size() < 3) { std::fprintf(stderr, "usage: set-hrtf <input> <sofa-path>\n"); return 1; }
+        auto in = ctx.findInput(positional[1]);
+        if (!in) { std::fprintf(stderr, "input not found: %s\n", positional[1].c_str()); return 1; }
+        if (!ctx.patch("/api/inputs/" + std::to_string(in->value("id", 0u)),
+                       {{"hrtfPath", positional[2]}})) { std::fprintf(stderr, "failed\n"); return 1; }
+        std::printf("input '%s' hrtfPath -> %s\n", positional[1].c_str(), positional[2].c_str());
         return 0;
     }
 

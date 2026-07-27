@@ -104,7 +104,8 @@ avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_ke
 - [x] TUI: `H` toggles spatial, `Y` aims it, `3D±az` tag on the source row.
 - [x] `docs/MIXER-CONTROL-API.md` documents the fields + the direction endpoint.
 - [x] Loupedeck: an azimuth dial action (a physical knob is the natural fit).
-- [ ] Optional daily-phase polish: HRTF dataset selection, reverb for externalization.
+- [x] HRTF dataset selection per input (empty path falls back to bundled MIT KEMAR).
+- [ ] Optional daily-phase polish: reverb for externalization.
 - [x] Flip README Phase 3 to "in daily use" once it's had real mileage.
 
 ### Stage D — Per-output virtualization (Windows Sonic replacement)

@@ -304,12 +304,14 @@ bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex)
     return true;
 }
 
-std::string resolveHrtfPath()
+std::string resolveHrtfPath(const std::string& userPath)
 {
     auto exists = [](const std::string& p) {
         DWORD a = GetFileAttributesA(p.c_str());
         return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
     };
+    if (!userPath.empty() && exists(userPath)) return userPath;
+
     const char* rel = "assets/hrtf/mit_kemar.sofa";
     if (exists(rel)) return rel;
 

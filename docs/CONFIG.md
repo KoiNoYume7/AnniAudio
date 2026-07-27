@@ -36,6 +36,7 @@ Each element is an `InputConfig`:
   "spatial": false,
   "azimuth": 0.0,
   "elevation": 0.0,
+  "hrtfPath": "",
   "peak": 0.0,
   "rms": 0.0
 }
@@ -50,6 +51,7 @@ Each element is an `InputConfig`:
 - `spatial` (bool, default `false`) — HRTF binaural spatialization.
 - `azimuth` (float, default `0.0`) — 0 = front, +90 = left, -90 = right.
 - `elevation` (float, default `0.0`) — 0 = ear level, +90 = above.
+- `hrtfPath` (string, default `""`) — path to a SOFA HRTF dataset. Empty means the bundled MIT KEMAR dataset (`assets/hrtf/mit_kemar.sofa`). Changing this restarts the input.
 - `peak` / `rms` (float, runtime) — post-fader levels written by the audio thread.
 
 ### `groups` schema

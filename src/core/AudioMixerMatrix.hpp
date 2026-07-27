@@ -30,6 +30,7 @@ struct InputConfig {
     bool spatial = false;
     float azimuth = 0.0f;   // 0 = front, +90 = left, -90 = right
     float elevation = 0.0f; // 0 = ear level, +90 = above
+    std::string hrtfPath;   // SOFA file; empty -> bundled MIT KEMAR
     std::string source;
 };
 
@@ -68,6 +69,7 @@ struct InputSnapshot {
     bool spatial = false;
     float azimuth = 0.0f;
     float elevation = 0.0f;
+    std::string hrtfPath;
     float peak = 0.0f;
     float rms = 0.0f;
 };

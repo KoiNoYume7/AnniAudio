@@ -47,6 +47,7 @@ nlohmann::json toJson(const MixerStateSnapshot& s) {
         ij["spatial"] = in.spatial;
         ij["azimuth"] = in.azimuth;
         ij["elevation"] = in.elevation;
+        ij["hrtfPath"] = in.hrtfPath;
         ij["peak"] = in.peak;
         ij["rms"] = in.rms;
         j["inputs"].push_back(ij);
@@ -98,13 +99,14 @@ InputProcessorConfig toInputProcessorConfig(const InputConfig& in) {
     ic.spatial = in.spatial;
     ic.azimuth = in.azimuth;
     ic.elevation = in.elevation;
+    ic.hrtfPath = in.hrtfPath;
     return ic;
 }
 
 bool inputCfgNeedsRestart(const InputConfig& a, const InputConfig& b) {
     return a.type != b.type || a.source != b.source ||
            a.denoise != b.denoise || a.eqPreset != b.eqPreset ||
-           a.spatial != b.spatial;
+           a.spatial != b.spatial || a.hrtfPath != b.hrtfPath;
 }
 
 const char* palette[] = {
@@ -615,6 +617,7 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
         in.spatial = kv.second.cfg.spatial;
         in.azimuth = kv.second.cfg.azimuth;
         in.elevation = kv.second.cfg.elevation;
+        in.hrtfPath = kv.second.cfg.hrtfPath;
         if (kv.second.processor) {
             in.peak = kv.second.processor->peak();
             in.rms = kv.second.processor->rms();
@@ -839,6 +842,7 @@ bool AudioMixerMatrix::load(const std::string& path)
                 ic.spatial = i.value("spatial", false);
                 ic.azimuth = i.value("azimuth", 0.0f);
                 ic.elevation = i.value("elevation", 0.0f);
+                ic.hrtfPath = i.value("hrtfPath", std::string{});
                 if (ic.source.empty()) continue;
                 if (ic.name.empty()) ic.name = ic.source;
                 InputId iid = i.value("id", 0);

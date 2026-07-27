@@ -22,6 +22,7 @@ struct InputProcessorConfig {
     bool spatial = false;
     float azimuth = 0.0f;
     float elevation = 0.0f;
+    std::string hrtfPath;           // "" -> bundled MIT KEMAR SOFA
 };
 
 // Captures one input (device or application loopback), runs the capture-side DSP

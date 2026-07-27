@@ -338,7 +338,7 @@ bool InputProcessor::Impl::setupDsp(const InputProcessorConfig& cfg)
     }
 
     if (cfg.spatial) {
-        const std::string sofa = resolveHrtfPath();
+        const std::string sofa = resolveHrtfPath(cfg.hrtfPath);
         dsp_.spatialL = std::make_unique<anniaudio::dsp::Spatializer>();
         dsp_.spatialR = std::make_unique<anniaudio::dsp::Spatializer>();
         bool okL = dsp_.spatialL->loadHrtf(sofa, static_cast<double>(kProcessingRate), cvtMax_);

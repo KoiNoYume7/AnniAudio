@@ -34,6 +34,7 @@ nlohmann::json toJson(const InputSnapshot& in)
     j["spatial"]  = in.spatial;
     j["azimuth"]  = in.azimuth;
     j["elevation"]= in.elevation;
+    j["hrtfPath"] = in.hrtfPath;
     j["peak"]     = in.peak;
     j["rms"]      = in.rms;
     return j;
@@ -436,6 +437,7 @@ void MixerControlServer::Impl::registerRoutes()
         cfg.spatial  = body.value("spatial", false);
         cfg.azimuth  = body.value("azimuth", 0.0f);
         cfg.elevation= body.value("elevation", 0.0f);
+        cfg.hrtfPath = body.value("hrtfPath", std::string{});
         if (cfg.name.empty() || cfg.source.empty()) {
             sendError(res, 400, "missing required fields 'name' and 'source'"); return;
         }
@@ -478,6 +480,7 @@ void MixerControlServer::Impl::registerRoutes()
         cfg.spatial  = body.value("spatial", cur->spatial);
         cfg.azimuth  = body.value("azimuth", cur->azimuth);
         cfg.elevation= body.value("elevation", cur->elevation);
+        cfg.hrtfPath = body.value("hrtfPath", cur->hrtfPath);
         if (cfg.name.empty() || cfg.source.empty()) {
             sendError(res, 400, "'name' and 'source' cannot be empty"); return;
         }

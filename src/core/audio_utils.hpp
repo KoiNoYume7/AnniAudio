@@ -83,9 +83,11 @@ ComPtr<IAudioClient> activateProcessLoopbackClient(uint32_t pid, DWORD timeoutMs
 // Fill `wfex` with the float 48 kHz stereo format used for process loopback.
 bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex);
 
-// Locate the bundled MIT KEMAR SOFA HRTF dataset. Falls back from the repo root
-// to paths relative to the executable so tests and installed builds both work.
-std::string resolveHrtfPath();
+// Locate a SOFA HRTF dataset. If userPath is non-empty and the file exists, it
+// is used; otherwise falls back to the bundled MIT KEMAR SOFA. The fallback
+// searches from the repo root to paths relative to the executable so tests and
+// installed builds both work.
+std::string resolveHrtfPath(const std::string& userPath = std::string{});
 
 // Format conversion: src (float) -> dst (float), handling sample-rate
 // mismatch and sample-rate mismatch via linear interpolation.
