@@ -1,5 +1,11 @@
 # AnniAudio — Code / Doc Discrepancy Report (Phase 2)
 
+> **⚠️ HISTORICAL (resolved).** This is a point-in-time Phase-2 report. Its headline
+> finding — the per-(input×output) `Strip` duplication — has since been **resolved** by
+> the per-input DSP refactor (`InputProcessor → GroupBus → OutputMixer`); the legacy
+> `AudioMixer`/`Strip` path no longer exists. Kept for historical context — do not treat
+> the discrepancies below as current. See `docs/DESIGN-DSP-REFACTOR.md`.
+
 > Scope: C++ core, Python TUI, C# plugin, control API, and project operating docs.
 > No code changes were made for this report.
 

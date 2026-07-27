@@ -84,6 +84,13 @@ driver/AnniAudioCable.inf
 # TUI runtime sidecar (per-app route tracking)
 scripts/.routed_apps_*.json
 
-# Personal live mixer config (autosaved at runtime); base templates live elsewhere
-config/mixers/
+# Personal live mixer config (autosaved at runtime, e.g. main.json). The whole
+# dir is ignored EXCEPT the tracked base templates below, which are re-included
+# explicitly. Note the `config/mixers/*` form (not `config/mixers/`): a
+# trailing-slash directory exclude cannot be overridden per-file, so the `!`
+# negations only work against the `/*` contents pattern.
+config/mixers/*
+!config/mixers/default.json
+!config/mixers/loupedeck.json
+!config/mixers/test_matrix.json
 config/scenes/

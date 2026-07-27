@@ -1,0 +1,23 @@
+# AnniAudio is a Windows-first project (WASAPI core, WDK driver); the working
+# tree is CRLF. Pinning eol=crlf makes line-ending handling deterministic
+# regardless of each contributor's core.autocrlf, which removes the LF<->CRLF
+# churn and the warnings noted in CLAUDE.md. Git still stores normalized LF
+# internally, so history stays clean.
+* text=auto eol=crlf
+
+# Keep POSIX shell scripts LF even on Windows checkouts.
+*.sh  text eol=lf
+
+# ── Binary assets: never normalize, never attempt a text diff ──
+*.sofa    binary
+*.wav     binary
+*.png     binary
+*.ico     binary
+*.pfx     binary
+*.cer     binary
+*.p12     binary
+*.sys     binary
+*.cat     binary
+*.dll     binary
+*.exe     binary
+*.tar.gz  binary

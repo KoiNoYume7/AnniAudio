@@ -1,6 +1,6 @@
 # AnniAudio — Per-Input DSP Refactor Design
 
-**Status:** implemented and running in `route_cli mixer` (Stage 1–3 complete; Stage 4 cleanup and final merge pending)  
+**Status:** ✅ Complete — merged and running in `route_cli mixer`. The legacy `AudioMixer`/`Strip` per-(input×output) path has been removed; `InputProcessor → GroupBus → OutputMixer` is the live pipeline. Retained as a design record.  
 **Author:** Devin (with project context from `CLAUDE.md` and `docs/ARCHITECTURE.md`)
 
 ---
