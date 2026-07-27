@@ -87,7 +87,7 @@ For each input in a group, `AudioMixerMatrix` ensures one `InputProcessor` is ru
 
 **Consistency.** `InputProcessor` writes the processed 48 kHz stereo signal to a `MultiReaderRingBuffer`. Every `GroupBus` that consumes that input reads from the same ring with its own cursor, so all outputs hear the same cleaned/EQ'd/spatialized signal.
 
-The effective volume of a group into an output is `group.volume × outputGains[output]`. The `OutputMixer` then applies its own `master` volume/mute. All level changes use atomics and do not glitch audio.
+The effective volume of a group into an output is `group.volume × outputGains[output]`. The `OutputMixer` then applies its own `master` volume/mute and a per-buffer brickwall limiter (default -0.1 dBFS). All level changes use atomics and do not glitch audio.
 
 ---
 

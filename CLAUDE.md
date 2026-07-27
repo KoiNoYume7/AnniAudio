@@ -142,8 +142,8 @@ Advanced mode for enthusiasts who want the full routing matrix, per-app sends, D
 chain, and API. That drives the UI (simple-by-default, Advanced toggle), installer,
 background service, and auto-updater work in later phases.
 
-Near-term open items, roughly ranked: output safety limiter (hard dB ceiling);
-Loupedeck action artwork/icons; global hotkeys; graphical mixer GUI; driver signing
-+ installer — the installer technology has not been chosen (NSIS, WiX, and Inno
-Setup are candidates) and the driver-signing cost (EV cert + MS attestation) is the
-real barrier to shipping to other users. See `docs/ROADMAP.md`.
+Near-term open items, roughly ranked: Loupedeck action artwork/icons; global
+hotkeys; graphical mixer GUI; driver signing + installer — the installer technology
+has not been chosen (NSIS, WiX, and Inno Setup are candidates) and the driver-signing
+cost (EV cert + MS attestation) is the real barrier to shipping to other users. See
+`docs/ROADMAP.md`.

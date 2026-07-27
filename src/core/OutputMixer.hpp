@@ -42,6 +42,11 @@ public:
     float masterVolume() const;
     bool masterMuted() const;
 
+    // Brickwall limiter ceiling in dBFS. Default is -0.1 dBFS.
+    // Values above the ceiling scale the entire render buffer down.
+    void setLimiterThresholdDb(float db);
+    float limiterThresholdDb() const;
+
     float masterPeak() const;
     float masterRms() const;
 
