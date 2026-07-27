@@ -40,8 +40,9 @@ Audio flows one way: **inputs → groups → outputs**.
   `route_cli process`. Not part of the mixer path.
 - `cli/anniaudio.ps1` — PowerShell driver/signing control panel (`install`, `uninstall`,
   `dev-mode`, `gaming-mode`, `config`, `status`, `build`, `route`, `tui`). The `tui`
-  subcommand launches `mixer-tui.bat`. This is **not** the Phase 4 standalone
-  `anniaudio-cli` API client.
+  subcommand launches `mixer-tui.bat`.
+- `src/cli/anniaudio-cli.cpp` — Phase 4 standalone CLI client for the mixer API
+  (built as `anniaudio-cli.exe`).
 - `tests/` — Phase-0 POCs and verification tools. Not built by default; use
   `-DBUILD_TESTS=ON`. `test_mixer_matrix` loads and runs the new `AudioMixerMatrix`
   pipeline end-to-end; `test_new_pipeline` tests `InputProcessor → GroupBus →
@@ -78,6 +79,7 @@ cmake --build build --target route_cli --config Release
 ```powershell
 .\start-mixer.bat            # mixer + control API on 8850 (loads config/mixers/main.json)
 .\mixer-tui.bat              # curses TUI client (separate terminal)
+.\anniaudio-cli.exe state    # standalone CLI: state, groups, outputs, set-volume, mute, etc.
 .\stop-mixer.bat             # stop it (before rebuilding)
 .\install-autostart.bat      # hidden-at-logon launcher via Task Scheduler task (user session, not a service; no admin). `uninstall` arg removes it
 ```

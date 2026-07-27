@@ -128,8 +128,8 @@ better than Windows Sonic.
 - [ ] API key auth, loopback-only by default, LAN as explicit opt-in (current mixer is loopback/no-auth)
 - [x] Global hotkeys via Win32 `RegisterHotKey`
 - [x] All hotkey bindings configurable in `config/hotkeys.json`
-- [ ] Standalone CLI client (`anniaudio-cli`) wrapping the API
-- [ ] CLI: list devices, get/set routes, load preset, toggle features, adjust gain
+- [x] Standalone CLI client (`anniaudio-cli`) wrapping the API
+- [x] CLI: list devices, get/set routes, load preset, toggle features, adjust gain
 
 **Exit criteria:** Every feature can be triggered from a PowerShell one-liner via a dedicated CLI.
 

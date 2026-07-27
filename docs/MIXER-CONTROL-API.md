@@ -1,8 +1,9 @@
 # AnniAudio — Mixer Control API
 
 The mixer (`route_cli mixer`) exposes a local HTTP+SSE control API on `127.0.0.1`
-(default port `8850`). Any client — the curses TUI, the Loupedeck plugin, a future
-graphical UI, or a manual `curl` script — is just another consumer of this API.
+(default port `8850`). Any client — the curses TUI, the Loupedeck plugin, the
+`anniaudio-cli` standalone CLI, a future graphical UI, or a manual `curl` script —
+is just another consumer of this API.
 This supersedes the earlier MIDI-CC-binding approach that lived directly inside
 `cmdMixer`.
 

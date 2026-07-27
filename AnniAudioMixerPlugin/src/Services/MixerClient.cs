@@ -23,6 +23,15 @@ namespace Loupedeck.AnniAudioMixerPlugin
         public Boolean Muted { get; set; }
     }
 
+    public sealed class MixerInput
+    {
+        public UInt32 Id { get; init; }
+        public String Name { get; init; }
+        public Boolean Spatial { get; set; }
+        public Double Azimuth { get; set; }
+        public Double Elevation { get; set; }
+    }
+
     // Client for the mixer control API served by `route_cli mixer` on localhost
     // (see docs/MIXER-CONTROL-API.md in the AnniAudio repository).
     //
@@ -42,6 +51,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
         private readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
 
         private readonly Object _lock = new Object();
+        private List<MixerInput> _inputs = new List<MixerInput>();
         private List<MixerGroup> _groups = new List<MixerGroup>();
         private List<MixerOutput> _outputs = new List<MixerOutput>();
         private List<String> _scenes = new List<String>();
@@ -81,6 +91,11 @@ namespace Loupedeck.AnniAudioMixerPlugin
             this._http.Dispose();
         }
 
+        public MixerInput[] Inputs
+        {
+            get { lock (this._lock) { return this._inputs.ToArray(); } }
+        }
+
         public MixerGroup[] Groups
         {
             get { lock (this._lock) { return this._groups.ToArray(); } }
@@ -102,6 +117,14 @@ namespace Loupedeck.AnniAudioMixerPlugin
             {
                 this.QueueSendLocked($"scene{name}", "POST", "/api/scenes/apply",
                     JsonSerializer.Serialize(new { name }));
+            }
+        }
+
+        public MixerInput FindInput(String idStr)
+        {
+            lock (this._lock)
+            {
+                return this._inputs.FirstOrDefault(i => i.Id.ToString() == idStr);
             }
         }
 
@@ -150,6 +173,22 @@ namespace Loupedeck.AnniAudioMixerPlugin
                 this._holdUntil[$"gmute{idStr}"] = DateTime.UtcNow.AddMilliseconds(HoldMs);
                 this.QueueSendLocked($"gmute{idStr}", "PATCH", $"/api/groups/{idStr}",
                     $"{{\"muted\":{(g.Muted ? "true" : "false")}}}");
+            }
+        }
+
+        public void NudgeInputAzimuth(String idStr, Int32 deltaDegrees)
+        {
+            lock (this._lock)
+            {
+                var input = this._inputs.FirstOrDefault(x => x.Id.ToString() == idStr);
+                if (input == null || !input.Spatial)
+                {
+                    return;
+                }
+                input.Azimuth = Math.Clamp(input.Azimuth + deltaDegrees, -180.0, 180.0);
+                this._holdUntil[$"iaz{idStr}"] = DateTime.UtcNow.AddMilliseconds(HoldMs);
+                var body = JsonSerializer.Serialize(new { azimuth = input.Azimuth, elevation = input.Elevation });
+                this.QueueSendLocked($"iaz{idStr}", "POST", $"/api/inputs/{idStr}/direction", body);
             }
         }
 
@@ -288,6 +327,19 @@ namespace Loupedeck.AnniAudioMixerPlugin
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
+            var inputs = new List<MixerInput>();
+            foreach (var i in root.GetProperty("inputs").EnumerateArray())
+            {
+                inputs.Add(new MixerInput
+                {
+                    Id = i.GetProperty("id").GetUInt32(),
+                    Name = i.GetProperty("name").GetString() ?? "?",
+                    Spatial = i.TryGetProperty("spatial", out var s) && s.GetBoolean(),
+                    Azimuth = i.TryGetProperty("azimuth", out var a) ? a.GetDouble() : 0.0,
+                    Elevation = i.TryGetProperty("elevation", out var e) ? e.GetDouble() : 0.0,
+                });
+            }
+
             var groups = new List<MixerGroup>();
             foreach (var g in root.GetProperty("groups").EnumerateArray())
             {
@@ -315,6 +367,19 @@ namespace Loupedeck.AnniAudioMixerPlugin
             {
                 // Keep recently written values over (possibly stale) polled ones.
                 var now = DateTime.UtcNow;
+                foreach (var input in inputs)
+                {
+                    var old = this._inputs.FirstOrDefault(x => x.Id == input.Id);
+                    if (old == null)
+                    {
+                        continue;
+                    }
+                    if (this._holdUntil.TryGetValue($"iaz{input.Id}", out var ta) && now < ta)
+                    {
+                        input.Azimuth = old.Azimuth;
+                        input.Elevation = old.Elevation;
+                    }
+                }
                 foreach (var g in groups)
                 {
                     var old = this._groups.FirstOrDefault(x => x.Id == g.Id);
@@ -348,6 +413,7 @@ namespace Loupedeck.AnniAudioMixerPlugin
                     }
                 }
 
+                this._inputs = inputs;
                 this._groups = groups;
                 this._outputs = outputs;
             }
@@ -355,7 +421,8 @@ namespace Loupedeck.AnniAudioMixerPlugin
             // Only report a change when something the device displays changed;
             // meter levels in the state json are deliberately not part of this.
             var signature = String.Join("|",
-                groups.Select(g => $"{g.Id}:{g.Name}:{Math.Round(g.Volume)}:{g.Muted}")
+                inputs.Select(i => $"{i.Id}:{i.Name}:{i.Spatial}:{Math.Round(i.Azimuth)}")
+                      .Concat(groups.Select(g => $"{g.Id}:{g.Name}:{Math.Round(g.Volume)}:{g.Muted}"))
                       .Concat(outputs.Select(o => $"{o.Name}:{Math.Round(o.Master)}:{o.Muted}")));
             if (signature == lastSignature)
             {

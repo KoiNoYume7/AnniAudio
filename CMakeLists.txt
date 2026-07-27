@@ -123,6 +123,11 @@ target_link_libraries(audio_dsp PUBLIC rnnoise kissfft mysofa)
 add_executable(route_cli src/core/route_cli.cpp src/core/MixerControlServer.cpp)
 target_include_directories(route_cli PRIVATE src/core include src/dsp)
 target_link_libraries(route_cli PRIVATE audio_core audio_dsp ole32 avrt ws2_32)
+
+# Phase 4 standalone CLI client for the local mixer API
+add_executable(anniaudio-cli src/cli/anniaudio-cli.cpp)
+target_include_directories(anniaudio-cli PRIVATE src/cli third_party)
+target_link_libraries(anniaudio-cli PRIVATE ws2_32)
 # add_executable(poc_nvidia src/noise/poc_nvidia.cpp)
 
 message(STATUS "AnniAudio ${PROJECT_VERSION} — Phase 2 (Mixer + DSP)")

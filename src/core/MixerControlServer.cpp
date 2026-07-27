@@ -832,6 +832,21 @@ void MixerControlServer::Impl::registerRoutes()
         }
         sendJson(res, nlohmann::json{ { "saved", path } });
     });
+
+    svr.Post("/api/presets/load", [this](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); }
+        catch (const std::exception&) { sendError(res, 400, "invalid JSON body"); return; }
+
+        std::string path = body.value("path", std::string{});
+        if (path.empty()) { sendError(res, 400, "missing 'path'"); return; }
+        if (!isSafePresetPath(path)) { sendError(res, 400, "path must be a relative path with no '..' segments"); return; }
+
+        if (!matrix_.load(path)) { sendError(res, 500, "failed to load preset"); return; }
+        setAutosavePath(path);
+        markDirty();
+        sendJson(res, nlohmann::json{ { "loaded", path } });
+    });
 }
 
 } // namespace anniaudio::core
