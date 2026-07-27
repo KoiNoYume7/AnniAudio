@@ -17,7 +17,8 @@ X-API-Key: <apiKey>
 ```
 
 `anniaudio-cli` accepts `--api-key <key>` for this. Requests without a matching
-key are rejected with `401 Unauthorized`. Binding to `0.0.0.0` (or any non-loopback
+key are rejected with `401 Unauthorized`. The same header must be sent during the
+WebSocket handshake (`/api/ws`). Binding to `0.0.0.0` (or any non-loopback
 address) without an `apiKey` produces a warning log but is not blocked.
 
 ---
@@ -277,6 +278,8 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a
 | `GET`    | `/api/endpoints`        | —                                               | Live WASAPI endpoints, for the source picker |
 | `GET`    | `/api/applications`     | —                                               | Running audio sessions (process id, `name`, `displayName`, `windowTitle`, `endpoint`, `isInput`, `isActive`, `isMuted`, `volume`, `isSystem`). One entry per process; the reported endpoint is the session actually playing (active preferred over inactive, render over capture). `windowTitle` is the app's main window title (resolved through same-exe parent processes for windowless audio children), for identification only |
 | `GET`    | `/api/events`           | —                                               | Server-Sent Events stream; pushes a `state` event on every change, plus a periodic heartbeat comment |
+| `WebSocket` | `/api/ws`            | —                                            | Same live state stream as SSE, delivered as WebSocket text frames (one JSON snapshot per change). Useful for browser/JS clients and future UI |
+
 | `POST`   | `/api/inputs`           | `{ name, type, source, denoise?, eqPreset?, spatial?, azimuth?, elevation?, hrtfPath? }` | Add an input source (type = `device` or `application`). `denoise` enables RNNoise suppression (48 kHz captures); `eqPreset` = `"voice"` enables the built-in voice EQ. `spatial` enables HRTF binaural positioning at `azimuth`/`elevation` (degrees; azimuth 0 = front, +90 = left, -90 = right; elevation 0 = ear level, +90 = above) — requires a stereo-or-wider output. `hrtfPath` is a SOFA dataset path; empty means bundled MIT KEMAR. All run engine-side before mixing |
 | `PATCH`  | `/api/inputs/{id}`      | `{ name?, type?, source?, denoise?, eqPreset?, spatial?, azimuth?, elevation?, hrtfPath? }`| Partial update of an input (omitted fields keep their value); re-creates routes for any groups that use it. Use this to toggle `spatial` on/off or change `hrtfPath`; for smooth live direction changes prefer `POST /api/inputs/{id}/direction` |
 | `POST`   | `/api/inputs/{id}/direction` | `{ azimuth?, elevation? }`                 | Live HRTF direction change for a spatialized input. Updates the running spatializer in place without rebuilding its routes — glitch-free and safe at knob-turn rates. No-op on the audio if the input isn't spatial (value is still stored) |

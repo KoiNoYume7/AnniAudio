@@ -9,9 +9,11 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include <windows.h>
 
@@ -208,6 +210,10 @@ struct MixerControlServer::Impl {
 
     std::string apiKey;
 
+    // WebSocket clients; the ws::WebSocket handler threads add/remove themselves.
+    std::mutex wsClientsMutex;
+    std::set<httplib::ws::WebSocket*> wsClients;
+
     explicit Impl(AudioMixerMatrix& m) : matrix(m) {}
 
     void setAutosavePath(const std::string& path) {
@@ -250,6 +256,19 @@ struct MixerControlServer::Impl {
         }
     }
 
+    void pushToAllWsClients(const std::string& text)
+    {
+        std::lock_guard<std::mutex> lk(wsClientsMutex);
+        for (auto it = wsClients.begin(); it != wsClients.end();) {
+            auto* ws = *it;
+            if (!ws->is_open() || !ws->send(text)) {
+                it = wsClients.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
+
     void broadcastLoop()
     {
         // Wait for the listen thread to actually start, otherwise we can exit
@@ -274,6 +293,7 @@ struct MixerControlServer::Impl {
             if (current != lastBroadcastState) {
                 lastBroadcastState = current;
                 pushToAllClients("data: " + current + "\n\n");
+                pushToAllWsClients(current);
             }
         }
     }
@@ -323,6 +343,13 @@ bool MixerControlServer::start(uint16_t port,
 
 void MixerControlServer::stop()
 {
+    {
+        std::lock_guard<std::mutex> lk(m_impl->wsClientsMutex);
+        for (auto* ws : m_impl->wsClients) {
+            if (ws && ws->is_open()) ws->close(httplib::ws::CloseStatus::Normal);
+        }
+        m_impl->wsClients.clear();
+    }
     m_impl->svr.stop();
     m_impl->dirtyCv.notify_all();
     if (m_impl->listenThread.joinable()) m_impl->listenThread.join();
@@ -340,7 +367,7 @@ void MixerControlServer::Impl::registerRoutes()
     svr.set_default_headers({
         { "Access-Control-Allow-Origin", "*" },
         { "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS" },
-        { "Access-Control-Allow-Headers", "Content-Type" },
+        { "Access-Control-Allow-Headers", "Content-Type, X-API-Key" },
     });
 
     // Safety net: malformed bodies (wrong JSON types, huge IDs, etc.) must not
@@ -436,6 +463,26 @@ void MixerControlServer::Impl::registerRoutes()
         std::lock_guard<std::mutex> clk(client->mutex);
         client->queue.push_back("data: " + stateJson(matrix).dump() + "\n\n");
         client->cv.notify_all();
+    });
+
+    // WebSocket event stream: same JSON state frames as SSE, but as WebSocket text messages.
+    // Authentication (if configured) is handled by the pre-routing handler before upgrade.
+    svr.WebSocket("/api/ws", [this](const httplib::Request&, httplib::ws::WebSocket& ws) {
+        {
+            std::lock_guard<std::mutex> lk(wsClientsMutex);
+            wsClients.insert(&ws);
+        }
+        ws.send(stateJson(matrix).dump());
+        while (svr.is_running() && ws.is_open()) {
+            std::string msg;
+            auto rr = ws.read(msg);
+            if (rr == httplib::ws::ReadResult::Fail) break;
+            // Client-to-server messages are reserved for future use.
+        }
+        {
+            std::lock_guard<std::mutex> lk(wsClientsMutex);
+            wsClients.erase(&ws);
+        }
     });
 
     // -----------------------------------------------------------------------
