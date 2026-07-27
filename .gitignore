@@ -94,3 +94,6 @@ config/mixers/*
 !config/mixers/loupedeck.json
 !config/mixers/test_matrix.json
 config/scenes/
+
+# Live user hotkey bindings; the example template is tracked.
+config/hotkeys.json
