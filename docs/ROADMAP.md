@@ -51,7 +51,7 @@ Phases are defined by completion criteria, not dates. Work on phases can overlap
 - [x] Per-input/per-group volume/mute, per-output master/mute
 - [x] Send gains and scenes (level snapshots)
 - [x] Audio thread at `THREAD_PRIORITY_TIME_CRITICAL`
-- [ ] Output safety limiter (hard dB ceiling)
+- [x] Output safety limiter (hard dB ceiling)
 
 **Exit criteria:** Mic input through AnniAudio has audible noise removed. EQ visibly shapes the frequency response. CPU usage is reasonable.
 
@@ -103,7 +103,7 @@ avoids a full zlib build). Default dataset: **MIT KEMAR** at `assets/hrtf/mit_ke
 ### Stage C — Surface + document
 - [x] TUI: `H` toggles spatial, `Y` aims it, `3D±az` tag on the source row.
 - [x] `docs/MIXER-CONTROL-API.md` documents the fields + the direction endpoint.
-- [ ] Loupedeck: an azimuth dial action (a physical knob is the natural fit).
+- [x] Loupedeck: an azimuth dial action (a physical knob is the natural fit).
 - [ ] Optional daily-phase polish: HRTF dataset selection, reverb for externalization.
 - [x] Flip README Phase 3 to "in daily use" once it's had real mileage.
 
