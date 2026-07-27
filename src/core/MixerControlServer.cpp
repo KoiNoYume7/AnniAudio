@@ -842,7 +842,7 @@ void MixerControlServer::Impl::registerRoutes()
         if (path.empty()) { sendError(res, 400, "missing 'path'"); return; }
         if (!isSafePresetPath(path)) { sendError(res, 400, "path must be a relative path with no '..' segments"); return; }
 
-        if (!matrix_.load(path)) { sendError(res, 500, "failed to load preset"); return; }
+        if (!matrix.load(path)) { sendError(res, 500, "failed to load preset"); return; }
         setAutosavePath(path);
         markDirty();
         sendJson(res, nlohmann::json{ { "loaded", path } });

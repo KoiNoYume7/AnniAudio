@@ -10,6 +10,9 @@
 #include <objidl.h>
 #include <tlhelp32.h>
 
+#pragma comment(lib, "mmdevapi.lib")
+#pragma comment(lib, "ole32.lib")
+
 namespace anniaudio::core {
 
 const GUID KSCONST_SUBTYPE_IEEE_FLOAT =
