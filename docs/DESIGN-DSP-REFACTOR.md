@@ -188,16 +188,16 @@ The internal mapping changes:
 
 ### Stage 4: Remove legacy `AudioMixer`/`Strip` path
 
-- [ ] Delete `AudioMixer.cpp/hpp` and strip-based route logic from `AudioMixerMatrix`.
-- [ ] Remove or port `tests/test_mixer_live_edit.cpp`.
-- [ ] Decide whether to rename `OutputMixer` → `AudioMixer` (keep the clearer names for now).
+- [x] Delete `AudioMixer.cpp/hpp` and strip-based route logic from `AudioMixerMatrix`.
+- [x] Remove `tests/test_mixer_live_edit.cpp`.
+- [x] Keep `OutputMixer` name (clearer than reusing `AudioMixer`).
 
 ### Stage 5: Document and merge
 
 - [x] Update `docs/ARCHITECTURE.md`.
 - [x] Update `docs/MIXER-CONTROL-API.md`.
 - [x] Update `CLAUDE.md` architecture notes.
-- [ ] Update `docs/CONFIG.md` if needed.
+- [x] Update `docs/CONFIG.md` if needed (no changes required).
 - [ ] Final merge `dev` → `main`.
 
 ## 10. Risks and open questions

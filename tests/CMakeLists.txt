@@ -24,9 +24,6 @@ target_link_libraries(poc_wasapi PRIVATE ole32 avrt)
 add_executable(test_routing test_routing.cpp)
 target_link_libraries(test_routing PRIVATE audio_core)
 
-add_executable(test_mixer_live_edit test_mixer_live_edit.cpp)
-target_link_libraries(test_mixer_live_edit PRIVATE audio_core)
-
 add_executable(test_input_processor test_input_processor.cpp)
 target_link_libraries(test_input_processor PRIVATE audio_core)
 

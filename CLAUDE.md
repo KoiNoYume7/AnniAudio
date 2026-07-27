@@ -45,8 +45,8 @@ Audio flows one way: **inputs → groups → outputs**.
 - `tests/` — Phase-0 POCs and verification tools. Not built by default; use
   `-DBUILD_TESTS=ON`. `test_mixer_matrix` loads and runs the new `AudioMixerMatrix`
   pipeline end-to-end; `test_new_pipeline` tests `InputProcessor → GroupBus →
-  OutputMixer` in isolation. `test_mixer_live_edit` still exercises the legacy
-  per-output `AudioMixer` path (pending removal in the Stage 5 cleanup).
+  OutputMixer` in isolation. `test_mixer_live_edit` has been removed along with the
+  legacy `AudioMixer`/`Strip` path.
 - `scripts/mixer_tui.py`, `scripts/tui_utils.py`, `scripts/tui_ui.py` — curses TUI
   split into entry/utility/ui modules.
 

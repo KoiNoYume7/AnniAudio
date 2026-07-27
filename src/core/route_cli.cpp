@@ -1,5 +1,4 @@
 #include "AudioEngine.hpp"
-#include "AudioMixer.hpp"
 #include "AudioMixerMatrix.hpp"
 #include "MixerControlServer.hpp"
 #include "eq.hpp"

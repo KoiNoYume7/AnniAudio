@@ -1,7 +1,6 @@
 add_library(audio_core STATIC
     audio_utils.cpp
     AudioEngine.cpp
-    AudioMixer.cpp
     AudioMixerMatrix.cpp
     GroupBus.cpp
     InputProcessor.cpp
