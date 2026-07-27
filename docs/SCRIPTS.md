@@ -10,8 +10,8 @@ PowerShell scripts under `scripts/`.
 | `start-mixer.bat` | Launch `route_cli mixer config/mixers/main.json` on the default control API port (`8850`) |
 | `stop-mixer.bat` | Force-stop any running `route_cli.exe` (autosave means state is preserved) |
 | `mixer-tui.bat` | Start the curses TUI, installing `windows-curses` / `winappaudiorouter` if missing |
-| `install-autostart.bat` | Add the mixer to the current user's `HKCU\...\Run` registry key |
-| `uninstall-autostart.bat` | Remove the autostart registry entry |
+| `install-autostart.bat` | Register a Task Scheduler logon task (`AnniAudioMixer`, un-elevated, user session) so the mixer starts at logon ahead of the Run-key throttle; also adds an `HKCU\...\Run` entry for Task Manager visibility. Pass `uninstall` to remove everything |
+| `uninstall-autostart.bat` | Remove the autostart (delegates to `install-autostart.bat uninstall`) |
 
 ## Driver build / signing / install (`scripts/*.ps1`)
 

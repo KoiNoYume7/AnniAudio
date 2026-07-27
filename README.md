@@ -24,7 +24,7 @@ What works today:
 - **Scenes**: named level snapshots (volumes, mutes, send gains, output masters) applied instantly by name.
 - **Loupedeck plugin** (`AnniAudioMixerPlugin/`): a real Logi Actions C# SDK plugin with dials and touch buttons for group/output volume, mute, and scene recall, driven entirely through the control API.
 - **HRTF spatial audio**: any input can be positioned in 3D (azimuth/elevation), convolved engine-side against MIT KEMAR HRIRs (FFT overlap-add), with live, glitch-free re-aiming over the API.
-- **Autostart at logon** (HKCU Run registry key), a curses **TUI** front-end, and Phase-0 POCs in `tests/` all still pass.
+- **Autostart at logon** (Task Scheduler logon task, no admin), a curses **TUI** front-end, and Phase-0 POCs in `tests/` all still pass.
 
 Not yet finished:
 
@@ -247,7 +247,11 @@ Route repair is **off by default**. Some apps (e.g. Spotify) reassert their own 
 .\stop-mixer.bat           # stop a running mixer (e.g. before rebuilding route_cli)
 ```
 
-This adds an entry to the current user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key that launches `route_cli.exe mixer` with a hidden window at every logon. It deliberately is not a Windows service: WASAPI audio endpoints only exist inside the user session, so the mixer has to start at logon, not at boot. Config is loaded from `config/mixers/main.json` (autosaved continuously while running), so a force-stop never loses state.
+This registers a **Task Scheduler logon task** (`AnniAudioMixer`) that launches `route_cli.exe mixer` with a hidden window at logon. A logon task is handled outside the Run-key/Startup-folder startup *throttle* — the deliberate "let the desktop settle" delay Windows applies to Run entries — so the mixer comes up around the same time as your other tray apps instead of well after them. It runs at `Limited` (un-elevated) run level as the current interactive user, so **no admin is needed**, and with no execution time limit so a long session is never auto-killed (the Task Scheduler default is 3 days). It deliberately is not a boot-time Windows service: WASAPI audio endpoints only exist inside the user session, so the mixer has to start at logon, not at boot.
+
+The installer also adds an `HKCU\...\Run` entry pointing at the same launcher, purely so the item is visible in **Task Manager → Startup apps** (scheduled tasks never show there). The launcher is single-instance-guarded — it skips if `route_cli.exe` is already running — so the task and the Run entry can never double-start the mixer. Note that toggling the Task Manager entry off does *not* stop autostart; the scheduled task is the real mechanism, so use `.\uninstall-autostart.bat` (or disable/remove the `AnniAudioMixer` task in `taskschd.msc`) to fully turn it off.
+
+Config is loaded from `config/mixers/main.json` (autosaved continuously while running), so a force-stop never loses state.
 
 #### Loupedeck plugin
 
