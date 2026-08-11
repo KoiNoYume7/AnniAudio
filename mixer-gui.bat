@@ -12,8 +12,8 @@ set "ELECTRON_RUN_AS_NODE="
 
 cd gui
 
-if not exist "node_modules\" (
-  echo Installing GUI dependencies (one time)...
+if not exist "node_modules" (
+  echo Installing GUI dependencies one time...
   call npm install
   if %errorlevel% neq 0 (
     echo GUI dependency install failed.
