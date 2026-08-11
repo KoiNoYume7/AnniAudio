@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AnniAudio Mixer</title>
+  <link rel="stylesheet" href="styles/global.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>AnniAudio Mixer</h1>
+      <div class="toolbar">
+        <span id="status" class="status disconnected">Disconnected</span>
+        <input id="port" type="number" value="8850" min="0" max="65535" title="Control API port">
+        <button id="btn-reconnect" title="Reconnect to mixer">Reconnect</button>
+        <button id="btn-add-output" class="primary">+ Output</button>
+        <button id="btn-add-group" class="primary">+ Group</button>
+      </div>
+    </header>
+    <main id="main">
+      <div id="matrix">
+        <section class="rail" id="inputs-rail">
+          <div class="section-title">Inputs <span class="count" id="input-count">0</span></div>
+          <div class="node-list" id="inputs-list"></div>
+          <div class="add-btn" id="btn-add-input">+ Add input</div>
+        </section>
+        <section class="rail" id="groups-rail">
+          <div class="section-title">Groups <span class="count" id="group-count">0</span></div>
+          <div class="node-list" id="groups-list"></div>
+          <div class="add-btn" id="btn-add-group-rail">+ Add group</div>
+        </section>
+        <section class="rail" id="outputs-rail">
+          <div class="section-title">Outputs <span class="count" id="output-count">0</span></div>
+          <div class="node-list" id="outputs-list"></div>
+          <div class="add-btn" id="btn-add-output-rail">+ Add output</div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="modal">
+    <div class="modal" id="modal-body">
+      <h2 id="modal-title">Dialog</h2>
+      <div id="modal-content"></div>
+      <div class="modal-actions" id="modal-actions">
+        <button id="modal-cancel">Cancel</button>
+        <button id="modal-ok" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

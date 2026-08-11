@@ -1,0 +1,8 @@
+# ── Node / Electron build artifacts ──
+node_modules/
+dist/
+.electron-builder/
+
+# ── Dev scratch files ──
+test-*.json
+test-*.py

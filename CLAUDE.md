@@ -88,6 +88,25 @@ The mixer is usually already running on 8850 with the user's real audio. You can
 inspect live state read-only with `curl -s http://127.0.0.1:8850/api/state` and
 `/api/applications`, `/api/endpoints`, `/api/scenes`. Prefer this over guessing.
 
+## Electron GUI (Phase 5)
+
+The graphical mixer lives under `gui/` and is a vanilla-JS Electron app.
+
+```powershell
+cd gui
+npm install              # once
+npm start                # dev: launches Electron against 127.0.0.1:8850
+.\..\mixer-gui.bat      # or use the repo root launcher
+```
+
+- `main.cjs` is the Electron main process; `src/app.js` is the renderer entry.
+- The renderer polls `GET /api/state` every 500ms. The WebSocket endpoint
+  (`/api/ws`) sends an initial snapshot but the current `httplib` WebSocket
+  handler can block the broadcast thread, so the GUI uses reliable HTTP polling
+  for now.
+- Some shells set `ELECTRON_RUN_AS_NODE=1`, which breaks `app.whenReady()`.
+  `mixer-gui.bat` and `package.json` now clear that variable before launching.
+
 ## Checks before committing
 
 - TUI (Python): `python -m pyflakes scripts/mixer_tui.py scripts/tui_utils.py scripts/tui_ui.py && python -m py_compile scripts/mixer_tui.py scripts/tui_utils.py scripts/tui_ui.py`
@@ -146,7 +165,7 @@ background service, and auto-updater work in later phases.
 
 Near-term open items, roughly ranked: WebSocket event stream as an alternative to
 SSE; per-output HRTF virtualization / Windows Sonic replacement (needs multi-channel
-output/virtual driver work); Loupedeck action artwork/icons; graphical mixer GUI;
-driver signing + installer — the installer technology has not been chosen (NSIS,
+output/virtual driver work); Loupedeck action artwork/icons; Electron mixer GUI
+polish / packaging; driver signing + installer — the installer technology has not been chosen (NSIS,
 WiX, and Inno Setup are candidates) and the driver-signing cost (EV cert + MS
 attestation) is the real barrier to shipping to other users. See `docs/ROADMAP.md`.

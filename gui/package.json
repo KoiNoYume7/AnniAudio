@@ -1,0 +1,18 @@
+{
+  "name": "anniaudio-gui",
+  "version": "0.2.0",
+  "description": "AnniAudio mixer graphical UI",
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "set \"ELECTRON_RUN_AS_NODE=\" && electron .",
+    "build": "electron-builder",
+    "postinstall": "node -e \"console.log('[gui] deps ready')\""
+  },
+  "author": "KoiNoYume7",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

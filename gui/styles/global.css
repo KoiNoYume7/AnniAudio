@@ -1,0 +1,606 @@
+/* ── AnniAudio Mixer GUI — tokens and base ── */
+
+:root {
+  --bg:        #0b0d12;
+  --bg2:       #0f1118;
+  --bg3:       #14161d;
+  --surface:   #1c1f29;
+  --surface-h: #252a36;
+  --border:    #2a2e3a;
+  --border-h:  #3a3f4d;
+  --text:      #e4e6eb;
+  --text-soft: #b8bec8;
+  --muted:     #8b92a8;
+  --accent:    #3b82f6;
+  --accent2:   #10b981;
+  --accent3:   #8b5cf6;
+  --danger:    #ef4444;
+  --warning:   #eab308;
+  --radius:    6px;
+  --radius-lg: 10px;
+  --shadow:    0 4px 12px rgba(0, 0, 0, 0.35);
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  height: 52px;
+  padding: 0 16px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status.connected { color: var(--accent2); }
+.status.connecting { color: var(--warning); }
+.status.error { color: var(--danger); }
+.status.warn { color: var(--warning); }
+
+input, select, button {
+  background: var(--bg2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+input:hover, select:hover, button:hover {
+  border-color: var(--border-h);
+}
+
+input:focus, select:focus, button:focus {
+  border-color: var(--accent);
+}
+
+button {
+  background: var(--surface);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--surface-h);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.primary:hover {
+  filter: brightness(1.1);
+}
+
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+button.danger:hover {
+  filter: brightness(1.1);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input[type=number] {
+  width: 72px;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+main.loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+/* ── Section banners ── */
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.section-title .count {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ── Matrix layout ── */
+#matrix {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1.25fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.rail {
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.node-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 8px;
+  font-style: italic;
+}
+
+/* ── Cards ── */
+.card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: 14px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.card-title:focus {
+  background: var(--bg2);
+  outline: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.card-meta {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Meters ── */
+.meter {
+  width: 8px;
+  height: 56px;
+  background: var(--bg2);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.meter-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(to top, var(--accent2) 0%, var(--warning) 65%, var(--danger) 100%);
+  border-radius: 0 0 4px 4px;
+  transition: height 0.05s linear;
+}
+
+.meter-peak {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: #fff;
+  border-radius: 1px;
+  transition: bottom 0.05s linear;
+}
+
+/* ── Faders ── */
+.fader-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fader-row input[type=range] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  outline: none;
+}
+
+.fader-row input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.fader-val {
+  width: 2.6rem;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Buttons ── */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn-mute {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.btn-mute.muted {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn-icon {
+  font-size: 13px;
+  padding: 2px 6px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+.tag.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ── Modals ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-overlay.open {
+  display: flex;
+}
+
+.modal {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  width: 90%;
+  max-width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal h2 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+}
+
+.modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-row label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.modal-row input,
+.modal-row select {
+  width: 100%;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ── Add button ── */
+.add-btn {
+  margin: 0 10px 10px;
+  padding: 10px;
+  text-align: center;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.add-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-h);
+}
+
+/* ── Card variants ── */
+.input-card {
+  border-left: 3px solid var(--accent3);
+}
+
+.group-card {
+  border-left: 3px solid var(--accent);
+}
+
+.output-card {
+  border-left: 3px solid var(--accent2);
+}
+
+/* ── Input row inside group ── */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: var(--bg2);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.input-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input-row .tags {
+  display: flex;
+  gap: 4px;
+}
+
+/* ── Send gains ── */
+.send-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.send-row .send-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.send-row .fader-row {
+  flex: 1;
+}
+
+.send-row .fader-row input[type=range] {
+  flex: 1;
+}
+
+/* ── DSP editor row ── */
+.dsp-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.dsp-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.dsp-row input[type=number] {
+  width: 56px;
+}
+
+/* ── Source picker modal ── */
+.picker-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+
+.picker-row {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.picker-row:last-child {
+  border-bottom: none;
+}
+
+.picker-row:hover {
+  background: var(--surface);
+}
+
+.picker-row .sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ── Status colours ── */
+.status.disconnected { color: var(--muted); }
+.status.connected { color: var(--accent2); }
+.status.error { color: var(--danger); }
+
+/* ── Inputs/groups/outputs list layout ── */
+#inputs-list .card,
+#groups-list .card,
+#outputs-list .card {
+  margin-bottom: 0;
+}
+
+/* ── Inline form helpers ── */
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.field-row label {
+  width: 100px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.field-row input,
+.field-row select {
+  flex: 1;
+}
