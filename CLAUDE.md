@@ -36,18 +36,18 @@ Audio flows one way: **inputs → groups → outputs**.
 - `src/dsp/` (`audio_dsp` lib) — `EqChain` (biquads), `NoiseSuppressor` (RNNoise),
   and `Spatializer` (HRTF FFT overlap-add convolution). Real-time-safe after
   `prepare()`.
-- `src/core/AudioEngine.cpp` — the older single source→output engine, used only by
-  `route_cli process`. Not part of the mixer path.
+- `src/core/global_hotkeys.cpp` — Windows `RegisterHotKey` integration loaded by
+  `route_cli mixer` from `config/hotkeys.json`.
 - `cli/anniaudio.ps1` — PowerShell driver/signing control panel (`install`, `uninstall`,
-  `dev-mode`, `gaming-mode`, `config`, `status`, `build`, `route`, `tui`). The `tui`
-  subcommand launches `mixer-tui.bat`.
+  `dev-mode`, `gaming-mode`, `config`, `status`, `build`, `version`, `restore-default`,
+  `tui`). The `tui` subcommand launches `mixer-tui.bat`.
 - `src/cli/anniaudio-cli.cpp` — Phase 4 standalone CLI client for the mixer API
   (built as `anniaudio-cli.exe`).
 - `tests/` — Phase-0 POCs and verification tools. Not built by default; use
   `-DBUILD_TESTS=ON`. `test_mixer_matrix` loads and runs the new `AudioMixerMatrix`
   pipeline end-to-end; `test_new_pipeline` tests `InputProcessor → GroupBus →
-  OutputMixer` in isolation. `test_mixer_live_edit` has been removed along with the
-  legacy `AudioMixer`/`Strip` path.
+  OutputMixer` in isolation. The legacy `AudioMixer`/`Strip` path and
+  `test_mixer_live_edit` have been removed.
 - `scripts/mixer_tui.py`, `scripts/tui_utils.py`, `scripts/tui_ui.py` — curses TUI
   split into entry/utility/ui modules.
 
@@ -90,7 +90,9 @@ inspect live state read-only with `curl -s http://127.0.0.1:8850/api/state` and
 
 ## Electron GUI (Phase 5)
 
-The graphical mixer lives under `gui/` and is a vanilla-JS Electron app.
+The graphical mixer lives under `gui/` and is a vanilla-JS Electron app. It is a
+functional stub: it connects to the mixer API and renders live state, but still
+needs substantial UI/UX work.
 
 ```powershell
 cd gui
@@ -157,11 +159,12 @@ npm start                # dev: launches Electron against 127.0.0.1:8850
 ## Roadmap / next candidates
 
 Phase 2 (DSP + matrix + control surfaces) is working end-to-end, including per-input
-HRTF spatialization. The long-term product goal is a consumer-grade Windows 11 audio
-mixer: simple enough for any gamer, streamer, or remote worker, with an optional
-Advanced mode for enthusiasts who want the full routing matrix, per-app sends, DSP
-chain, and API. That drives the UI (simple-by-default, Advanced toggle), installer,
-background service, and auto-updater work in later phases.
+HRTF spatialization. Phase 4 (global hotkeys, standalone API CLI) is also
+functional. The long-term product goal is a consumer-grade Windows 11 audio mixer:
+simple enough for any gamer, streamer, or remote worker, with an optional Advanced
+mode for enthusiasts who want the full routing matrix, per-app sends, DSP chain,
+and API. That drives the Electron GUI polish, installer, background service, and
+auto-updater work in later phases.
 
 Near-term open items, roughly ranked: WebSocket event stream as an alternative to
 SSE; per-output HRTF virtualization / Windows Sonic replacement (needs multi-channel

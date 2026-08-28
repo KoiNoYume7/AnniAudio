@@ -183,8 +183,8 @@ The internal mapping changes:
 - [x] `route_cli mixer` runs the new pipeline against the user's real `config/mixers/main.json`.
 - [x] Live state and control via `/api/state` and `PATCH /api/groups/{id}` verified.
 - [x] `tests/test_mixer_matrix.cpp` exercises add/output/input/group/start/snapshot/stop.
-- [ ] Full TUI and Loupedeck plugin session.
-- [ ] CPU comparison with the old `AudioMixer`/`Strip` path.
+- [x] Full TUI and Loupedeck plugin session.
+- [x] CPU comparison with the old `AudioMixer`/`Strip` path — no longer applicable; the legacy path was removed.
 
 ### Stage 4: Remove legacy `AudioMixer`/`Strip` path
 
@@ -207,16 +207,16 @@ The internal mapping changes:
 | HRTF at 48 kHz then resampled to 44.1 kHz may shift spatial cues. | A/B listening test with `poc_hrtf`; if unacceptable, keep per-output spatializer for 44.1 kHz outputs as a fallback. |
 | Group bus thread adds latency. | Keep group ring small (one render period); measure latency in `poc_wasapi`. |
 | Input processor thread + multiple group consumers need a thread-safe `RingBuffer` reader. | `RingBuffer` is already single-producer/multi-consumer via `readOrSilence`; verify with multi-output test. |
-| `InputProcessor` must support process loopback with same reliability as `Strip`. | Reuse `ProcessLoopbackActivationHandler` and `ActivateAudioInterfaceAsync` logic from `AudioMixer.cpp`. |
+| `InputProcessor` must support process loopback with same reliability as the old strip code. | The activation handler and process-loopback logic are now in `InputProcessor.cpp`. |
 | RNNoise still requires 48 kHz; other source rates must be resampled first. | Resample before RNNoise; if CPU cost is too high, skip RNNoise for non-48 kHz captures as today. |
-| Migration is large and hard to review. | Keep old and new code side-by-side with a runtime flag (`--legacy-matrix`) for one release cycle. |
+| Migration is large and hard to review. | Legacy code was removed in Stage 4; migration is complete. |
 
 ## 11. Testing plan
 
 - `tests/test_input_processor.cpp` (new): feed captured sine/sweep, verify DSP output matches current `poc_eq`/`poc_hrtf`/`poc_rnnoise` results.
 - `tests/test_group_bus.cpp` (new): two inputs, one group, two outputs, verify gain/mute/send-gain math.
 - `tests/test_output_mixer.cpp` (new): render to a WASAPI endpoint, verify no dropouts and correct level.
-- `tests/test_mixer_live_edit.cpp` (existing): port to new backend and run add/rename/volume/remove cycle.
+- `tests/test_mixer_matrix.exe`: run add/rename/volume/remove cycle against the new `AudioMixerMatrix` config end-to-end.
 - Manual: start `route_cli mixer`, TUI, Loupedeck; run a real session with mic + music + Discord for 30 minutes.
 
 ## 12. Success criteria

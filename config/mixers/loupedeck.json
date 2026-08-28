@@ -1,14 +1,23 @@
 {
-  "description": "6-strip mixer for Loupedeck Live control: VAC sources mixed to the main speakers. Knob binding is done by the Loupedeck plugin via the mixer control API, not in this file.",
-  "output": "Speakers (MIXLINE)",
-  "master": 80,
+  "description": "6-channel Loupedeck Live mixer template: Virtual Audio Cable sources mixed to a generic main output. Edit the output and source names to match your endpoints. Knob binding is done by the Loupedeck plugin via the mixer control API, not in this file.",
   "controlPort": 8850,
-  "strips": [
-    { "name": "Game",  "source": "Game (Virtual Audio Cable)",  "volume": 100 },
-    { "name": "Music", "source": "Music (Virtual Audio Cable)", "volume": 80 },
-    { "name": "Chat",  "source": "Chat (Virtual Audio Cable)",  "volume": 80 },
-    { "name": "Ext",   "source": "Ext (Virtual Audio Cable)",   "volume": 60 },
-    { "name": "System","source": "System (Virtual Audio Cable)","volume": 70 },
-    { "name": "Mic",   "source": "Mic (Virtual Audio Cable)",   "volume": 0, "muted": true }
+  "inputs": [
+    { "id": 1, "name": "Game",   "type": "device", "source": "Game (Virtual Audio Cable)" },
+    { "id": 2, "name": "Music",  "type": "device", "source": "Music (Virtual Audio Cable)" },
+    { "id": 3, "name": "Chat",   "type": "device", "source": "Chat (Virtual Audio Cable)" },
+    { "id": 4, "name": "Ext",    "type": "device", "source": "Ext (Virtual Audio Cable)" },
+    { "id": 5, "name": "System", "type": "device", "source": "System (Virtual Audio Cable)" },
+    { "id": 6, "name": "Mic",    "type": "device", "source": "Mic (Virtual Audio Cable)" }
+  ],
+  "groups": [
+    { "id": 10, "name": "Game",   "color": "#ef4444", "inputIds": [1], "outputIds": ["Main Output"], "volume": 100 },
+    { "id": 11, "name": "Music",  "color": "#3b82f6", "inputIds": [2], "outputIds": ["Main Output"], "volume": 80 },
+    { "id": 12, "name": "Chat",   "color": "#22c55e", "inputIds": [3], "outputIds": ["Main Output"], "volume": 80 },
+    { "id": 13, "name": "Ext",    "color": "#a855f7", "inputIds": [4], "outputIds": ["Main Output"], "volume": 60 },
+    { "id": 14, "name": "System", "color": "#f59e0b", "inputIds": [5], "outputIds": ["Main Output"], "volume": 70 },
+    { "id": 15, "name": "Mic",    "color": "#64748b", "inputIds": [6], "outputIds": ["Main Output"], "volume": 0, "muted": true }
+  ],
+  "outputs": [
+    { "name": "Main Output", "master": 80 }
   ]
 }
