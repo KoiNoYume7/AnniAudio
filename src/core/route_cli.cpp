@@ -102,16 +102,6 @@ static int cmdList()
     return 0;
 }
 
-static std::wstring utf8ToWide(const std::string& s)
-{
-    if (s.empty()) return {};
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (n <= 0) return {};
-    std::wstring w(n - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
-    return w;
-}
-
 static int cmdDefault(const std::string& hint)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

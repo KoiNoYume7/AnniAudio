@@ -23,10 +23,10 @@ struct InputConfig {
     std::string name;
     std::string type = "device";
     // Capture-side DSP applied wherever this input is routed (see
-    // MixerStripConfig): RNNoise suppression and/or a named EQ preset.
+    // InputConfig): RNNoise suppression and/or a named EQ preset.
     bool denoise = false;
     std::string eqPreset; // "" = off; "voice"
-    // HRTF binaural positioning (see MixerStripConfig / dsp::Spatializer).
+    // HRTF binaural positioning (see InputConfig / dsp::Spatializer).
     bool spatial = false;
     float azimuth = 0.0f;   // 0 = front, +90 = left, -90 = right
     float elevation = 0.0f; // 0 = ear level, +90 = above
