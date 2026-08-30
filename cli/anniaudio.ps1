@@ -13,6 +13,9 @@
       status        Show diagnostic report (devices, driver store, signing).
       config        Manage cable configuration (get, set, init).
       build         Build driver without installing.
+      version       Show AnniAudio version and git ref.
+      restore-default Set the default playback device by name hint.
+      tui           Launch the curses TUI for the running mixer.
 
     Usage:
       .\cli\anniaudio.ps1 <subcommand> [options]
@@ -26,7 +29,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "route", "tui")]
+    [ValidateSet("install", "uninstall", "dev-mode", "gaming-mode", "status", "config", "build", "version", "restore-default", "tui")]
     [string]$Command,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -324,43 +327,6 @@ function Invoke-AnniRestoreDefault {
 }
 
 # ---------------------------------------------------------------------------
-# route - generic capture -> render routing
-# ---------------------------------------------------------------------------
-function Invoke-AnniRoute {
-    param([string[]]$RouteArgs)
-    Show-Header
-
-    if ($RouteArgs.Count -lt 2) {
-        Write-Host @"
-Usage: route <capture_name> <render_name> [volume%%]
-
-Route audio from any capture endpoint to any render endpoint.
-Names are matched case-insensitively and can be partial.
-
-Examples:
-  route "My Studio Cable" "Headphones" 50
-  route "Microphone" "Speakers" 75
-  route "Line In" "Voice Chat"
-"@ -ForegroundColor Yellow
-        exit 1
-    }
-
-    $exe = "$REPO_ROOT\build\bin\Release\route_cli.exe"
-    if (!(Test-Path $exe)) {
-        Write-Error "route_cli.exe not found. Run 'build' first."
-        exit 1
-    }
-
-    $capture = $RouteArgs[0]
-    $render  = $RouteArgs[1]
-    $vol     = if ($RouteArgs.Count -ge 3) { $RouteArgs[2] } else { "" }
-
-    Write-Host "[route] Routing capture '$capture' -> render '$render'" -ForegroundColor Cyan
-    $exit = & $exe route "$capture" "$render" $vol
-    if ($null -ne $exit -and $exit -ne 0) { exit $exit }
-}
-
-# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -383,7 +349,6 @@ switch ($Command) {
     "config"         { Invoke-AnniConfig -CfgArgs $CliArgs }
     "version"        { Invoke-AnniVersion }
     "restore-default" { Invoke-AnniRestoreDefault -RestoreArgs $CliArgs }
-    "route"          { Invoke-AnniRoute -RouteArgs $CliArgs }
     "tui"            {
         $bat = "$REPO_ROOT\mixer-tui.bat"
         if (!(Test-Path $bat)) { Write-Error "mixer-tui.bat not found. Build the project first."; exit 1 }

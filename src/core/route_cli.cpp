@@ -1,10 +1,8 @@
-#include "AudioEngine.hpp"
 #include "AudioMixerMatrix.hpp"
 #include "MixerControlServer.hpp"
-#include "eq.hpp"
+#include "audio_utils.hpp"
 #include "global_hotkeys.hpp"
 #include "midi_input.hpp"
-#include "noise_suppressor.hpp"
 
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -14,10 +12,9 @@
 
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
-using namespace anniaudio::dsp;
+using namespace anniaudio::core;
 
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -28,7 +25,6 @@ using namespace anniaudio::dsp;
 #include <optional>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -61,30 +57,32 @@ static void printUsage(const char* prog)
     std::printf("AnniAudio Routing CLI\n");
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
-    std::printf("  %s route <capture> <render> [volume]  Route any capture endpoint to any render endpoint\n", prog);
-    std::printf("  %s process [<source> <out> [vol]] [--preset <file>] [--rnnoise] [--config <profile>]\n", prog);
-    std::printf("                                                                    Loopback capture + optional EQ / NR / profile\n", prog);
-    std::printf("  %s mixer <config.json> [--port <n>]                               Multi-source mixer with per-strip volume/mute (control API on 127.0.0.1:8850)\n", prog);
-    std::printf("  %s midi [list|<device-hint>]                                      List MIDI inputs or monitor messages\n", prog);
-    std::printf("  %s process-eq <source> <out> [vol]                                Same as process, but applies a hardcoded test EQ chain\n", prog);
-    std::printf("  %s default <render_device>            Set default playback device to the matching endpoint\n", prog);
-    std::printf("\nRouting volume commands while running: + or = louder, - quieter, v <0-100> set, q stop.\n");
+    std::printf("  %s mixer <config.json> [--port <n>]  Multi-source mixer with per-group volume/mute (control API on bindAddress:controlPort)\n", prog);
+    std::printf("  %s midi [list|<device-hint>]        List MIDI inputs or monitor messages\n", prog);
+    std::printf("  %s default <render_device>           Set default playback device to the matching endpoint\n", prog);
+    std::printf("\nMixer commands while running: v <group> <0-200>, m <group>, o <output>, +/=, -, ?, q.\n");
     std::printf("\nExamples:\n");
     std::printf("  %s list\n", prog);
-    std::printf("  %s process --config config/profiles/default.json\n", prog);
-    std::printf("  %s process \"Speakers\" \"Headphones\" 80 --preset config/presets/headphones.json --rnnoise\n", prog);
     std::printf("  %s mixer config/mixers/default.json\n", prog);
     std::printf("  %s mixer config/mixers/loupedeck.json\n", prog);
     std::printf("  %s midi list\n", prog);
     std::printf("  %s midi Loupedeck\n", prog);
-    std::printf("  %s route \"Studio Main\" \"Headphones\" 50 -- listen to a cable on headphones\n", prog);
-    std::printf("  %s default \"Headphones (Crusher ANC 2)\" -- restore default output\n", prog);
+    std::printf("  %s default \"Speakers\"\n", prog);
 }
 
 static int cmdList()
 {
-    AudioEngine engine;
-    auto endpoints = engine.listEndpoints();
+    EnsureComInitializedOnThisThread();
+
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr) || !enumerator) {
+        std::fprintf(stderr, "[list] Failed to create device enumerator: 0x%08X\n", (unsigned)hr);
+        return 1;
+    }
+
+    auto endpoints = enumEndpoints(enumerator.Get());
 
     std::printf("\n%-4s %-8s %-12s %-30s  %s\n", "#", "Flow", "Type", "Name", "Device ID (truncated)");
     std::printf("--------------------------------------------------------------------------------\n");
@@ -104,222 +102,20 @@ static int cmdList()
     return 0;
 }
 
-static void printVolume(float v)
-{
-    std::printf("[route] Volume: %.0f%%\n", v * 100.0f);
-}
-
-static void inputThread(AudioEngine* engine, std::atomic<bool>* stop)
-{
-    std::string line;
-    while (!stop->load() && std::getline(std::cin, line)) {
-        if (line.empty() || line == "q" || line == "Q") {
-            stop->store(true);
-            break;
-        }
-        float v = engine->getVolume();
-        if (line == "+" || line == "=") {
-            v += 0.05f;
-            if (v > 2.0f) v = 2.0f;
-            engine->setVolume(v);
-            printVolume(v);
-        } else if (line == "-") {
-            v -= 0.05f;
-            if (v < 0.0f) v = 0.0f;
-            engine->setVolume(v);
-            printVolume(v);
-        } else if ((line.size() > 1) && (line[0] == 'v' || line[0] == 'V')) {
-            int pct = std::atoi(line.c_str() + 1);
-            if (pct < 0) pct = 0;
-            if (pct > 200) pct = 200;
-            engine->setVolume(pct / 100.0f);
-            printVolume(engine->getVolume());
-        } else {
-            std::printf("[route] Unknown command '%s'. Use +, -, v <0-100>, or q.\n", line.c_str());
-        }
-    }
-}
-
-static bool parseFilterType(const std::string& s, FilterType* out)
-{
-    std::string t;
-    t.reserve(s.size());
-    for (char c : s) t.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-
-    if (t == "peak")       { *out = FilterType::Peak;       return true; }
-    if (t == "lowshelf")   { *out = FilterType::LowShelf;   return true; }
-    if (t == "highshelf")  { *out = FilterType::HighShelf;  return true; }
-    if (t == "lowpass")    { *out = FilterType::LowPass;    return true; }
-    if (t == "highpass")   { *out = FilterType::HighPass;   return true; }
-    if (t == "notch")      { *out = FilterType::Notch;      return true; }
-    if (t == "allpass")    { *out = FilterType::Allpass;    return true; }
-    return false;
-}
-
-static bool loadEqPreset(EqChain& eq, const std::string& path)
-{
-    std::ifstream f(path);
-    if (!f) {
-        std::fprintf(stderr, "[route] Could not open EQ preset: %s\n", path.c_str());
-        return false;
-    }
-
-    try {
-        nlohmann::json j;
-        f >> j;
-
-        const auto& bands = j.at("bands");
-        for (const auto& b : bands) {
-            std::string typeStr = b.at("type");
-            FilterType type;
-            if (!parseFilterType(typeStr, &type)) {
-                std::fprintf(stderr, "[route] Unknown filter type: %s\n", typeStr.c_str());
-                return false;
-            }
-
-            double freq    = b.value("freq",    1000.0);
-            double gainDb  = b.value("gain_db", 0.0);
-            double q       = b.value("q",       1.0);
-
-            eq.addBand(type, freq, gainDb, q);
-        }
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "[route] Failed to parse EQ preset '%s': %s\n", path.c_str(), e.what());
-        return false;
-    }
-
-    return true;
-}
-
-static int cmdRoute(const std::string& captureHint, const std::string& renderHint,
-                    float startVolume = 1.0f,
-                    const std::string& eqPresetPath = "",
-                    bool useRnnoise = false)
-{
-    AudioEngine engine;
-    std::unique_ptr<EqChain> eq;
-    std::unique_ptr<NoiseSuppressor> ns;
-
-    if (useRnnoise) {
-        ns = std::make_unique<NoiseSuppressor>();
-    }
-    if (!eqPresetPath.empty()) {
-        eq = std::make_unique<EqChain>();
-        if (!loadEqPreset(*eq, eqPresetPath)) {
-            return 1;
-        }
-        std::printf("[route] Loaded EQ preset '%s' (%zu bands)\n", eqPresetPath.c_str(), eq->bandCount());
-    }
-
-    if (eq || ns) {
-        engine.setProcessCallback([useEq = !!eq, useNr = !!ns,
-                                   &eq, &ns, &engine](float* buf, uint32_t frames, uint32_t ch) {
-            if (useNr) {
-                // RNNoise is trained on 48 kHz. Running it on other rates silently
-                // misinterprets the time/frequency scale.
-                if (engine.captureSampleRate() != 48000) {
-                    static bool warned = false;
-                    if (!warned) {
-                        std::fprintf(stderr, "[route] RNNoise requires a 48 kHz capture source; skipping.\n");
-                        warned = true;
-                    }
-                } else {
-                    if (!ns->prepared()) ns->prepare(ch);
-                    ns->process(buf, frames, ch);
-                }
-            }
-            if (useEq) {
-                if (!eq->prepared()) {
-                    eq->prepare(engine.captureSampleRate(), ch);
-                }
-                eq->process(buf, frames, ch);
-            }
-        });
-    }
-
-    std::printf("[route] Starting:  capture = \"%s\"  →  render = \"%s\"\n",
-                captureHint.c_str(), renderHint.c_str());
-
-    if (!engine.start(captureHint, renderHint)) {
-        std::fprintf(stderr, "[route] Failed to start route.\n");
-        return 1;
-    }
-
-    engine.setVolume(startVolume);
-    printVolume(startVolume);
-
-    std::atomic<bool> stop{false};
-    std::thread input(inputThread, &engine, &stop);
-    std::printf("[route] Running. Commands: +/= louder, - quieter, v <0-100>, q/Enter stop.\n");
-
-    while (!stop.load()) {
-        Sleep(100);
-    }
-
-    engine.stop();
-    if (input.joinable()) input.join();
-    std::printf("[route] Stopped.\n");
-    return 0;
-}
-
-static int cmdProcessEq(const std::string& sourceHint, const std::string& renderHint, float startVolume = 1.0f)
-{
-    AudioEngine engine;
-    EqChain eq;
-
-    // Default "can you hear it" preset: high-pass rumble, small mid boost, gentle air shelf.
-    eq.addBand(FilterType::HighPass, 80.0, 0.0, 0.707);
-    eq.addBand(FilterType::Peak, 1500.0, 6.0, 1.0);
-    eq.addBand(FilterType::HighShelf, 12000.0, 3.0, 0.707);
-
-    engine.setProcessCallback([&eq, &engine](float* buf, uint32_t frames, uint32_t ch) {
-        if (!eq.prepared()) {
-            eq.prepare(engine.captureSampleRate(), ch);
-        }
-        eq.process(buf, frames, ch);
-    });
-
-    std::printf("[route] Starting EQ process:  source = \"%s\"  →  render = \"%s\"\n",
-                sourceHint.c_str(), renderHint.c_str());
-
-    if (!engine.start(sourceHint, renderHint)) {
-        std::fprintf(stderr, "[route] Failed to start EQ process.\n");
-        return 1;
-    }
-
-    engine.setVolume(startVolume);
-    printVolume(startVolume);
-
-    std::atomic<bool> stop{false};
-    std::thread input(inputThread, &engine, &stop);
-    std::printf("[route] Running EQ. Commands: +/= louder, - quieter, v <0-100>, q/Enter stop.\n");
-
-    while (!stop.load()) {
-        Sleep(100);
-    }
-
-    engine.stop();
-    if (input.joinable()) input.join();
-    std::printf("[route] Stopped.\n");
-    return 0;
-}
-
-static std::wstring utf8ToWide(const std::string& s)
-{
-    if (s.empty()) return {};
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (n <= 0) return {};
-    std::wstring w(n - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
-    return w;
-}
-
 static int cmdDefault(const std::string& hint)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    AudioEngine engine;
-    auto endpoints = engine.listEndpoints();
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr) || !enumerator) {
+        std::fprintf(stderr, "[default] Failed to create device enumerator: 0x%08X\n", (unsigned)hr);
+        CoUninitialize();
+        return 2;
+    }
+
+    auto endpoints = enumEndpoints(enumerator.Get());
     const EndpointInfo* target = nullptr;
     for (const auto& ep : endpoints) {
         if (!ep.isRender) continue;
@@ -336,8 +132,8 @@ static int cmdDefault(const std::string& hint)
     }
 
     ComPtr<IPolicyConfig> pc;
-    HRESULT hr = CoCreateInstance(CLSID_PolicyConfigClient, nullptr, CLSCTX_ALL,
-                                  IID_PPV_ARGS(&pc));
+    hr = CoCreateInstance(CLSID_PolicyConfigClient, nullptr, CLSCTX_ALL,
+                          IID_PPV_ARGS(&pc));
     if (FAILED(hr) || !pc) {
         std::fprintf(stderr, "[default] Failed to create IPolicyConfig: 0x%08X\n", (unsigned)hr);
         CoUninitialize();
@@ -359,46 +155,6 @@ static int cmdDefault(const std::string& hint)
     pc.Reset();          // release COM object before tearing down the apartment
     CoUninitialize();
     return 0;
-}
-
-// ---------------------------------------------------------------------------
-// Process profile loading
-// ---------------------------------------------------------------------------
-struct ProcessProfile {
-    std::string source;
-    std::string output;
-    float       volume    = 1.0f;
-    std::string preset;
-    bool        rnnoise   = false;
-};
-
-static bool loadProcessProfile(const std::string& path, ProcessProfile& out)
-{
-    std::ifstream f(path);
-    if (!f) {
-        std::fprintf(stderr, "[route] Could not open profile: %s\n", path.c_str());
-        return false;
-    }
-
-    try {
-        nlohmann::json j;
-        f >> j;
-
-        out.source  = j.value("source", out.source);
-        out.output  = j.value("output", out.output);
-        out.volume  = j.value("volume", out.volume * 100.0f) / 100.0f; // accept 0-100 or 0.0-1.0
-        out.preset  = j.value("preset", out.preset);
-        out.rnnoise = j.value("rnnoise", out.rnnoise);
-
-        // Clamp volume to a sane range.
-        if (out.volume < 0.0f) out.volume = 0.0f;
-        if (out.volume > 2.0f) out.volume = 2.0f;
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "[route] Failed to parse profile '%s': %s\n", path.c_str(), e.what());
-        return false;
-    }
-
-    return true;
 }
 
 static int cmdMidi(const std::string& arg)
@@ -429,12 +185,12 @@ static int cmdMidi(const std::string& arg)
     return 0;
 }
 
-// Interactive commands (v/m) address strips by their 1-based position in the
+// Interactive commands (v/m) address groups by their 1-based position in the
 // most recent listing, for convenience at a terminal. That position is
-// resolved to the strip's real StripId right here, at the moment the command
+// resolved to the group's real GroupId right here, at the moment the command
 // is typed -- it is not held onto, so it can't go stale like a GUI holding a
 // raw index across multiple actions would.
-static void printMixerHelp(anniaudio::core::AudioMixerMatrix& matrix)
+static void printMixerHelp(AudioMixerMatrix& matrix)
 {
     auto state = matrix.snapshot();
     std::printf("\n[mixer] Controls:\n");
@@ -467,6 +223,22 @@ static void printMixerHelp(anniaudio::core::AudioMixerMatrix& matrix)
     }
 }
 
+static std::string autosavePathFor(const std::string& configPath)
+{
+    std::filesystem::path p(configPath);
+    std::string fname = p.filename().string();
+
+    // Committed example configs are read-only templates; runtime state should
+    // be written to a user config so the examples stay untouched.
+    if (fname == "default.json" || fname == "loupedeck.json" || fname == "test_matrix.json") {
+        auto mainPath = p.parent_path() / "main.json";
+        std::printf("[mixer] Loaded example config %s; autosaving to %s\n",
+                    configPath.c_str(), mainPath.string().c_str());
+        return mainPath.string();
+    }
+    return configPath;
+}
+
 static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portOverride = std::nullopt)
 {
     nlohmann::json j;
@@ -487,8 +259,9 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         return 1;
     }
 
-    anniaudio::core::AudioMixerMatrix matrix;
-    matrix.setAutosavePath(configPath);
+    std::string autosavePath = autosavePathFor(configPath);
+    AudioMixerMatrix matrix;
+    matrix.setAutosavePath(autosavePath);
 
     if (!matrix.load(configPath)) {
         std::fprintf(stderr, "[mixer] Failed to load config '%s'\n", configPath.c_str());
@@ -505,10 +278,10 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         apiKey = snap.apiKey;
     }
 
-    std::unique_ptr<anniaudio::core::MixerControlServer> controlServer;
+    std::unique_ptr<MixerControlServer> controlServer;
     if (controlPort != 0) {
-        controlServer = std::make_unique<anniaudio::core::MixerControlServer>(matrix);
-        controlServer->setAutosavePath(configPath);
+        controlServer = std::make_unique<MixerControlServer>(matrix);
+        controlServer->setAutosavePath(autosavePath);
         if (!controlServer->start(controlPort, bindAddress, apiKey)) {
             std::fprintf(stderr, "[mixer] Warning: control API could not bind %s:%u; continuing without it\n",
                          bindAddress.c_str(), controlPort);
@@ -520,13 +293,13 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
     }
 
     // Optional global hotkeys: config/hotkeys.json next to the mixer config.
-    std::unique_ptr<anniaudio::core::GlobalHotkeys> hotkeys;
+    std::unique_ptr<GlobalHotkeys> hotkeys;
     {
         std::filesystem::path p(configPath);
         auto hotkeyPath = (p.parent_path().parent_path() / "hotkeys.json").string();
-        hotkeys = std::make_unique<anniaudio::core::GlobalHotkeys>();
+        hotkeys = std::make_unique<GlobalHotkeys>();
         if (hotkeys->load(hotkeyPath)) {
-            bool started = hotkeys->start([&matrix](const anniaudio::core::HotkeyConfig& cfg) {
+            bool started = hotkeys->start([&matrix](const HotkeyConfig& cfg) {
                 auto snap = matrix.snapshot();
                 if (cfg.action == "toggle_group_mute" || cfg.action == "mute_group") {
                     for (const auto& g : snap.groups) {
@@ -637,7 +410,7 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
                 continue;
             }
             const auto& target = snap.groups[idx - 1];
-            anniaudio::core::GroupId gid = target.id;
+            GroupId gid = target.id;
 
             if (cmdChar == 'm') {
                 bool mute = !target.muted;
@@ -676,59 +449,6 @@ int main(int argc, char* argv[])
     if (cmd == "list") {
         return cmdList();
     }
-    else if (cmd == "process") {
-        ProcessProfile profile;
-        bool hasSource = false, hasOutput = false, hasVolume = false;
-
-        for (int i = 2; i < argc; ) {
-            std::string a = argv[i];
-            std::string al;
-            al.reserve(a.size());
-            for (char ch : a) al.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-
-            if (al == "--config" || al == "-c") {
-                if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
-                if (!loadProcessProfile(argv[i + 1], profile)) return 1;
-                i += 2;
-            } else if (al == "--preset" || al == "-p") {
-                if (i + 1 >= argc) { std::fprintf(stderr, "Expected path after %s\n", a.c_str()); return 1; }
-                profile.preset = argv[i + 1];
-                i += 2;
-            } else if (al == "--rnnoise" || al == "-n") {
-                profile.rnnoise = true;
-                i += 1;
-            } else if (al == "--no-rnnoise") {
-                profile.rnnoise = false;
-                i += 1;
-            } else if (al[0] == '-') {
-                std::fprintf(stderr, "Unknown option: %s\n", a.c_str());
-                return 1;
-            } else {
-                // Positional arguments in order: source, output, volume
-                if (!hasSource) {
-                    profile.source = a; hasSource = true;
-                } else if (!hasOutput) {
-                    profile.output = a; hasOutput = true;
-                } else if (!hasVolume) {
-                    profile.volume = std::atoi(a.c_str()) / 100.0f;
-                    if (profile.volume < 0.0f) profile.volume = 0.0f;
-                    if (profile.volume > 2.0f) profile.volume = 2.0f;
-                    hasVolume = true;
-                } else {
-                    std::fprintf(stderr, "Usage: process <source> <output> [vol] [--preset <file>] [--rnnoise] [--config <profile>]\n");
-                    return 1;
-                }
-                i += 1;
-            }
-        }
-
-        if (profile.source.empty() || profile.output.empty()) {
-            std::fprintf(stderr, "Usage: process <source> <output> [vol] [--preset <file>] [--rnnoise] [--config <profile>]\n");
-            return 1;
-        }
-
-        return cmdRoute(profile.source, profile.output, profile.volume, profile.preset, profile.rnnoise);
-    }
     else if (cmd == "mixer") {
         if (argc < 3) { std::fprintf(stderr, "Usage: mixer <config.json> [--port <n>]\n"); return 1; }
         std::string configPath;
@@ -758,16 +478,6 @@ int main(int argc, char* argv[])
     else if (cmd == "midi") {
         std::string arg = (argc >= 3) ? argv[2] : "list";
         return cmdMidi(arg);
-    }
-    else if (cmd == "process-eq") {
-        if (argc < 4) { std::fprintf(stderr, "Usage: process-eq <loopback_source> <render_output> [volume%%]\n"); return 1; }
-        float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
-        return cmdProcessEq(argv[2], argv[3], vol);
-    }
-    else if (cmd == "route") {
-        if (argc < 4) { std::fprintf(stderr, "Usage: route <capture_name> <render_name> [volume%%]\n"); return 1; }
-        float vol = (argc >= 5) ? std::atoi(argv[4]) / 100.0f : 1.0f;
-        return cmdRoute(argv[2], argv[3], vol);
     }
     else if (cmd == "default") {
         if (argc < 3) { std::fprintf(stderr, "Usage: default <render_device_name>\n"); return 1; }

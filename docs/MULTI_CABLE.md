@@ -44,14 +44,14 @@ Device Instance 2 (ROOT\AnniAudioCable2)
 
 ### User-Mode Routing
 
-The mixer (`AudioMixer` / `AudioMixerMatrix`) can route any capture endpoint to any render endpoint, which includes the virtual cables created by this driver:
+The mixer (`AudioMixerMatrix`) can route any capture endpoint to any render endpoint, which includes the virtual cables created by this driver:
 
 - Cable 1 Render → Cable 2 Capture (cross-cable): an app plays into Cable 1; the mixer captures Cable 1 and sends it to Cable 2's render endpoint.
 - Physical Input → Cable N Render (inject): a microphone or line-in is routed into a virtual cable so other apps can capture it.
 - Cable N Capture → Physical Output (monitor): a virtual cable's capture endpoint is mixed to speakers/headphones.
 - Cable N Render → Cable N Capture (loopback) is also technically reachable, but it creates a feedback loop and is not a normal use case.
 
-`AudioEngine` (`src/core/AudioEngine.cpp`) is the older single source→output engine used only by the legacy `route_cli process` command; the live mixer uses `AudioMixerMatrix`.
+The legacy `AudioEngine` single source→output engine and the `route_cli process` command were removed; the live mixer uses `AudioMixerMatrix`.
 
 ## Configuration
 

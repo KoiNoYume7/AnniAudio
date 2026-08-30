@@ -40,8 +40,8 @@
 | `tui` | Curses TUI (`scripts/mixer_tui.py`, `scripts/tui_*.py`) |
 | `plugin` | Loupedeck C# plugin (`AnniAudioMixerPlugin/`) |
 | `config` | Config system (`config/` + loading code) |
-| `hotkeys` | Global hotkey engine (future; no `RegisterHotKey` integration yet) |
-| `ui` | Graphical UI (future; currently TUI / Loupedeck) |
+| `hotkeys` | Global hotkey engine (`config/hotkeys.json`; shipped) |
+| `ui` | Graphical UI (Electron stub in `gui/`; TUI and Loupedeck are current) |
 | `installer` | Installer and packaging (future; technology not yet chosen) |
 | `ci` | GitHub Actions |
 | `deps` | Third-party dependencies |
@@ -103,10 +103,10 @@ This produces Phase-0 POCs and verification binaries in `build/bin/Release/`:
 | `poc_rnnoise.exe` | Manual/listening | RNNoise suppression on test signal | Run and listen |
 | `poc_wasapi.exe` | Manual/listening | 1 kHz sine loopback capture | Run and listen |
 | `poc_hrtf.exe` | Manual/listening | HRTF convolution against MIT KEMAR; renders `hrtf_orbit_48k.wav` | Run from repo root so `assets/hrtf/mit_kemar.sofa` resolves |
-| `test_routing.exe` | Manual 5-minute harness | Routes audio from a capture endpoint to a render endpoint via `AudioEngine` | `test_routing [capture_hint] [render_hint]`; prints frame counts, stop with Ctrl+C |
-| `test_mixer_live_edit.exe` | Automated | Adds, renames, adjusts volume, and removes `AudioMixer` strips while the mixer is running | `test_mixer_live_edit.exe "<output>" "<source1>" "<source2>"`; exits 0 on success, 1 on failure |
-
-`test_mixer_live_edit` is the closest thing to an automated regression net for the `AudioMixer` strip lifecycle, but it tests `AudioMixer` directly, not `AudioMixerMatrix`. It requires real audio endpoints. None of these are wired into CTest.
+| `test_input_processor.exe` | Manual harness | Capture a single endpoint and run per-input DSP | `test_input_processor.exe [capture_hint]`; stop with Ctrl+C |
+| `test_new_pipeline.exe` | Manual harness | Verify `InputProcessor → GroupBus → OutputMixer` routing | `test_new_pipeline.exe [capture_hint] [render_hint]`; stop with Ctrl+C |
+| `test_mixer_matrix.exe` | Manual harness | Load and run an `AudioMixerMatrix` config end-to-end | `test_mixer_matrix.exe config/mixers/default.json`; stop with Ctrl+C |
+These are manual harnesses, not automated tests. They require real audio endpoints. None are wired into CTest. The legacy `test_routing.exe` and `test_mixer_live_edit.exe` were removed with the old `AudioEngine`/`AudioMixer` code.
 
 ---
 

@@ -58,7 +58,7 @@ public:
     void setDirection(float azimuthDeg, float elevationDeg);
 
     // Peak and RMS level from the last processed packet (linear, same scale as
-    // the existing AudioMixer strip meters).
+    // the matrix meters).
     float peak() const;
     float rms() const;
 

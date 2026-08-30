@@ -23,15 +23,15 @@ long-term design that is not yet implemented, see `docs/DESIGN-FUTURE.md`.
 
 | Directory | What it is | Status |
 |---|---|---|
-| `src/core/` | `audio_core` static library: `AudioMixerMatrix`, `InputProcessor`, `GroupBus`, `OutputMixer`, `MixerControlServer`, `AudioEngine`, `audio_utils`, `midi_input` | Active |
+| `src/core/` | `audio_core` static library: `AudioMixerMatrix`, `InputProcessor`, `GroupBus`, `OutputMixer`, `MixerControlServer`, `audio_utils`, `global_hotkeys`, `midi_input` | Active |
 | `src/dsp/` | `audio_dsp` static library: `EqChain`, `NoiseSuppressor`, `Spatializer` | Active |
 
 | `cli/` | `anniaudio.ps1` PowerShell control panel for driver install/signing/config (`tui` launches `mixer-tui.bat`). Not the Phase 4 API-wrapping CLI | Active |
 | `AnniAudioMixerPlugin/` | Loupedeck / Logi Actions C# plugin that talks to the control API | Active |
 | `scripts/` | TUI (`mixer_tui.py`), build/driver helpers, PowerShell mode toggles | Active |
 | `driver/` | WDM PortCls virtual audio driver source and `.inf` template | Built but unsigned |
-| `tests/` | Phase-0 POCs (`poc_*`) and verification tools (`test_routing`, `test_mixer_matrix`, `test_new_pipeline`) | Not built by default; see `docs/CONTRIBUTING.md` |
-| `config/` | Mixer configs, scenes, app-rules, presets, profiles, cables | Runtime state |
+| `tests/` | Phase-0 POCs (`poc_*`) and verification tools (`test_input_processor`, `test_new_pipeline`, `test_mixer_matrix`) | Not built by default; see `docs/CONTRIBUTING.md` |
+| `config/` | Mixer configs, scenes, app-rules, presets, cables | Runtime state |
 
 ---
 
@@ -181,7 +181,7 @@ The server runs a thread pool for HTTP handlers and a dedicated broadcast thread
 - `config/scenes/*.json` — named level overlays (group volumes/mutes/send gains, output masters/mutes).
 - `config/app-rules.json` — semi-automatic app assignment rules for the TUI.
 - `config/presets/*.json` — biquad EQ band lists.
-- `config/profiles/*.json` — bundles for the legacy `route_cli process` path.
+- `config/hotkeys.json` — optional global hotkey bindings loaded by `route_cli mixer`.
 - `config/cables.json` — virtual cable list used by `scripts/generate-inf.ps1`.
 
 **Technology:** nlohmann/json — header-only, MIT licensed: https://github.com/nlohmann/json

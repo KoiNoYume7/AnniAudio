@@ -157,20 +157,11 @@ Supported types: `peak`, `lowpass`, `highpass`, `lowshelf`, `highshelf`, `notch`
 
 ---
 
-## Profiles (`config/profiles/`)
+## Profiles
 
-A profile bundles source, output, volume, optional preset, and RNNoise toggle for
-the `route_cli process` legacy path:
-
-```json
-{
-  "source": "Microphone",
-  "output": "Headphones",
-  "volume": 0.8,
-  "preset": "config/presets/clean_voice.json",
-  "rnnoise": true
-}
-```
+The legacy `config/profiles/*.json` format and the `route_cli process` command were
+removed. Use a mixer config (`config/mixers/*.json`) to bundle source, output,
+volume, preset, and RNNoise on a per-input basis; see the `inputs` field above.
 
 ---
 

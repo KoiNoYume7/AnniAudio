@@ -23,10 +23,10 @@ struct InputConfig {
     std::string name;
     std::string type = "device";
     // Capture-side DSP applied wherever this input is routed (see
-    // MixerStripConfig): RNNoise suppression and/or a named EQ preset.
+    // InputConfig): RNNoise suppression and/or a named EQ preset.
     bool denoise = false;
     std::string eqPreset; // "" = off; "voice"
-    // HRTF binaural positioning (see MixerStripConfig / dsp::Spatializer).
+    // HRTF binaural positioning (see InputConfig / dsp::Spatializer).
     bool spatial = false;
     float azimuth = 0.0f;   // 0 = front, +90 = left, -90 = right
     float elevation = 0.0f; // 0 = ear level, +90 = above
@@ -50,7 +50,7 @@ struct GroupConfig {
     std::vector<InputId> inputIds;
     std::vector<std::string> outputIds;
     // Per-output send gain (output name -> linear gain, 1.0 = unity). The
-    // effective strip volume for a route is group volume * send gain, so one
+    // effective group send volume is group volume * send gain, so one
     // group can e.g. run at 100% into headphones but 15% into speakers.
     // Outputs without an entry are at unity.
     std::map<std::string, float> outputGains;
@@ -141,8 +141,8 @@ public:
     std::optional<InputId> addInput(const InputConfig& cfg);
     bool removeInput(InputId id);
     bool updateInput(InputId id, const InputConfig& cfg); // re-creates routes for groups using it
-    // Live HRTF direction change for a spatialized input — updates every route's
-    // strip in place without rebuilding (glitch-free, safe at knob-turn rates).
+    // Live HRTF direction change for a spatialized input — updates every group
+    // send in place without rebuilding (glitch-free, safe at knob-turn rates).
     // Only meaningful while the input has spatial enabled.
     bool setInputDirection(InputId id, float azimuth, float elevation);
 

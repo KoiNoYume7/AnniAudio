@@ -1,8 +1,0 @@
-{
-  "description": "Example profile: system output → headphones with EQ and optional noise suppression.",
-  "source": "Speakers",
-  "output": "Headphones",
-  "volume": 80,
-  "preset": "config/presets/headphones.json",
-  "rnnoise": false
-}
