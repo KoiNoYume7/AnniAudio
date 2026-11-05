@@ -9,9 +9,18 @@ PowerShell scripts under `scripts/`.
 |---|---|
 | `start-mixer.bat` | Launch `route_cli mixer config/mixers/main.json` on the default control API port (`8850`) |
 | `stop-mixer.bat` | Force-stop any running `route_cli.exe` (autosave means state is preserved) |
-| `mixer-tui.bat` | Start the curses TUI, installing `windows-curses` / `winappaudiorouter` if missing |
+| `mixer-tui.bat` | Start the curses TUI (`scripts/mixer_tui.py`), installing `windows-curses` / `winappaudiorouter` if missing |
+| `mixer-gui.bat` | Start the Electron mixer GUI (`gui/`) against `http://127.0.0.1:8850` |
 | `install-autostart.bat` | Register a Task Scheduler logon task (`AnniAudioMixer`, un-elevated, user session) so the mixer starts at logon ahead of the Run-key throttle; also adds an `HKCU\...\Run` entry for Task Manager visibility. Pass `uninstall` to remove everything |
 | `uninstall-autostart.bat` | Remove the autostart (delegates to `install-autostart.bat uninstall`) |
+
+## Mixer clients
+
+| File | What it does |
+|---|---|
+| `scripts/mixer_tui.py` | Curses TUI for the mixer control API (see `docs/TUI.md` for the full keybinding reference). Use `mixer-tui.bat` to launch it with `windows-curses` auto-install |
+| `scripts/tui_utils.py` / `scripts/tui_ui.py` | TUI helpers split from `mixer_tui.py`: utility/HTTP helpers and curses UI rendering |
+| `gui/` | Electron mixer GUI; `npm start` inside `gui/` or use `mixer-gui.bat` at the repo root |
 
 ## Driver build / signing / install (`scripts/*.ps1`)
 

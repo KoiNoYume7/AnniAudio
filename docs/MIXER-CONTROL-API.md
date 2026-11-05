@@ -294,6 +294,7 @@ All bodies are JSON. Errors are `{ "error": "human-readable message" }` with a
 | `POST`   | `/api/scenes/save`      | `{ name }`                                      | Snapshot current levels (group volumes/mutes/send gains, output masters/mutes) as a named scene |
 | `POST`   | `/api/scenes/apply`     | `{ name }`                                      | Apply a scene by matching group/output NAMES; instant level overlay, never a topology change. Returns `{ applied, missing }` |
 | `POST`   | `/api/presets/save`     | `{ path? }`                                     | Write current live state to a `config/mixers/*.json` preset file; empty `path` uses the configured autosave path |
+|| `POST`   | `/api/presets/load`     | `{ path }`                                      | Load a `config/mixers/*.json` preset file as the new live matrix state and make it the autosave target |
 
 **State model: inputs → groups → outputs.**
 - An *input* is a source (`device` = WASAPI endpoint, `application` = process ID captured via process loopback).

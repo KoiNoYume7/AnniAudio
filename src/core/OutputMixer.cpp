@@ -21,8 +21,8 @@ namespace anniaudio::core {
 namespace {
 
 constexpr UINT64 kDefaultBuffer100Ns = 2000000; // 200 ms shared buffer
-
-float dbToLin(float db) { return std::pow(10.0f, db / 20.0f); }
+constexpr float  kLimiterCeilingDb = -0.1f;     // brickwall limiter ceiling
+constexpr float  kLimiterCeiling = 0.988553f;   // 10^(-0.1/20)
 
 } // namespace
 
@@ -56,11 +56,6 @@ public:
     void setMasterMuted(bool muted) { masterMuted_.store(muted); }
     float masterVolume() const { return masterVolume_.load(); }
     bool masterMuted() const { return masterMuted_.load(); }
-    void setLimiterThresholdDb(float db) {
-        limiterThresholdDb_.store(db);
-        limiterThresholdLin_.store(dbToLin(db));
-    }
-    float limiterThresholdDb() const { return limiterThresholdDb_.load(); }
     float masterPeak() const { return masterPeak_.load(); }
     float masterRms() const { return masterRms_.load(); }
 
@@ -84,7 +79,6 @@ private:
 
     uint32_t renderCh_ = 0;
     uint32_t renderRate_ = 0;
-    bool renderIsFloat_ = false;
     uint32_t renderBufFrames_ = 0;
 
     std::vector<float> mixBuf_;
@@ -99,8 +93,6 @@ private:
     std::atomic<bool> masterMuted_{false};
     std::atomic<float> masterPeak_{0.0f};
     std::atomic<float> masterRms_{0.0f};
-    std::atomic<float> limiterThresholdDb_{-0.1f};
-    std::atomic<float> limiterThresholdLin_{dbToLin(-0.1f)};
 };
 
 OutputMixer::OutputMixer() : p(std::make_unique<Impl>()) {}
@@ -117,8 +109,6 @@ void OutputMixer::setMasterVolume(float v) { p->setMasterVolume(v); }
 void OutputMixer::setMasterMuted(bool muted) { p->setMasterMuted(muted); }
 float OutputMixer::masterVolume() const { return p->masterVolume(); }
 bool OutputMixer::masterMuted() const { return p->masterMuted(); }
-void OutputMixer::setLimiterThresholdDb(float db) { p->setLimiterThresholdDb(db); }
-float OutputMixer::limiterThresholdDb() const { return p->limiterThresholdDb(); }
 float OutputMixer::masterPeak() const { return p->masterPeak(); }
 float OutputMixer::masterRms() const { return p->masterRms(); }
 const std::string& OutputMixer::outputName() const { return p->outputName(); }
@@ -158,7 +148,6 @@ bool OutputMixer::Impl::init(const std::string& outputHint)
 
     renderCh_      = wfex.Format.nChannels;
     renderRate_    = wfex.Format.nSamplesPerSec;
-    renderIsFloat_ = true;
 
     DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
     hr = renderAC_->Initialize(AUDCLNT_SHAREMODE_SHARED, flags,
@@ -200,8 +189,8 @@ bool OutputMixer::Impl::init(const std::string& outputHint)
     groupBuf_.resize(static_cast<size_t>(renderBufFrames_) * renderCh_);
 
     std::fprintf(stderr, "[output] Output  : %s\n", outputName_.c_str());
-    std::fprintf(stderr, "[output] Output  format : %u Hz, %u ch, %s\n",
-                 renderRate_, renderCh_, renderIsFloat_ ? "float" : "pcm");
+    std::fprintf(stderr, "[output] Output  format : %u Hz, %u ch, float\n",
+                 renderRate_, renderCh_);
     return true;
 }
 
@@ -291,73 +280,47 @@ void OutputMixer::Impl::processRender()
         for (size_t i = 0; i < outSamples; ++i) mixBuf_[i] += groupBuf_[i];
     }
 
+    // OutputMixer always initializes a 48 kHz stereo float format with
+    // AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, so the buffer is float samples.
+    auto* fbuf = reinterpret_cast<float*>(buf);
+
     bool muted = masterMuted_.load();
     float vol = masterVolume_.load();
-    float ceiling = limiterThresholdLin_.load();
+    float ceiling = kLimiterCeiling;
 
     float maxAbs = 0.0f;
-    float sumSq = 0.0f;
+    for (size_t i = 0; i < outSamples; ++i) {
+        float v = muted ? 0.0f : mixBuf_[i] * vol;
+        fbuf[i] = v;
+        float a = std::fabs(v);
+        if (a > maxAbs) maxAbs = a;
+    }
 
-    if (renderIsFloat_) {
-        auto* fbuf = reinterpret_cast<float*>(buf);
+    // Brickwall limiter: if the entire buffer would exceed the ceiling,
+    // scale the whole buffer down. This avoids hard-clipping distortion
+    // on transient peaks while keeping the output below 0 dBFS.
+    if (maxAbs > ceiling && maxAbs > 0.0f) {
+        float scale = ceiling / maxAbs;
         for (size_t i = 0; i < outSamples; ++i) {
-            float v = muted ? 0.0f : mixBuf_[i] * vol;
+            float v = fbuf[i] * scale;
+            if (v >  1.0f) v =  1.0f;
+            if (v < -1.0f) v = -1.0f;
             fbuf[i] = v;
-            float a = std::fabs(v);
-            if (a > maxAbs) maxAbs = a;
-        }
-
-        // Brickwall limiter: if the entire buffer would exceed the ceiling,
-        // scale the whole buffer down. This avoids hard-clipping distortion
-        // on transient peaks while keeping the output below 0 dBFS.
-        if (maxAbs > ceiling && maxAbs > 0.0f) {
-            float scale = ceiling / maxAbs;
-            for (size_t i = 0; i < outSamples; ++i) {
-                float v = fbuf[i] * scale;
-                if (v >  1.0f) v =  1.0f;
-                if (v < -1.0f) v = -1.0f;
-                fbuf[i] = v;
-            }
-        } else {
-            for (size_t i = 0; i < outSamples; ++i) {
-                float v = fbuf[i];
-                if (v >  1.0f) v =  1.0f;
-                if (v < -1.0f) v = -1.0f;
-                fbuf[i] = v;
-            }
-        }
-
-        for (size_t i = 0; i < outSamples; ++i) {
-            float a = std::fabs(fbuf[i]);
-            if (a > maxAbs) maxAbs = a;
-            sumSq += fbuf[i] * fbuf[i];
         }
     } else {
-        std::vector<float> tmp(mixBuf_.data(), mixBuf_.data() + outSamples);
-        if (muted) {
-            std::fill(tmp.begin(), tmp.end(), 0.0f);
-        } else {
-            for (auto& s : tmp) s *= vol;
+        for (size_t i = 0; i < outSamples; ++i) {
+            float v = fbuf[i];
+            if (v >  1.0f) v =  1.0f;
+            if (v < -1.0f) v = -1.0f;
+            fbuf[i] = v;
         }
-        for (auto s : tmp) {
-            float a = std::fabs(s);
-            if (a > maxAbs) maxAbs = a;
-        }
-        if (maxAbs > ceiling && maxAbs > 0.0f) {
-            float scale = ceiling / maxAbs;
-            for (auto& s : tmp) {
-                s *= scale;
-                if (s >  1.0f) s =  1.0f;
-                if (s < -1.0f) s = -1.0f;
-            }
-        } else {
-            for (auto& s : tmp) {
-                if (s >  1.0f) s =  1.0f;
-                if (s < -1.0f) s = -1.0f;
-            }
-        }
-        for (auto s : tmp) sumSq += s * s;
-        floatToPcm16(tmp.data(), outSamples, buf);
+    }
+
+    float sumSq = 0.0f;
+    for (size_t i = 0; i < outSamples; ++i) {
+        float a = std::fabs(fbuf[i]);
+        if (a > maxAbs) maxAbs = a;
+        sumSq += fbuf[i] * fbuf[i];
     }
 
     masterPeak_.store(maxAbs);

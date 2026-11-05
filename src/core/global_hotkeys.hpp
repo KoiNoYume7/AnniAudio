@@ -9,7 +9,7 @@ namespace anniaudio::core {
 
 struct HotkeyConfig {
     std::string keys;      // e.g. "Ctrl+Alt+M"
-    std::string action;    // toggle_group_mute, nudge_group_volume, toggle_output_mute, nudge_output_volume, set_input_azimuth
+    std::string action;    // toggle_group_mute, nudge_group_volume, toggle_output_mute, nudge_output_volume, set_input_direction, nudge_input_azimuth
     std::string group;     // group name for group actions
     std::string output;    // output name for output actions
     std::string input;     // input name for input actions

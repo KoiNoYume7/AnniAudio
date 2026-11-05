@@ -1,6 +1,7 @@
 #include "global_hotkeys.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
@@ -153,52 +154,47 @@ public:
             return false;
         }
 
+        // Copy the config into Impl so the map can store by value and survive a
+        // later reload of _config. The worker thread owns the window and the
+        // message loop; creation and hotkey registration happen inside run().
+        config_ = config;
         callback_ = std::move(cb);
 
-        WNDCLASSEX wc = {};
-        wc.cbSize = sizeof(wc);
-        wc.lpfnWndProc = &Impl::wndProc;
-        wc.hInstance = GetModuleHandle(nullptr);
-        wc.lpszClassName = L"AnniAudioHotkeys";
-        RegisterClassEx(&wc);
-
-        hwnd_ = CreateWindowEx(0, L"AnniAudioHotkeys", L"AnniAudio Hotkeys", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, wc.hInstance, this);
-        if (!hwnd_) {
+        readyEvent_ = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+        if (!readyEvent_) {
             running_ = false;
             return false;
         }
 
-        SetWindowLongPtr(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        thread_ = std::thread([this]() { this->run(); });
 
-        int id = 1;
-        for (const auto& cfg : config) {
-            UINT vk = 0, mods = 0;
-            if (parseKeyCombo(cfg.keys, vk, mods)) {
-                if (RegisterHotKey(hwnd_, id, mods, vk)) {
-                    hotkeys_[id] = &cfg;
-                } else {
-                    std::fprintf(stderr, "[GlobalHotkeys] could not register '%s' (0x%X / 0x%X)\n", cfg.keys.c_str(), mods, vk);
-                }
-            }
-            ++id;
+        // Wait for the worker to create the window and register the hotkeys.
+        DWORD r = WaitForSingleObject(readyEvent_, 5000);
+        CloseHandle(readyEvent_); readyEvent_ = nullptr;
+        if (r != WAIT_OBJECT_0) {
+            stop();
+            return false;
         }
 
-        thread_ = std::thread([this]() { this->run(); });
         return true;
     }
 
     void stop()
     {
         if (!running_.exchange(false)) return;
-        if (hwnd_) {
-            PostMessage(hwnd_, WM_CLOSE, 0, 0);
+
+        // Close the window from the worker thread by posting WM_CLOSE to its
+        // message queue. Do not call DestroyWindow here — it must be called on
+        // the thread that created the window.
+        HWND hwnd = hwnd_.load();
+        if (hwnd) {
+            PostMessage(hwnd, WM_CLOSE, 0, 0);
         }
+        // Also signal the event in case start() is still waiting.
+        HANDLE ev = readyEvent_.load();
+        if (ev) SetEvent(ev);
+
         if (thread_.joinable()) thread_.join();
-        if (hwnd_) {
-            DestroyWindow(hwnd_);
-            hwnd_ = nullptr;
-        }
-        UnregisterClass(L"AnniAudioHotkeys", GetModuleHandle(nullptr));
     }
 
     bool isRunning() const { return running_.load(); }
@@ -206,11 +202,59 @@ public:
 private:
     void run()
     {
+        HINSTANCE hinst = GetModuleHandle(nullptr);
+
+        WNDCLASSEX wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = &Impl::wndProc;
+        wc.hInstance = hinst;
+        wc.lpszClassName = L"AnniAudioHotkeys";
+        RegisterClassEx(&wc);
+
+        HWND hwnd = CreateWindowEx(0, L"AnniAudioHotkeys", L"AnniAudio Hotkeys",
+                                   0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, hinst, this);
+        if (!hwnd) {
+            running_ = false;
+            HANDLE ev = readyEvent_.load();
+            if (ev) SetEvent(ev);
+            UnregisterClass(L"AnniAudioHotkeys", hinst);
+            return;
+        }
+
+        hwnd_.store(hwnd);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+
+        int id = 1;
+        for (const auto& cfg : config_) {
+            UINT vk = 0, mods = 0;
+            if (parseKeyCombo(cfg.keys, vk, mods)) {
+                if (RegisterHotKey(hwnd, id, mods, vk)) {
+                    hotkeys_[id] = cfg;
+                } else {
+                    std::fprintf(stderr, "[GlobalHotkeys] could not register '%s' (0x%X / 0x%X)\n",
+                                 cfg.keys.c_str(), mods, vk);
+                }
+            }
+            ++id;
+        }
+
+        HANDLE ev = readyEvent_.load();
+        if (ev) SetEvent(ev);
+
         MSG msg;
         while (GetMessage(&msg, nullptr, 0, 0) > 0) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+
+        // Cleanup on the worker thread after the message loop exits.
+        for (const auto& kv : hotkeys_) {
+            UnregisterHotKey(hwnd, kv.first);
+        }
+        hotkeys_.clear();
+        DestroyWindow(hwnd);
+        hwnd_.store(nullptr);
+        UnregisterClass(L"AnniAudioHotkeys", hinst);
     }
 
     static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -222,7 +266,7 @@ private:
             int id = static_cast<int>(wParam);
             auto it = self->hotkeys_.find(id);
             if (it != self->hotkeys_.end() && self->callback_) {
-                self->callback_(*it->second);
+                self->callback_(it->second);
             }
             return 0;
         }
@@ -236,10 +280,12 @@ private:
     }
 
     std::atomic<bool> running_{false};
-    HWND hwnd_ = nullptr;
+    std::atomic<HWND> hwnd_{nullptr};
+    std::atomic<HANDLE> readyEvent_{nullptr};
     std::thread thread_;
     Callback callback_;
-    std::unordered_map<int, const HotkeyConfig*> hotkeys_;
+    std::vector<HotkeyConfig> config_;
+    std::unordered_map<int, HotkeyConfig> hotkeys_;
 };
 
 GlobalHotkeys::GlobalHotkeys() : p(std::make_unique<Impl>()) {}

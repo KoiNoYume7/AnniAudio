@@ -406,17 +406,6 @@ void pcm16ToFloat(const BYTE* src, size_t sampleCount, float* dst)
     for (size_t i = 0; i < sampleCount; ++i) dst[i] = p[i] * scale;
 }
 
-void floatToPcm16(const float* src, size_t sampleCount, BYTE* dst)
-{
-    auto* p = reinterpret_cast<int16_t*>(dst);
-    for (size_t i = 0; i < sampleCount; ++i) {
-        float s = src[i];
-        if (s > 1.0f) s = 1.0f;
-        else if (s < -1.0f) s = -1.0f;
-        p[i] = static_cast<int16_t>(s * 32767.0f);
-    }
-}
-
 static std::string processNameFromId(DWORD pid)
 {
     if (pid == 0) return "System Sounds";

@@ -17,10 +17,6 @@
 #include <audioclient.h>
 #include <functiondiscoverykeys_devpkey.h>
 
-#include "eq.hpp"
-#include "noise_suppressor.hpp"
-#include "spatializer.hpp"
-
 #pragma comment(lib, "mmdevapi.lib")
 #pragma comment(lib, "avrt.lib")
 

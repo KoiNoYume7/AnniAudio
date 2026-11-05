@@ -144,13 +144,19 @@ Semi-automatic application assignment rules used by the TUI.
 
 ## EQ presets (`config/presets/`)
 
-JSON lists of biquad bands:
+> **Current status:** the `eqPreset` input field only wires to the built-in `"voice"` preset in the engine. The files in `config/presets/` are kept as a future named-preset format and are not loaded automatically yet.
+
+A preset file is a JSON object with a `description` and a list of `bands`:
 
 ```json
-[
-  { "type": "highpass", "freq": 120, "gain": 0, "q": 0.707 },
-  { "type": "peak",     "freq": 3000, "gain": 3, "q": 1.0 }
-]
+{
+  "description": "Cut rumble and harshness for voice chat / calls.",
+  "bands": [
+    { "type": "highpass", "freq": 100,  "gain_db": 0, "q": 0.707 },
+    { "type": "peak",    "freq": 250,  "gain_db": -3, "q": 1.0 },
+    { "type": "peak",    "freq": 4000, "gain_db": 2,  "q": 1.4 }
+  ]
+}
 ```
 
 Supported types: `peak`, `lowpass`, `highpass`, `lowshelf`, `highshelf`, `notch`, `allpass`.

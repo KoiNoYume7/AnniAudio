@@ -232,6 +232,16 @@ Requires `windows-curses` (`mixer-tui.bat` installs it automatically if missing;
 
 Route repair is **off by default**. Some apps (e.g. Spotify) reassert their own output device, which makes the repair loop flip back and forth; use `--repair-routes` only if you want the TUI to keep rewriting per-app routes. See `docs/TUI.md` for the full keybinding reference.
 
+#### Dev environment setup
+
+```powershell
+.\dev_setup.bat              # interactive, verbose
+.\dev_setup.bat -CheckOnly   # check what's missing, no install, no UAC
+.\dev_setup.bat -Unattended  # install everything silently
+```
+
+Bootstraps the AnniAudio dev toolchain: PowerShell 7 (via `dev_setup.bat` if missing), Git, Python 3, Node.js, .NET 8 SDK, Visual Studio Build Tools 2022, Windows SDK, and CMake, plus `windows-curses` and `pyflakes` Python packages. Does **not** install the audio driver — that's covered separately in `cli/anniaudio.ps1`. See `docs/DEV-SETUP.md` for details.
+
 #### Autostart at logon
 
 ```powershell
@@ -321,13 +331,16 @@ AnniAudio/
 │   └── dsp/         # EQ chain + RNNoise + HRTF spatializer (audio_dsp library)
 ├── tests/           # Phase-0 POCs and manual verification tools
 ├── AnniAudioMixerPlugin/  # Loupedeck (Logi Actions C#) plugin
+├── gui/             # Electron mixer GUI (Phase 5 stub)
 ├── driver/          # WDM PortCls virtual audio driver source + .inf template
 ├── cli/             # PowerShell control panel (driver install / signing)
 ├── scripts/         # TUI (mixer_tui.py, tui_*.py) and build/driver helpers
-├── config/          # mixers/ (matrix configs), scenes/, app-rules.json, presets/, profiles/, cables
+├── config/          # mixers/ (matrix configs), scenes/, app-rules.json, presets/, cables
 ├── docs/            # Architecture, API, TUI, scripts, config, roadmap
+├── certs/           # Code-signing certificate helpers (not the secrets; see certs/README.md)
+├── assets/          # HRTF SOFA data and other runtime assets
 ├── third_party/     # Vendored dependencies (rnnoise, kissfft, libmysofa, ...)
-├── *.bat            # start/stop mixer, TUI launcher, autostart install
+├── *.bat            # start/stop mixer, TUI/GUI launchers, autostart install, dev_setup
 ├── CMakeLists.txt
 └── README.md
 ```

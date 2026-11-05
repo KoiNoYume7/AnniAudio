@@ -32,6 +32,7 @@ driver/x86/
 certs/*.pfx
 certs/*.cer
 certs/*.p12
+certs/thumbprint.txt
 
 # ── Config with user/local data — commit only .example files ──
 config/cables.json
@@ -97,3 +98,6 @@ config/scenes/
 
 # Live user hotkey bindings; the example template is tracked.
 config/hotkeys.json
+
+
+notes/

@@ -1,7 +1,7 @@
 # certs/
 
 This folder holds code-signing certificates for local development builds.
-**Never commit .pfx or .cer files — this folder is gitignored.**
+**Never commit .pfx, .cer, .p12, or thumbprint.txt files — these are gitignored, but any other certificate artifacts should also stay uncommitted.**
 
 ## Expected files
 

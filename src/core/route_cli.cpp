@@ -57,7 +57,7 @@ static void printUsage(const char* prog)
     std::printf("AnniAudio Routing CLI\n");
     std::printf("Usage:\n");
     std::printf("  %s list                             List all audio endpoints, marking AnniAudio cables\n", prog);
-    std::printf("  %s mixer <config.json> [--port <n>]  Multi-source mixer with per-group volume/mute (control API on bindAddress:controlPort)\n", prog);
+    std::printf("  %s mixer <config.json> [--port <n>] [--api-key <key>]  Multi-source mixer with per-group volume/mute (control API on bindAddress:controlPort)\n", prog);
     std::printf("  %s midi [list|<device-hint>]        List MIDI inputs or monitor messages\n", prog);
     std::printf("  %s default <render_device>           Set default playback device to the matching endpoint\n", prog);
     std::printf("\nMixer commands while running: v <group> <0-200>, m <group>, o <output>, +/=, -, ?, q.\n");
@@ -239,7 +239,9 @@ static std::string autosavePathFor(const std::string& configPath)
     return configPath;
 }
 
-static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portOverride = std::nullopt)
+static int cmdMixer(const std::string& configPath,
+                    std::optional<uint16_t> portOverride = std::nullopt,
+                    const std::optional<std::string>& apiKeyOverride = std::nullopt)
 {
     nlohmann::json j;
     try {
@@ -277,6 +279,7 @@ static int cmdMixer(const std::string& configPath, std::optional<uint16_t> portO
         if (!snap.bindAddress.empty()) bindAddress = snap.bindAddress;
         apiKey = snap.apiKey;
     }
+    if (apiKeyOverride) apiKey = *apiKeyOverride;
 
     std::unique_ptr<MixerControlServer> controlServer;
     if (controlPort != 0) {
@@ -453,6 +456,7 @@ int main(int argc, char* argv[])
         if (argc < 3) { std::fprintf(stderr, "Usage: mixer <config.json> [--port <n>]\n"); return 1; }
         std::string configPath;
         std::optional<uint16_t> portOverride;
+        std::optional<std::string> apiKeyOverride;
         for (int i = 2; i < argc; ++i) {
             std::string a = argv[i];
             std::string al;
@@ -464,6 +468,10 @@ int main(int argc, char* argv[])
                 if (p < 0 || p > 65535) { std::fprintf(stderr, "Port must be 0-65535\n"); return 1; }
                 portOverride = static_cast<uint16_t>(p);
                 ++i;
+            } else if (al == "--api-key") {
+                if (i + 1 >= argc) { std::fprintf(stderr, "Expected API key after %s\n", a.c_str()); return 1; }
+                apiKeyOverride = argv[i + 1];
+                ++i;
             } else if (al[0] == '-') {
                 std::fprintf(stderr, "Unknown option: %s\n", a.c_str());
                 return 1;
@@ -473,7 +481,7 @@ int main(int argc, char* argv[])
             }
         }
         if (configPath.empty()) { std::fprintf(stderr, "Usage: mixer <config.json> [--port <n>]\n"); return 1; }
-        return cmdMixer(configPath, portOverride);
+        return cmdMixer(configPath, portOverride, apiKeyOverride);
     }
     else if (cmd == "midi") {
         std::string arg = (argc >= 3) ? argv[2] : "list";

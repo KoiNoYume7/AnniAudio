@@ -13,7 +13,10 @@ namespace anniaudio::core {
 
 // One group bus for a specific (group, output) pair. It reads from the 48 kHz
 // stereo rings of all InputProcessors feeding the group, mixes them, applies the
-// group gain/mute, and resamples to the output's sample rate and channel count.
+// group gain/mute, and sums into the output's buffer. It performs channel
+// conversion (e.g. stereo to mono) but not resampling; OutputMixer renders at a
+// fixed 48 kHz and relies on WASAPI's AUTOCONVERTPCM flag for final device format
+// conversion.
 //
 // This class is not a thread; it is driven from the OutputMixer render callback.
 class GroupBus {

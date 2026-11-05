@@ -116,7 +116,7 @@ captured frame (source rate)
 GroupBus mix (per output, driven by OutputMixer render callback):
     -> read each input's ring buffer
     -> sum and apply group volume/mute
-    -> resample to the output rate/channel count
+    -> channel convert if needed (e.g. mono output)
 
 OutputMixer render loop (per output):
     -> call each GroupBus into a scratch buffer

@@ -14,6 +14,7 @@ added, removed, or renamed.
 
 - **Cable Volume** dial (one per group): turn to adjust group volume, press to toggle mute.
 - **Output Master** dial (one per output): turn to adjust output master volume, press to toggle mute.
+- **Input Azimuth** dial (one per spatialized input): turn to adjust HRTF azimuth (left/right positioning), press to toggle spatialization on/off.
 - **Mute** touch button (one per group): one-tap mute toggle with live state.
 - **Scene** touch button (one per saved scene): one-tap scene recall.
 

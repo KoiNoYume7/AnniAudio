@@ -130,7 +130,7 @@ struct AudioMixerMatrix::Impl {
         std::unique_ptr<InputProcessor> processor;
     };
 
-    mutable std::mutex mtx;
+    mutable std::recursive_mutex mtx;
     std::map<std::string, std::unique_ptr<OutputMixer>> outputs;
     std::map<InputId, InputEntry> inputs;
     std::map<GroupId, GroupConfig> groups;
@@ -219,7 +219,7 @@ bool AudioMixerMatrix::addOutput(const std::string& outputHint)
     if (!out->init(outputHint)) return false;
 
     {
-        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
         m_impl->outputs[out->outputName()] = std::move(out);
         m_impl->rebuildLocked();
     }
@@ -230,7 +230,7 @@ bool AudioMixerMatrix::addOutput(const std::string& outputHint)
 bool AudioMixerMatrix::removeOutput(const std::string& outputName)
 {
     {
-        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
         auto it = m_impl->outputs.find(outputName);
         if (it == m_impl->outputs.end()) return false;
 
@@ -250,7 +250,7 @@ bool AudioMixerMatrix::removeOutput(const std::string& outputName)
 
 std::vector<std::string> AudioMixerMatrix::outputNames() const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     std::vector<std::string> names;
     names.reserve(m_impl->outputs.size());
     for (const auto& kv : m_impl->outputs) names.push_back(kv.first);
@@ -259,28 +259,28 @@ std::vector<std::string> AudioMixerMatrix::outputNames() const
 
 float AudioMixerMatrix::outputMasterVolume(const std::string& outputName) const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto* m = m_impl->findOutputMixer(outputName);
     return m ? linToPct(m->masterVolume()) : 100.0f;
 }
 
 float AudioMixerMatrix::outputMasterPeak(const std::string& outputName) const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto* m = m_impl->findOutputMixer(outputName);
     return m ? m->masterPeak() : 0.0f;
 }
 
 float AudioMixerMatrix::outputMasterRms(const std::string& outputName) const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto* m = m_impl->findOutputMixer(outputName);
     return m ? m->masterRms() : 0.0f;
 }
 
 void AudioMixerMatrix::setOutputMasterVolume(const std::string& outputName, float v)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto* m = m_impl->findOutputMixer(outputName);
     if (m) m->setMasterVolume(pctToLin(v));
     maybeAutosave();
@@ -290,7 +290,7 @@ std::optional<InputId> AudioMixerMatrix::addInput(const InputConfig& cfg)
 {
     if (cfg.name.empty() || cfg.source.empty()) return std::nullopt;
 
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     InputId id = m_impl->nextInputId.fetch_add(1);
     m_impl->inputs[id] = { cfg, nullptr };
     maybeAutosave();
@@ -300,7 +300,7 @@ std::optional<InputId> AudioMixerMatrix::addInput(const InputConfig& cfg)
 bool AudioMixerMatrix::removeInput(InputId id)
 {
     {
-        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
         auto it = m_impl->inputs.find(id);
         if (it == m_impl->inputs.end()) return false;
 
@@ -322,7 +322,7 @@ bool AudioMixerMatrix::updateInput(InputId id, const InputConfig& cfg)
 {
     if (cfg.name.empty() || cfg.source.empty()) return false;
 
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->inputs.find(id);
     if (it == m_impl->inputs.end()) return false;
 
@@ -338,7 +338,7 @@ bool AudioMixerMatrix::updateInput(InputId id, const InputConfig& cfg)
 
 bool AudioMixerMatrix::setInputDirection(InputId id, float azimuth, float elevation)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->inputs.find(id);
     if (it == m_impl->inputs.end()) return false;
 
@@ -355,7 +355,7 @@ std::optional<GroupId> AudioMixerMatrix::addGroup(const GroupConfig& cfg)
 {
     if (cfg.name.empty()) return std::nullopt;
 
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     GroupId id = m_impl->nextGroupId.fetch_add(1);
     GroupConfig gc = cfg;
     if (gc.color.empty()) gc.color = nextColor();
@@ -368,7 +368,7 @@ std::optional<GroupId> AudioMixerMatrix::addGroup(const GroupConfig& cfg)
 bool AudioMixerMatrix::removeGroup(GroupId id)
 {
     {
-        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
         auto it = m_impl->groups.find(id);
         if (it == m_impl->groups.end()) return false;
 
@@ -382,7 +382,7 @@ bool AudioMixerMatrix::removeGroup(GroupId id)
 bool AudioMixerMatrix::setGroupName(GroupId id, const std::string& name)
 {
     if (name.empty()) return false;
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.name = name;
@@ -392,7 +392,7 @@ bool AudioMixerMatrix::setGroupName(GroupId id, const std::string& name)
 
 bool AudioMixerMatrix::setGroupColor(GroupId id, const std::string& color)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.color = color;
@@ -402,7 +402,7 @@ bool AudioMixerMatrix::setGroupColor(GroupId id, const std::string& color)
 
 bool AudioMixerMatrix::setGroupCable(GroupId id, const std::string& cable)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.cable = cable;
@@ -413,7 +413,7 @@ bool AudioMixerMatrix::setGroupCable(GroupId id, const std::string& cable)
 bool AudioMixerMatrix::setGroupVolume(GroupId id, float vol)
 {
     vol = pctToLin(vol);
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.volume = vol;
@@ -429,7 +429,7 @@ bool AudioMixerMatrix::setGroupVolume(GroupId id, float vol)
 
 bool AudioMixerMatrix::setGroupMuted(GroupId id, bool muted)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.muted = muted;
@@ -444,7 +444,7 @@ bool AudioMixerMatrix::setGroupMuted(GroupId id, bool muted)
 bool AudioMixerMatrix::setGroupOutputGain(GroupId id, const std::string& output, float gainPct)
 {
     float gain = pctToLin(gainPct);
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
 
@@ -461,7 +461,7 @@ bool AudioMixerMatrix::setGroupOutputGain(GroupId id, const std::string& output,
 
 bool AudioMixerMatrix::setOutputMuted(const std::string& outputName, bool muted)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto* m = m_impl->findOutputMixer(outputName);
     if (!m) return false;
     m->setMasterMuted(muted);
@@ -471,14 +471,14 @@ bool AudioMixerMatrix::setOutputMuted(const std::string& outputName, bool muted)
 
 bool AudioMixerMatrix::outputMuted(const std::string& outputName) const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto* m = m_impl->findOutputMixer(outputName);
     return m != nullptr && m->masterMuted();
 }
 
 bool AudioMixerMatrix::setGroupKnobIndex(GroupId id, std::optional<int> knobIndex)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
     it->second.knobIndex = knobIndex;
@@ -488,7 +488,7 @@ bool AudioMixerMatrix::setGroupKnobIndex(GroupId id, std::optional<int> knobInde
 
 bool AudioMixerMatrix::setGroupInputIds(GroupId id, std::vector<InputId> ids)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
 
@@ -503,7 +503,7 @@ bool AudioMixerMatrix::setGroupInputIds(GroupId id, std::vector<InputId> ids)
 
 bool AudioMixerMatrix::setGroupOutputIds(GroupId id, std::vector<std::string> ids)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto it = m_impl->groups.find(id);
     if (it == m_impl->groups.end()) return false;
 
@@ -518,7 +518,7 @@ bool AudioMixerMatrix::setGroupOutputIds(GroupId id, std::vector<std::string> id
 
 bool AudioMixerMatrix::addGroupInput(GroupId groupId, InputId inputId)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto git = m_impl->groups.find(groupId);
     if (git == m_impl->groups.end()) return false;
     if (m_impl->inputs.find(inputId) == m_impl->inputs.end()) return false;
@@ -533,7 +533,7 @@ bool AudioMixerMatrix::addGroupInput(GroupId groupId, InputId inputId)
 
 bool AudioMixerMatrix::removeGroupInput(GroupId groupId, InputId inputId)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto git = m_impl->groups.find(groupId);
     if (git == m_impl->groups.end()) return false;
 
@@ -546,7 +546,7 @@ bool AudioMixerMatrix::removeGroupInput(GroupId groupId, InputId inputId)
 
 bool AudioMixerMatrix::addGroupOutput(GroupId groupId, const std::string& outputName)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto git = m_impl->groups.find(groupId);
     if (git == m_impl->groups.end()) return false;
     if (m_impl->outputs.find(outputName) == m_impl->outputs.end()) return false;
@@ -561,7 +561,7 @@ bool AudioMixerMatrix::addGroupOutput(GroupId groupId, const std::string& output
 
 bool AudioMixerMatrix::removeGroupOutput(GroupId groupId, const std::string& outputName)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     auto git = m_impl->groups.find(groupId);
     if (git == m_impl->groups.end()) return false;
 
@@ -574,7 +574,7 @@ bool AudioMixerMatrix::removeGroupOutput(GroupId groupId, const std::string& out
 
 bool AudioMixerMatrix::start()
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     m_impl->rebuildLocked();
     bool any = false;
     for (auto& kv : m_impl->outputs) {
@@ -589,14 +589,14 @@ bool AudioMixerMatrix::start()
 
 void AudioMixerMatrix::stop()
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     for (auto& kv : m_impl->outputs) kv.second->stop();
     for (auto& kv : m_impl->inputs) kv.second.processor.reset();
 }
 
 bool AudioMixerMatrix::running() const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     for (const auto& kv : m_impl->outputs) {
         if (kv.second->running()) return true;
     }
@@ -681,20 +681,20 @@ MixerStateSnapshot AudioMixerMatrix::snapshotNoLock() const
 
 MixerStateSnapshot AudioMixerMatrix::snapshot() const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     return snapshotNoLock();
 }
 
 std::vector<EndpointInfo> AudioMixerMatrix::listEndpoints() const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     if (!m_impl->ensureEnumerator()) return {};
     return enumEndpoints(m_impl->enumerator.Get());
 }
 
 std::vector<ApplicationInfo> AudioMixerMatrix::listApplications() const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     if (!m_impl->ensureEnumerator()) return {};
     return enumAudioSessions(m_impl->enumerator.Get());
 }
@@ -715,7 +715,7 @@ bool AudioMixerMatrix::saveSnapshot(const std::string& path, const MixerStateSna
 
 bool AudioMixerMatrix::save(const std::string& path) const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     return saveSnapshot(path, snapshotNoLock());
 }
 
@@ -729,7 +729,7 @@ bool AudioMixerMatrix::load(const std::string& path)
 
     stop();
 
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     m_controlPort = j.value("controlPort", m_controlPort);
     m_bindAddress = j.value("bindAddress", m_bindAddress);
     m_apiKey = j.value("apiKey", m_apiKey);
@@ -738,151 +738,67 @@ bool AudioMixerMatrix::load(const std::string& path)
     m_impl->groupBuses.clear();
     m_impl->outputs.clear();
 
-    // Legacy: single output + strips.
-    if (j.contains("output") && j["output"].is_string()) {
-        std::string outName = j["output"].get<std::string>();
-        float master = j.value("master", 100.0f) / 100.0f;
-        if (addOutputLocked(outName)) {
-            auto* m = m_impl->findOutputMixer(outName);
-            if (m) m->setMasterVolume(master);
-        }
-        if (j.contains("strips") && j["strips"].is_array()) {
-            for (const auto& item : j["strips"]) {
-                InputConfig ic;
-                ic.name = item.value("name", std::string{});
-                ic.source = item.value("source", std::string{});
-                if (ic.source.empty()) continue;
-                if (ic.name.empty()) ic.name = ic.source;
-                ic.type = "device";
-                InputId iid = m_impl->nextInputId.fetch_add(1);
-                m_impl->inputs[iid] = { ic, nullptr };
-
-                GroupConfig gc;
-                gc.name = item.value("name", ic.name);
-                gc.volume = item.value("volume", 100.0f) / 100.0f;
-                gc.muted = item.value("muted", false);
-                gc.inputIds = { iid };
-                gc.outputIds = { outName };
-                if (item.contains("knobIndex") && !item["knobIndex"].is_null()) {
-                    gc.knobIndex = item["knobIndex"].get<int>();
+    // Load the current matrix format: inputs + groups + outputs.
+    if (j.contains("outputs") && j["outputs"].is_array()) {
+        for (const auto& o : j["outputs"]) {
+            std::string name = o.is_string() ? o.get<std::string>() : o.value("name", std::string{});
+            float master = o.is_object() ? o.value("master", 100.0f) / 100.0f : 1.0f;
+            bool muted = o.is_object() && o.value("muted", false);
+            if (!name.empty() && addOutputLocked(name)) {
+                auto* m = m_impl->findOutputMixer(name);
+                if (m) {
+                    m->setMasterVolume(master);
+                    m->setMasterMuted(muted);
                 }
-                GroupId gid = m_impl->nextGroupId.fetch_add(1);
-                m_impl->groups[gid] = std::move(gc);
             }
         }
     }
-    // Legacy: outputs + routes.
-    else if (j.contains("routes") && j["routes"].is_array()) {
-        if (j.contains("outputs") && j["outputs"].is_array()) {
-            for (const auto& o : j["outputs"]) {
-                std::string name = o.is_string() ? o.get<std::string>() : o.value("name", std::string{});
-                float master = o.is_object() ? o.value("master", 100.0f) / 100.0f : 1.0f;
-                if (!name.empty() && addOutputLocked(name)) {
-                    auto* m = m_impl->findOutputMixer(name);
-                    if (m) m->setMasterVolume(master);
-                }
-            }
-        } else if (j.contains("output") && j["output"].is_string()) {
-            std::string name = j["output"].get<std::string>();
-            float master = j.value("master", 100.0f) / 100.0f;
-            if (addOutputLocked(name)) {
-                auto* m = m_impl->findOutputMixer(name);
-                if (m) m->setMasterVolume(master);
-            }
-        }
 
-        for (const auto& r : j["routes"]) {
+    if (j.contains("inputs") && j["inputs"].is_array()) {
+        for (const auto& i : j["inputs"]) {
             InputConfig ic;
-            ic.name = r.value("name", std::string{});
-            ic.source = r.value("source", std::string{});
+            ic.name = i.value("name", std::string{});
+            ic.type = i.value("type", "device");
+            ic.source = i.value("source", std::string{});
+            ic.denoise = i.value("denoise", false);
+            ic.eqPreset = i.value("eqPreset", std::string{});
+            ic.spatial = i.value("spatial", false);
+            ic.azimuth = i.value("azimuth", 0.0f);
+            ic.elevation = i.value("elevation", 0.0f);
+            ic.hrtfPath = i.value("hrtfPath", std::string{});
             if (ic.source.empty()) continue;
             if (ic.name.empty()) ic.name = ic.source;
-            ic.type = "device";
-            InputId iid = m_impl->nextInputId.fetch_add(1);
+            InputId iid = i.value("id", 0);
+            if (iid == 0) iid = m_impl->nextInputId.fetch_add(1);
+            else m_impl->nextInputId.store(std::max(m_impl->nextInputId.load(), (InputId)(iid + 1)));
             m_impl->inputs[iid] = { ic, nullptr };
-
-            std::string outName = r.value("output", std::string{});
-            if (outName.empty() && j.contains("output") && j["output"].is_string()) {
-                outName = j["output"].get<std::string>();
-            }
-
-            GroupConfig gc;
-            gc.name = r.value("name", ic.name);
-            gc.color = nextColor();
-            gc.volume = r.value("volume", 100.0f) / 100.0f;
-            gc.muted = r.value("muted", false);
-            gc.inputIds = { iid };
-            gc.outputIds = { outName };
-            if (r.contains("knobIndex") && !r["knobIndex"].is_null()) {
-                gc.knobIndex = r["knobIndex"].get<int>();
-            }
-            GroupId gid = m_impl->nextGroupId.fetch_add(1);
-            m_impl->groups[gid] = std::move(gc);
         }
     }
-    // New: inputs + groups + outputs.
-    else {
-        if (j.contains("outputs") && j["outputs"].is_array()) {
-            for (const auto& o : j["outputs"]) {
-                std::string name = o.is_string() ? o.get<std::string>() : o.value("name", std::string{});
-                float master = o.is_object() ? o.value("master", 100.0f) / 100.0f : 1.0f;
-                bool muted = o.is_object() && o.value("muted", false);
-                if (!name.empty() && addOutputLocked(name)) {
-                    auto* m = m_impl->findOutputMixer(name);
-                    if (m) {
-                        m->setMasterVolume(master);
-                        m->setMasterMuted(muted);
-                    }
-                }
-            }
-        }
 
-        if (j.contains("inputs") && j["inputs"].is_array()) {
-            for (const auto& i : j["inputs"]) {
-                InputConfig ic;
-                ic.name = i.value("name", std::string{});
-                ic.type = i.value("type", "device");
-                ic.source = i.value("source", std::string{});
-                ic.denoise = i.value("denoise", false);
-                ic.eqPreset = i.value("eqPreset", std::string{});
-                ic.spatial = i.value("spatial", false);
-                ic.azimuth = i.value("azimuth", 0.0f);
-                ic.elevation = i.value("elevation", 0.0f);
-                ic.hrtfPath = i.value("hrtfPath", std::string{});
-                if (ic.source.empty()) continue;
-                if (ic.name.empty()) ic.name = ic.source;
-                InputId iid = i.value("id", 0);
-                if (iid == 0) iid = m_impl->nextInputId.fetch_add(1);
-                else m_impl->nextInputId.store(std::max(m_impl->nextInputId.load(), (InputId)(iid + 1)));
-                m_impl->inputs[iid] = { ic, nullptr };
-            }
-        }
-
-        if (j.contains("groups") && j["groups"].is_array()) {
-            for (const auto& g : j["groups"]) {
-                GroupConfig gc;
-                gc.name = g.value("name", std::string{});
-                gc.color = g.value("color", std::string{"#3b82f6"});
-                gc.cable = g.value("cable", std::string{});
-                gc.volume = g.value("volume", 100.0f) / 100.0f;
-                gc.muted = g.value("muted", false);
-                if (g.contains("inputIds")) gc.inputIds = g["inputIds"].get<std::vector<InputId>>();
-                if (g.contains("outputIds")) gc.outputIds = g["outputIds"].get<std::vector<std::string>>();
-                if (g.contains("outputGains") && g["outputGains"].is_object()) {
-                    for (const auto& kv : g["outputGains"].items()) {
-                        gc.outputGains[kv.key()] = kv.value().get<float>() / 100.0f;
-                    }
+    if (j.contains("groups") && j["groups"].is_array()) {
+        for (const auto& g : j["groups"]) {
+            GroupConfig gc;
+            gc.name = g.value("name", std::string{});
+            gc.color = g.value("color", std::string{"#3b82f6"});
+            gc.cable = g.value("cable", std::string{});
+            gc.volume = g.value("volume", 100.0f) / 100.0f;
+            gc.muted = g.value("muted", false);
+            if (g.contains("inputIds")) gc.inputIds = g["inputIds"].get<std::vector<InputId>>();
+            if (g.contains("outputIds")) gc.outputIds = g["outputIds"].get<std::vector<std::string>>();
+            if (g.contains("outputGains") && g["outputGains"].is_object()) {
+                for (const auto& kv : g["outputGains"].items()) {
+                    gc.outputGains[kv.key()] = kv.value().get<float>() / 100.0f;
                 }
-                if (g.contains("knobIndex") && !g["knobIndex"].is_null()) {
-                    gc.knobIndex = g["knobIndex"].get<int>();
-                }
-                if (gc.color.empty()) gc.color = nextColor();
-                if (gc.name.empty()) continue;
-                GroupId gid = g.value("id", 0);
-                if (gid == 0) gid = m_impl->nextGroupId.fetch_add(1);
-                else m_impl->nextGroupId.store(std::max(m_impl->nextGroupId.load(), (GroupId)(gid + 1)));
-                m_impl->groups[gid] = std::move(gc);
             }
+            if (g.contains("knobIndex") && !g["knobIndex"].is_null()) {
+                gc.knobIndex = g["knobIndex"].get<int>();
+            }
+            if (gc.color.empty()) gc.color = nextColor();
+            if (gc.name.empty()) continue;
+            GroupId gid = g.value("id", 0);
+            if (gid == 0) gid = m_impl->nextGroupId.fetch_add(1);
+            else m_impl->nextGroupId.store(std::max(m_impl->nextGroupId.load(), (GroupId)(gid + 1)));
+            m_impl->groups[gid] = std::move(gc);
         }
     }
 
@@ -895,27 +811,31 @@ bool AudioMixerMatrix::load(const std::string& path)
 
 void AudioMixerMatrix::setAutosavePath(const std::string& path)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     m_autosavePath = path;
 }
 
 void AudioMixerMatrix::setControlPort(uint16_t port)
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     m_controlPort = port;
 }
 
 bool AudioMixerMatrix::autosaveEnabled() const
 {
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
     return !m_autosavePath.empty();
 }
 
 void AudioMixerMatrix::maybeAutosave() const
 {
-    if (!m_autosavePath.empty()) {
-        saveSnapshot(m_autosavePath, snapshotNoLock());
-    }
+    if (m_autosavePath.empty()) return;
+
+    // Always take the matrix lock before snapshotting. Call sites may already
+    // hold it (recursive_mutex allows re-locking) or may have just released it,
+    // so this path is safe either way.
+    std::lock_guard<std::recursive_mutex> lk(m_impl->mtx);
+    saveSnapshot(m_autosavePath, snapshotNoLock());
 }
 
 void AudioMixerMatrix::Impl::rebuildLocked()

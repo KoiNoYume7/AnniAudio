@@ -14,7 +14,7 @@ that creates `AnniAudio Cable` render/capture devices in Windows.
 ## Files
 
 - `AnniAudioCable.vcxproj` — Visual Studio driver project
-- `AnniAudioCable.inf.template` — INF template; `scripts/generate-inf.ps1` produces
+- `AnniAudioCable.inf.in` — INF template; `scripts/generate-inf.ps1` produces
   the final `AnniAudioCable.inf` from `config/cables.json`
 - `*.cpp` / `*.hpp` / `*.h` — driver source
 

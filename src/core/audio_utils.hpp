@@ -90,7 +90,7 @@ bool initProcessLoopbackFormat(WAVEFORMATEXTENSIBLE& wfex);
 std::string resolveHrtfPath(const std::string& userPath = std::string{});
 
 // Format conversion: src (float) -> dst (float), handling sample-rate
-// mismatch and sample-rate mismatch via linear interpolation.
+// mismatch and channel-count mismatch via linear interpolation.
 // phase persists between calls.
 uint32_t convertBuffer(
     const float* src, uint32_t srcFrames, uint32_t srcCh,
@@ -99,36 +99,6 @@ uint32_t convertBuffer(
     double& phase);
 
 void pcm16ToFloat(const BYTE* src, size_t sampleCount, float* dst);
-void floatToPcm16(const float* src, size_t sampleCount, BYTE* dst);
-
-// ---------------------------------------------------------------------------
-// Simple single-producer/single-consumer ring buffer (float samples)
-// ---------------------------------------------------------------------------
-class RingBuffer {
-public:
-    void init(size_t capacity) {
-        m_buf.assign(capacity, 0.0f);
-        m_head = m_tail = 0; m_cap = capacity;
-    }
-    size_t available() const {
-        return (m_head >= m_tail) ? m_head - m_tail : m_cap - (m_tail - m_head);
-    }
-    void write(const float* src, size_t n) {
-        for (size_t i = 0; i < n; ++i) {
-            m_buf[m_head] = src[i];
-            m_head = (m_head + 1) % m_cap;
-            if (m_head == m_tail) m_tail = (m_tail + 1) % m_cap; // drop oldest on overflow
-        }
-    }
-    void readOrSilence(float* dst, size_t n) {
-        size_t got = std::min(n, available());
-        for (size_t i = 0; i < got;  ++i) { dst[i] = m_buf[m_tail]; m_tail = (m_tail + 1) % m_cap; }
-        for (size_t i = got; i < n;  ++i) dst[i] = 0.0f;
-    }
-private:
-    std::vector<float> m_buf;
-    size_t m_head{0}, m_tail{0}, m_cap{0};
-};
 
 // ---------------------------------------------------------------------------
 // Multi-reader ring buffer (float samples)

@@ -19,9 +19,10 @@ Audio flows one way: **inputs → groups → outputs**.
   (`NoiseSuppressor`, `EqChain`, optional HRTF spatialization), and writes the
   processed 48 kHz stereo interleaved result to a `MultiReaderRingBuffer`.
 - `src/core/GroupBus.cpp` — one instance per **(group, output)** pair. Mixes the
-  processed inputs of a group, applies the group volume/mute, and resamples to the
-  output's sample rate and channel count. It is driven from the `OutputMixer` render
-  callback, so each output has its own read cursor and send gain.
+  processed inputs of a group, applies the group volume/mute, and performs channel
+  conversion (stereo to mono or vice versa, if needed). It does not resample; the
+  mixer runs at a fixed 48 kHz. It is driven from the `OutputMixer` render callback,
+  so each output has its own read cursor and send gain.
 - `src/core/OutputMixer.cpp` — one instance **per output**. WASAPI render endpoint;
   sums the `GroupBus` signals feeding it, applies master volume/mute, and writes to
   the device. It renders at a fixed 48 kHz float format and relies on
@@ -77,6 +78,7 @@ cmake --build build --target route_cli --config Release
 ## Run / verify
 
 ```powershell
+.\dev_setup.bat              # one-time dev env bootstrap (pwsh, toolchain, python pkgs)
 .\start-mixer.bat            # mixer + control API on 8850 (loads config/mixers/main.json)
 .\mixer-tui.bat              # curses TUI client (separate terminal)
 .\anniaudio-cli.exe state    # standalone CLI: state, groups, outputs, set-volume, mute, etc.
